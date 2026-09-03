@@ -1,0 +1,57 @@
+{
+    "manifest_version": 3,
+    "name": "LiveFlow PoC",
+    "version": "0.1.0",
+    "description": "Minimal Proof of Concept for YouTube Live Chat detection and messaging checks.",
+    "permissions": [
+        "activeTab",
+        "identity",
+        "storage",
+        "tabs",
+        "scripting",
+        "host_permissions"
+    ],
+    "host_permissions": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://youtube.com/*",
+        "https://www.googleapis.com/*",
+        "https://accounts.google.com/*"
+    ],
+    "background": {
+        "service_worker": "src/background.js"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://www.youtube.com/*",
+                "https://m.youtube.com/*",
+                "https://youtube.com/*"
+            ],
+            "js": [
+                "src/chat-read-core.js",
+                "src/page-state-main.js"
+            ],
+            "world": "MAIN",
+            "run_at": "document_idle"
+        },
+        {
+            "matches": [
+                "https://www.youtube.com/*",
+                "https://m.youtube.com/*",
+                "https://youtube.com/*"
+            ],
+            "js": [
+                "src/chat-read-core.js",
+                "src/overlay-core.js",
+                "src/youtube-chat.js"
+            ],
+            "world": "ISOLATED",
+            "run_at": "document_idle"
+        }
+    ],
+    "action": {
+        "default_title": "LiveFlow PoC",
+        "default_popup": "popup.html"
+    }
+}
