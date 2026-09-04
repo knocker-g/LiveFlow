@@ -8,6 +8,7 @@
     const MAX_MESSAGES = 500;
     const PLAYER_SELECTORS = Object.freeze({
         watchRoot: 'ytd-watch-flexy',
+        nativeChat: 'ytd-live-chat-frame#chat, ytd-live-chat-frame',
         player: '#movie_player, .html5-video-player',
         video: 'video.html5-main-video, video',
         miniPlayerAncestor: 'ytd-miniplayer, #miniplayer'
@@ -26,6 +27,11 @@
     let currentMessages = [];
     let currentPageKey = '';
     let rendererGeneration = 0;
+    let userEnabled = true;
+    let nativeChatVisible = true;
+    let nativeChatObserver = null;
+    let observedWatchRoot = null;
+    let visibilityEvaluationQueued = false;
 
     function logInfo(message) {
         console.log(`${LOG_PREFIX} ${message}`);
@@ -79,6 +85,114 @@
         overlaySurface = null;
     }
 
+    function isEffectiveDisplayActive() {
+        return overlayCore?.isEffectiveDisplayActive?.({ userEnabled, nativeChatVisible }) === true;
+    }
+
+    function setDisplayState(nextState) {
+        const transition = overlayCore.getDisplayStateTransition({ userEnabled, nativeChatVisible }, nextState);
+        userEnabled = transition.userEnabled;
+        nativeChatVisible = transition.nativeChatVisible;
+        if (transition.cleanupRequired) cleanupOverlay();
+        return transition.effectiveActive;
+    }
+
+    window.LiveFlowDisplayState = Object.freeze({
+        setUserEnabled(value) {
+            if (typeof value !== 'boolean') return false;
+            setDisplayState({ userEnabled: value });
+            return true;
+        },
+        getUserEnabled() {
+            return userEnabled;
+        },
+        getNativeChatVisible() {
+            return nativeChatVisible;
+        },
+        getEffectiveDisplayActive() {
+            return isEffectiveDisplayActive();
+        }
+    });
+
+    function readNativeChatVisibility(watchRoot) {
+        if (!watchRoot) return true;
+        const frame = watchRoot.querySelector(PLAYER_SELECTORS.nativeChat);
+        if (!frame) return false;
+        let style;
+        let rect;
+        try {
+            style = window.getComputedStyle(frame);
+            rect = frame.getBoundingClientRect();
+        } catch (error) {
+            return true;
+        }
+        return overlayCore?.isNativeChatFrameVisible?.({
+            belongsToCurrentWatchRoot: watchRoot.contains(frame),
+            hiddenAttribute: frame.hidden === true || frame.hasAttribute('hidden'),
+            collapsed: frame.hasAttribute('collapsed') || frame.getAttribute('aria-hidden') === 'true',
+            display: style.display,
+            visibility: style.visibility,
+            width: rect.width,
+            height: rect.height
+        }) !== false;
+    }
+
+    function evaluateNativeChatVisibility() {
+        visibilityEvaluationQueued = false;
+        if (!isYouTubeWatchPage()) {
+            setDisplayState({ nativeChatVisible: true });
+            return;
+        }
+        const watchRoot = document.querySelector(PLAYER_SELECTORS.watchRoot);
+        setDisplayState({ nativeChatVisible: readNativeChatVisibility(watchRoot) });
+        observeNativeChat(watchRoot);
+    }
+
+    function scheduleNativeChatVisibilityEvaluation() {
+        if (visibilityEvaluationQueued) return;
+        visibilityEvaluationQueued = true;
+        window.queueMicrotask(evaluateNativeChatVisibility);
+    }
+
+    function nodeContainsNativeChat(node) {
+        return node?.nodeType === 1 && (
+            node.matches?.(PLAYER_SELECTORS.nativeChat) ||
+            Boolean(node.querySelector?.(PLAYER_SELECTORS.nativeChat))
+        );
+    }
+
+    function mutationAffectsNativeChat(mutation) {
+        if (mutation.type === 'attributes') {
+            return mutation.target?.matches?.(PLAYER_SELECTORS.nativeChat) === true ||
+                Boolean(mutation.target?.querySelector?.(PLAYER_SELECTORS.nativeChat));
+        }
+        return [...mutation.addedNodes, ...mutation.removedNodes].some(nodeContainsNativeChat);
+    }
+
+    function observeNativeChat(watchRoot) {
+        if (watchRoot === observedWatchRoot && nativeChatObserver) return;
+        nativeChatObserver?.disconnect();
+        nativeChatObserver = null;
+        observedWatchRoot = watchRoot || null;
+        if (!watchRoot) return;
+        nativeChatObserver = new MutationObserver((mutations) => {
+            if (mutations.some(mutationAffectsNativeChat)) scheduleNativeChatVisibilityEvaluation();
+        });
+        nativeChatObserver.observe(watchRoot, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['hidden', 'style', 'class', 'collapsed', 'aria-hidden']
+        });
+    }
+
+    function disconnectNativeChatObserver() {
+        nativeChatObserver?.disconnect();
+        nativeChatObserver = null;
+        observedWatchRoot = null;
+        visibilityEvaluationQueued = false;
+    }
+
     function attachOverlay(player) {
         if (!player) return false;
 
@@ -97,6 +211,7 @@
     }
 
     function renderDanmaku(message, scheduledGeneration = rendererGeneration, scheduledVideo = null) {
+        if (!isEffectiveDisplayActive()) return false;
         const media = getCurrentMainMedia();
         if (!media || !overlayCore?.isRendererTargetCurrent?.({
             scheduledGeneration,
@@ -182,6 +297,7 @@
     }
 
     function scheduleDanmakuBatch(messages) {
+        if (!isEffectiveDisplayActive()) return;
         const media = getCurrentMainMedia();
         if (!media || !overlayCore?.isPlaybackEligible?.(media.video)) return;
         const scheduledGeneration = rendererGeneration;
@@ -196,6 +312,7 @@
             const token = Symbol('pending-danmaku');
             const timerId = window.setTimeout(() => {
                 pendingDanmakuTimers.delete(token);
+                if (!isEffectiveDisplayActive()) return;
                 const currentMedia = getCurrentMainMedia();
                 if (!overlayCore.isRendererTargetCurrent({
                     scheduledGeneration,
@@ -249,7 +366,7 @@
         }
 
         const media = getCurrentMainMedia();
-        if (media) attachOverlay(media.player);
+        if (media && isEffectiveDisplayActive()) attachOverlay(media.player);
         requestReadOnce();
     }
 
@@ -308,6 +425,7 @@
         const nextPageKey = `${window.location.origin}${window.location.pathname}${window.location.search}`;
         if (currentPageKey !== nextPageKey) resetPageState();
         logInfo('YouTube watch page detected');
+        evaluateNativeChatVisibility();
         requestInitialContinuation();
     }
 
@@ -316,6 +434,13 @@
     }
 
     function handleNavigationStart() {
+        disconnectNativeChatObserver();
+        setDisplayState({ nativeChatVisible: true });
+        cleanupOverlay();
+    }
+
+    function handlePageHide() {
+        disconnectNativeChatObserver();
         cleanupOverlay();
     }
 
@@ -324,7 +449,7 @@
     window.addEventListener('yt-navigate-start', handleNavigationStart);
     window.addEventListener('yt-navigate-finish', detectPage);
     window.addEventListener('yt-page-data-updated', handleNavigation);
-    window.addEventListener('pagehide', cleanupOverlay);
+    window.addEventListener('pagehide', handlePageHide);
 
     if (isYouTubeWatchPage()) {
         detectPage();

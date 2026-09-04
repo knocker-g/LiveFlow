@@ -20,7 +20,10 @@ const {
     DANMAKU_MAX_BATCH_SPREAD_MS,
     DANMAKU_BATCH_STAGGER_MS,
     DANMAKU_MAX_PENDING_COMMENTS,
-    isRendererTargetCurrent
+    isRendererTargetCurrent,
+    isEffectiveDisplayActive,
+    getDisplayStateTransition,
+    isNativeChatFrameVisible
 } = require('../src/overlay-core.js');
 
 const runtimeSource = fs.readFileSync(path.join(__dirname, '../src/youtube-chat.js'), 'utf8');
@@ -258,7 +261,7 @@ test('navigation invalidates renderer and cancels pending and active work', () =
     assert.match(runtimeSource, /pendingDanmakuTimers\.forEach\(\(timerId\) => window\.clearTimeout\(timerId\)\)/);
     assert.match(runtimeSource, /activeDanmaku\.forEach\([^]*?animation\?\.cancel\(\)/);
     assert.match(runtimeSource, /addEventListener\('yt-navigate-start', handleNavigationStart\)/);
-    assert.match(runtimeSource, /function handleNavigationStart\(\)\s*\{\s*cleanupOverlay\(\)/);
+    assert.match(runtimeSource, /function handleNavigationStart\(\)[^]*?disconnectNativeChatObserver\(\)[^]*?cleanupOverlay\(\)/);
 });
 
 test('stale timer callback verifies generation and video before DOM insertion', () => {
@@ -303,4 +306,84 @@ test('overlay root is reused and remains non-interactive', () => {
     assert.match(runtimeSource, /pointer-events:none/);
     assert.match(runtimeSource, /overflow:hidden/);
     assert.match(runtimeSource, /node\.textContent = normalized\.text/);
+});
+
+test('display state defaults and truth table permit only enabled without visible Native Chat', () => {
+    assert.equal(isEffectiveDisplayActive({ userEnabled: true, nativeChatVisible: false }), true);
+    assert.equal(isEffectiveDisplayActive({ userEnabled: true, nativeChatVisible: true }), false);
+    assert.equal(isEffectiveDisplayActive({ userEnabled: false, nativeChatVisible: false }), false);
+    assert.equal(isEffectiveDisplayActive({ userEnabled: false, nativeChatVisible: true }), false);
+    assert.match(runtimeSource, /let userEnabled = true;/);
+});
+
+test('display transitions clean only when active becomes inactive and never restore a backlog', () => {
+    const chatOpened = getDisplayStateTransition(
+        { userEnabled: true, nativeChatVisible: false },
+        { nativeChatVisible: true }
+    );
+    assert.deepEqual(chatOpened, { userEnabled: true, nativeChatVisible: true, effectiveActive: false, cleanupRequired: true });
+
+    const chatClosed = getDisplayStateTransition(chatOpened, { nativeChatVisible: false });
+    assert.deepEqual(chatClosed, { userEnabled: true, nativeChatVisible: false, effectiveActive: true, cleanupRequired: false });
+
+    const userDisabled = getDisplayStateTransition(chatClosed, { userEnabled: false });
+    assert.deepEqual(userDisabled, { userEnabled: false, nativeChatVisible: false, effectiveActive: false, cleanupRequired: true });
+
+    const userEnabled = getDisplayStateTransition(userDisabled, { userEnabled: true });
+    assert.deepEqual(userEnabled, { userEnabled: true, nativeChatVisible: false, effectiveActive: true, cleanupRequired: false });
+});
+
+test('Native Chat visibility handles visible, hidden, collapsed, and missing ownership states', () => {
+    const visible = { belongsToCurrentWatchRoot: true, hiddenAttribute: false, collapsed: false, display: 'block', visibility: 'visible', width: 400, height: 300 };
+    assert.equal(isNativeChatFrameVisible(visible), true);
+    assert.equal(isNativeChatFrameVisible({ ...visible, hiddenAttribute: true }), false);
+    assert.equal(isNativeChatFrameVisible({ ...visible, display: 'none' }), false);
+    assert.equal(isNativeChatFrameVisible({ ...visible, visibility: 'hidden' }), false);
+    assert.equal(isNativeChatFrameVisible({ ...visible, collapsed: true }), false);
+    assert.equal(isNativeChatFrameVisible({ ...visible, width: 0 }), false);
+    assert.equal(isNativeChatFrameVisible({ ...visible, height: 0 }), false);
+    assert.equal(isNativeChatFrameVisible({ ...visible, belongsToCurrentWatchRoot: false }), false);
+});
+
+test('unknown frame geometry fails safe while a missing frame is treated as not visible', () => {
+    assert.equal(isNativeChatFrameVisible({
+        belongsToCurrentWatchRoot: true,
+        hiddenAttribute: false,
+        collapsed: false,
+        display: 'block',
+        visibility: 'visible'
+    }), true);
+    assert.match(runtimeSource, /if \(!frame\) return false;/);
+    assert.match(runtimeSource, /catch \(error\) \{\s*return true;/);
+});
+
+test('display controller is memory-only and exposes future UI integration without persistence', () => {
+    assert.match(runtimeSource, /window\.LiveFlowDisplayState = Object\.freeze\(\{/);
+    assert.match(runtimeSource, /setUserEnabled\(value\)/);
+    assert.match(runtimeSource, /getUserEnabled\(\)/);
+    assert.doesNotMatch(runtimeSource, /chrome\.storage|localStorage|sessionStorage/);
+});
+
+test('inactive transitions clean pending and active danmaku without replay on re-enable', () => {
+    assert.match(runtimeSource, /if \(transition\.cleanupRequired\) cleanupOverlay\(\)/);
+    assert.match(runtimeSource, /function scheduleDanmakuBatch\(messages\) \{\s*if \(!isEffectiveDisplayActive\(\)\) return;/);
+    assert.match(runtimeSource, /pendingDanmakuTimers\.delete\(token\);\s*if \(!isEffectiveDisplayActive\(\)\) return;/);
+    assert.match(runtimeSource, /if \(media && isEffectiveDisplayActive\(\)\) attachOverlay\(media\.player\)/);
+    assert.doesNotMatch(runtimeSource, /disabledMessages|displayBacklog|replayPending/);
+});
+
+test('Native Chat observer is single, scoped, mutation-filtered, and cleaned up for SPA and pagehide', () => {
+    assert.match(runtimeSource, /if \(watchRoot === observedWatchRoot && nativeChatObserver\) return;/);
+    assert.match(runtimeSource, /nativeChatObserver\.observe\(watchRoot,/);
+    assert.match(runtimeSource, /mutations\.some\(mutationAffectsNativeChat\)/);
+    assert.match(runtimeSource, /window\.queueMicrotask\(evaluateNativeChatVisibility\)/);
+    assert.match(runtimeSource, /function handleNavigationStart\(\) \{\s*disconnectNativeChatObserver\(\)/);
+    assert.match(runtimeSource, /function handlePageHide\(\) \{\s*disconnectNativeChatObserver\(\)/);
+    assert.doesNotMatch(runtimeSource, /nativeChatObserver\.observe\(document/);
+});
+
+test('SPA evaluation uses the new current watch root and MiniPlayer policy remains intact', () => {
+    assert.match(runtimeSource, /const watchRoot = document\.querySelector\(PLAYER_SELECTORS\.watchRoot\);\s*setDisplayState/);
+    assert.match(runtimeSource, /player\.closest\(PLAYER_SELECTORS\.miniPlayerAncestor\)/);
+    assert.match(runtimeSource, /addEventListener\('yt-navigate-finish', detectPage\)/);
 });

@@ -148,6 +148,36 @@
             currentPlayerOwnsVideo === true;
     }
 
+    function isEffectiveDisplayActive({ userEnabled, nativeChatVisible } = {}) {
+        return userEnabled === true && nativeChatVisible === false;
+    }
+
+    function getDisplayStateTransition(currentState = {}, nextState = {}) {
+        const resolved = {
+            userEnabled: typeof nextState.userEnabled === 'boolean' ? nextState.userEnabled : currentState.userEnabled === true,
+            nativeChatVisible: typeof nextState.nativeChatVisible === 'boolean' ? nextState.nativeChatVisible : currentState.nativeChatVisible !== false
+        };
+        const wasActive = isEffectiveDisplayActive(currentState);
+        const effectiveActive = isEffectiveDisplayActive(resolved);
+        return { ...resolved, effectiveActive, cleanupRequired: wasActive && !effectiveActive };
+    }
+
+    function isNativeChatFrameVisible({
+        belongsToCurrentWatchRoot,
+        hiddenAttribute,
+        collapsed,
+        display,
+        visibility,
+        width,
+        height
+    } = {}) {
+        if (belongsToCurrentWatchRoot !== true) return false;
+        if (hiddenAttribute === true || collapsed === true) return false;
+        if (display === 'none' || visibility === 'hidden' || visibility === 'collapse') return false;
+        if (![width, height].every((value) => typeof value === 'number' && Number.isFinite(value))) return true;
+        return width > 0 && height > 0;
+    }
+
     function canRenderDanmaku(message, activeCount, maxActive = DANMAKU_MAX_ACTIVE_COMMENTS) {
         if (!Number.isInteger(activeCount) || !Number.isInteger(maxActive) || activeCount < 0 || maxActive <= 0 || activeCount >= maxActive) return false;
         return normalizeDanmakuMessage(message) !== null;
@@ -210,6 +240,9 @@
         selectCollisionSafeLane,
         planDanmakuBatch,
         isRendererTargetCurrent,
+        isEffectiveDisplayActive,
+        getDisplayStateTransition,
+        isNativeChatFrameVisible,
         canRenderDanmaku,
         isPlaybackEligible,
         calculateVideoSurfaceRect
