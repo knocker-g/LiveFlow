@@ -76,3 +76,21 @@ content script から直接 `fetch` する場合、同一 Origin の `https://ww
 - 400 の原因を特定するため、成功 request の query key、payload の全体構造、非機密 header、Initiator を比較する必要がある。
 - [mobile-initial-continuation-investigation.md](mobile-initial-continuation-investigation.md) に比較手順と安全な HAR 要約スクリプトを追加した。
 - PC の HTTP 200 request 完全再現については [pc-get-live-chat-reproduction.md](pc-get-live-chat-reproduction.md) に、確認済み項目と未取得項目を分離して記録した。
+
+## Narrow PC Web Native Chat layout verification
+
+Xperia 1 V / Quetta Android / Desktop Chrome browser profile / YouTube PC Web の narrow viewport で、以下を実機確認した。
+
+- soft keyboard の open / close と、close 後の Native Chat 高さ復元
+- portrait / landscape の orientation 変更
+- Native Chat の close / reopen
+- YouTube SPA での別 Live 動画への遷移
+- page reload、および YouTube アプリの共有導線からの起動
+- Native YouTube comment input と input controls の維持
+- LiveFlow overlay と continuous READ の維持
+
+### Known limitation
+
+Android narrow PC Web で soft keyboard を表示したまま orientation を portrait -> landscape -> portrait と変更した場合、Native YouTube Chat input が一時的に viewport 外へ隠れる場合がある。Keyboard を閉じると layout は正常に復旧する。
+
+現時点では許容する既知制限とし、keyboard / orientation 固有の複雑な補正は追加しない。
