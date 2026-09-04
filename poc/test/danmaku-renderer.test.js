@@ -58,20 +58,27 @@ test('constant-speed motion prevents a following comment from catching its prede
     assert.equal(selectAvailableLane([motion.laneAvailableAtMs], 1, 3200), 0);
 });
 
-test('relative batch timing preserves timestamp differences and order', () => {
+test('relative batch timing preserves small timestamp differences and order', () => {
     const plan = planDanmakuBatch([
         { id: 'a', timestampUsec: '1000000' },
-        { id: 'b', timestampUsec: '1500000' },
-        { id: 'c', timestampUsec: '2500000' }
+        { id: 'b', timestampUsec: '1200000' },
+        { id: 'c', timestampUsec: '1500000' }
     ]);
-    assert.deepEqual(plan.map((item) => item.delayMs), [0, 500, 1500]);
+    assert.deepEqual(plan.map((item) => item.delayMs), [0, 200, 500]);
+    assert.deepEqual(plan.map((item) => item.message.id), ['a', 'b', 'c']);
 });
 
-test('relative batch timing clamps spread and handles invalid or equal timestamps deterministically', () => {
-    assert.deepEqual(planDanmakuBatch([
+test('large timestamp spread is proportionally compressed to the maximum display spread', () => {
+    const plan = planDanmakuBatch([
         { timestampUsec: '1000000' },
-        { timestampUsec: '100000000' }
-    ]).map((item) => item.delayMs), [0, DANMAKU_MAX_BATCH_SPREAD_MS]);
+        { timestampUsec: '3000000' },
+        { timestampUsec: '6000000' }
+    ]);
+    assert.deepEqual(plan.map((item) => item.delayMs), [0, 320, DANMAKU_MAX_BATCH_SPREAD_MS]);
+    assert.equal(plan.every((item) => item.delayMs <= DANMAKU_MAX_BATCH_SPREAD_MS), true);
+});
+
+test('invalid and equal timestamps use deterministic fallback stagger', () => {
     assert.deepEqual(planDanmakuBatch([
         { timestampUsec: 'invalid' },
         { timestampUsec: '' }
@@ -80,6 +87,12 @@ test('relative batch timing clamps spread and handles invalid or equal timestamp
         { timestampUsec: '1000000' },
         { timestampUsec: '1000000' }
     ]).map((item) => item.delayMs), [0, DANMAKU_BATCH_STAGGER_MS]);
+});
+
+test('long invalid-timestamp batches remain ordered and proportionally bounded', () => {
+    const plan = planDanmakuBatch(Array.from({ length: 40 }, (_, index) => ({ id: String(index) })));
+    assert.equal(plan.at(-1).delayMs, DANMAKU_MAX_BATCH_SPREAD_MS);
+    assert.equal(plan.every((item, index) => index === 0 || item.delayMs >= plan[index - 1].delayMs), true);
 });
 
 test('initial large batches are bounded without reversing input order', () => {

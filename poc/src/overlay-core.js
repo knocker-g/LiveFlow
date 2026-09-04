@@ -12,8 +12,8 @@
     const DANMAKU_TARGET_DURATION_MS = 8000;
     const DANMAKU_MIN_SPEED_PX_PER_SECOND = 120;
     const DANMAKU_MAX_SPEED_PX_PER_SECOND = 240;
-    const DANMAKU_MAX_BATCH_SPREAD_MS = 2500;
-    const DANMAKU_BATCH_STAGGER_MS = 80;
+    const DANMAKU_MAX_BATCH_SPREAD_MS = 800;
+    const DANMAKU_BATCH_STAGGER_MS = 50;
     const DANMAKU_MAX_PENDING_COMMENTS = 40;
 
     function mergeMessagesById(currentMessages, incomingMessages, maxMessages = 500) {
@@ -123,21 +123,30 @@
         const timestamps = selected.map((message) => parseTimestampUsec(message?.timestampUsec));
         const valid = timestamps.filter((value) => value !== null);
         const oldest = valid.length > 0 ? valid.reduce((minimum, value) => value < minimum ? value : minimum) : null;
-        const maxSpreadUsec = BigInt(Math.floor(maxSpreadMs * 1000));
-        let previousDelay = 0;
-
-        return selected.map((message, index) => {
+        let previousRawDelay = 0;
+        let previousTimestamp = null;
+        const rawPlan = selected.map((message, index) => {
             const timestamp = timestamps[index];
-            let relativeDelay = index === 0 ? 0 : previousDelay + staggerMs;
-            if (timestamp !== null && oldest !== null) {
-                const difference = timestamp - oldest;
-                relativeDelay = difference >= maxSpreadUsec ? maxSpreadMs : Number(difference) / 1000;
-                if (index > 0) relativeDelay = Math.max(relativeDelay, previousDelay + staggerMs);
+            let rawDelay = 0;
+            if (index > 0) {
+                const parsedTimestampDelay = timestamp !== null && oldest !== null
+                    ? Number(timestamp - oldest) / 1000
+                    : null;
+                const timestampDelay = Number.isFinite(parsedTimestampDelay) ? parsedTimestampDelay : null;
+                rawDelay = timestampDelay !== null && previousTimestamp !== null && timestamp > previousTimestamp
+                    ? Math.max(timestampDelay, previousRawDelay)
+                    : previousRawDelay + staggerMs;
             }
-            const delayMs = Math.min(Math.max(0, Math.floor(relativeDelay)), maxSpreadMs);
-            previousDelay = delayMs;
-            return { message, delayMs };
+            previousRawDelay = Math.max(0, rawDelay);
+            previousTimestamp = timestamp;
+            return { message, rawDelayMs: previousRawDelay };
         });
+        const actualSpreadMs = rawPlan.at(-1)?.rawDelayMs || 0;
+        const scale = actualSpreadMs > maxSpreadMs && actualSpreadMs > 0 ? maxSpreadMs / actualSpreadMs : 1;
+        return rawPlan.map(({ message, rawDelayMs }) => ({
+            message,
+            delayMs: Math.min(maxSpreadMs, Math.max(0, Math.floor(rawDelayMs * scale)))
+        }));
     }
 
     function isRendererTargetCurrent({ scheduledGeneration, currentGeneration, scheduledVideo, currentVideo, currentPlayerOwnsVideo } = {}) {
