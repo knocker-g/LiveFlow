@@ -12,7 +12,14 @@ const {
     normalizeDanmakuMessage,
     isPlaybackEligible,
     calculateVideoSurfaceRect,
-    MIN_PLAYABLE_READY_STATE
+    MIN_PLAYABLE_READY_STATE,
+    calculateDanmakuSpeed,
+    isLaneCollisionSafe,
+    selectCollisionSafeLane,
+    planDanmakuBatch,
+    DANMAKU_MAX_BATCH_SPREAD_MS,
+    DANMAKU_BATCH_STAGGER_MS,
+    DANMAKU_MAX_PENDING_COMMENTS
 } = require('../src/overlay-core.js');
 
 const runtimeSource = fs.readFileSync(path.join(__dirname, '../src/youtube-chat.js'), 'utf8');
@@ -45,6 +52,88 @@ test('constant-speed motion prevents a following comment from catching its prede
     });
     assert.equal(selectAvailableLane([motion.laneAvailableAtMs], 1, 3199), -1);
     assert.equal(selectAvailableLane([motion.laneAvailableAtMs], 1, 3200), 0);
+});
+
+test('relative batch timing preserves timestamp differences and order', () => {
+    const plan = planDanmakuBatch([
+        { id: 'a', timestampUsec: '1000000' },
+        { id: 'b', timestampUsec: '1500000' },
+        { id: 'c', timestampUsec: '2500000' }
+    ]);
+    assert.deepEqual(plan.map((item) => item.delayMs), [0, 500, 1500]);
+});
+
+test('relative batch timing clamps spread and handles invalid or equal timestamps deterministically', () => {
+    assert.deepEqual(planDanmakuBatch([
+        { timestampUsec: '1000000' },
+        { timestampUsec: '100000000' }
+    ]).map((item) => item.delayMs), [0, DANMAKU_MAX_BATCH_SPREAD_MS]);
+    assert.deepEqual(planDanmakuBatch([
+        { timestampUsec: 'invalid' },
+        { timestampUsec: '' }
+    ]).map((item) => item.delayMs), [0, DANMAKU_BATCH_STAGGER_MS]);
+    assert.deepEqual(planDanmakuBatch([
+        { timestampUsec: '1000000' },
+        { timestampUsec: '1000000' }
+    ]).map((item) => item.delayMs), [0, DANMAKU_BATCH_STAGGER_MS]);
+});
+
+test('initial large batches are bounded without reversing input order', () => {
+    const messages = Array.from({ length: 100 }, (_, index) => ({ id: String(index), timestampUsec: String(2000000 - index * 1000) }));
+    const plan = planDanmakuBatch(messages);
+    assert.equal(plan.length, DANMAKU_MAX_PENDING_COMMENTS);
+    assert.deepEqual(plan.map((item) => item.message.id), messages.slice(-DANMAKU_MAX_PENDING_COMMENTS).map((item) => item.id));
+    assert.equal(plan.every((item, index) => index === 0 || item.delayMs >= plan[index - 1].delayMs), true);
+    assert.equal(plan.every((item) => item.delayMs <= DANMAKU_MAX_BATCH_SPREAD_MS), true);
+});
+
+test('variable speed keeps short comments near baseline and moderately accelerates longer comments', () => {
+    const short = calculateDanmakuSpeed({ overlayWidth: 800, commentWidth: 50 });
+    const medium = calculateDanmakuSpeed({ overlayWidth: 800, commentWidth: 400 });
+    const long = calculateDanmakuSpeed({ overlayWidth: 800, commentWidth: 1000 });
+    assert.equal(short, 120);
+    assert.equal(medium, 150);
+    assert.equal(long, 225);
+    assert.ok(short < medium && medium < long);
+});
+
+test('variable speed clamps extremes and rejects invalid geometry', () => {
+    assert.equal(calculateDanmakuSpeed({ overlayWidth: 100, commentWidth: 10 }), 120);
+    assert.equal(calculateDanmakuSpeed({ overlayWidth: 800, commentWidth: 5000 }), 240);
+    assert.equal(calculateDanmakuSpeed({ overlayWidth: 0, commentWidth: 100 }), null);
+    assert.equal(calculateDanmakuSpeed({ overlayWidth: 800, commentWidth: Number.NaN }), null);
+});
+
+function previousLaneState(overrides = {}) {
+    return {
+        startTimeMs: 0,
+        startX: 800,
+        commentWidth: 200,
+        speed: 120,
+        endTimeMs: 8334,
+        ...overrides
+    };
+}
+
+test('collision model accepts same or slower trailing comments only after minimum gap', () => {
+    const previous = previousLaneState();
+    assert.equal(isLaneCollisionSafe(previous, { startX: 800, speed: 120 }, 2000, 24), true);
+    assert.equal(isLaneCollisionSafe(previous, { startX: 800, speed: 100 }, 2000, 24), true);
+    assert.equal(isLaneCollisionSafe(previous, { startX: 800, speed: 120 }, 1000, 24), false);
+});
+
+test('collision model rejects faster trailing comments that would catch the predecessor', () => {
+    const previous = previousLaneState();
+    assert.equal(isLaneCollisionSafe(previous, { startX: 800, speed: 200 }, 2000, 24), false);
+    assert.equal(isLaneCollisionSafe(previous, { startX: 800, speed: 200 }, 8000, 24), true);
+});
+
+test('collision model handles long-to-short and short-to-long transitions safely', () => {
+    const longPrevious = previousLaneState({ commentWidth: 600, speed: 200, endTimeMs: 7000 });
+    const shortPrevious = previousLaneState({ commentWidth: 100, speed: 120, endTimeMs: 7500 });
+    assert.equal(isLaneCollisionSafe(longPrevious, { startX: 800, speed: 120 }, 4000, 24), true);
+    assert.equal(isLaneCollisionSafe(shortPrevious, { startX: 800, speed: 220 }, 2000, 24), false);
+    assert.equal(selectCollisionSafeLane([shortPrevious, longPrevious], 2, { startX: 800, speed: 220 }, 2000, 24), -1);
 });
 
 test('motion rejects zero and invalid dimensions', () => {
@@ -116,7 +205,15 @@ test('new geometry can be calculated independently after resize', () => {
 test('renderer drops paused messages without queueing or resume bursts', () => {
     assert.match(runtimeSource, /if \(!player \|\| !overlayCore\?\.isPlaybackEligible\?\.\(video\)\) return false;/);
     assert.doesNotMatch(runtimeSource, /addEventListener\(['"]play|addEventListener\(['"]playing|pendingMessages|messageQueue/);
-    assert.match(runtimeSource, /newMessages\.forEach\(renderDanmaku\)/);
+    assert.match(runtimeSource, /scheduleDanmakuBatch\(newMessages\)/);
+});
+
+test('pending batch timers are bounded and cancelled during teardown and SPA cleanup', () => {
+    assert.match(runtimeSource, /DANMAKU_MAX_PENDING_COMMENTS - pendingDanmakuTimers\.size/);
+    assert.match(runtimeSource, /pendingDanmakuTimers\.set\(token, timerId\)/);
+    assert.match(runtimeSource, /pendingDanmakuTimers\.forEach\(\(timerId\) => window\.clearTimeout\(timerId\)\)/);
+    assert.match(runtimeSource, /pendingDanmakuTimers\.clear\(\)/);
+    assert.match(runtimeSource, /function resetPageState\(\)[^]*?cleanupOverlay\(\)/);
 });
 
 test('renderer refreshes the actual video rect for each new comment', () => {

@@ -9,8 +9,9 @@
     const overlayCore = window.LiveFlowOverlayCore;
     let overlayRoot = null;
     let overlaySurface = null;
-    let laneAvailableAt = [];
+    let laneStates = [];
     const activeDanmaku = new Map();
+    const pendingDanmakuTimers = new Map();
     let initialContinuation = '';
     let internalApiContext = null;
     let chatAvailable = false;
@@ -61,7 +62,9 @@
             node?.remove();
         });
         activeDanmaku.clear();
-        laneAvailableAt = [];
+        pendingDanmakuTimers.forEach((timerId) => window.clearTimeout(timerId));
+        pendingDanmakuTimers.clear();
+        laneStates = [];
         overlayRoot?.remove();
         overlayRoot = null;
         overlaySurface = null;
@@ -101,25 +104,31 @@
 
         const laneCount = overlayCore.calculateLaneCount(surfaceRect.height);
         if (laneCount <= 0) return false;
-        if (laneAvailableAt.length !== laneCount) {
-            laneAvailableAt = Array.from({ length: laneCount }, (_, index) => laneAvailableAt[index] || 0);
+        if (laneStates.length !== laneCount) {
+            laneStates = Array.from({ length: laneCount }, (_, index) => laneStates[index] || null);
         }
 
         const now = performance.now();
-        const lane = overlayCore.selectAvailableLane(laneAvailableAt, laneCount, now);
-        if (lane < 0) return false;
         const normalized = overlayCore.normalizeDanmakuMessage(message);
         if (!normalized) return false;
 
         const node = document.createElement('div');
         node.className = 'liveflow-danmaku';
         node.textContent = normalized.text;
-        node.style.cssText = `position:absolute;left:0;top:${lane * (overlayCore.DANMAKU_LINE_HEIGHT_PX + overlayCore.DANMAKU_LANE_GAP_PX)}px;white-space:nowrap;font:${overlayCore.DANMAKU_FONT_SIZE_PX}px/${overlayCore.DANMAKU_LINE_HEIGHT_PX}px sans-serif;font-weight:600;color:#fff;text-shadow:0 1px 3px #000;will-change:transform;pointer-events:none;`;
+        node.style.cssText = `position:absolute;left:0;top:0;visibility:hidden;white-space:nowrap;font:${overlayCore.DANMAKU_FONT_SIZE_PX}px/${overlayCore.DANMAKU_LINE_HEIGHT_PX}px sans-serif;font-weight:600;color:#fff;text-shadow:0 1px 3px #000;will-change:transform;pointer-events:none;`;
         overlaySurface.appendChild(node);
         const commentWidth = node.getBoundingClientRect().width;
+        const speed = overlayCore.calculateDanmakuSpeed({ overlayWidth: surfaceRect.width, commentWidth });
+        const nextMotion = { startX: surfaceRect.width, speed };
+        const lane = overlayCore.selectCollisionSafeLane(laneStates, laneCount, nextMotion, now);
+        if (lane < 0) {
+            node.remove();
+            return false;
+        }
         const motion = overlayCore.calculateDanmakuMotion({
             overlayWidth: surfaceRect.width,
             commentWidth,
+            speed,
             startTimeMs: now
         });
         if (!motion || typeof node.animate !== 'function') {
@@ -127,8 +136,17 @@
             return false;
         }
 
-        laneAvailableAt[lane] = motion.laneAvailableAtMs;
         const token = Symbol('danmaku');
+        laneStates[lane] = {
+            token,
+            startTimeMs: now,
+            startX: motion.startX,
+            commentWidth,
+            speed,
+            endTimeMs: now + motion.durationMs
+        };
+        node.style.top = `${lane * (overlayCore.DANMAKU_LINE_HEIGHT_PX + overlayCore.DANMAKU_LANE_GAP_PX)}px`;
+        node.style.visibility = 'visible';
         const animation = node.animate([
             { transform: `translateX(${motion.startX}px)` },
             { transform: `translateX(${motion.endX}px)` }
@@ -146,6 +164,25 @@
             node.remove();
         });
         return true;
+    }
+
+    function scheduleDanmakuBatch(messages) {
+        const video = getVideo();
+        if (!overlayCore?.isPlaybackEligible?.(video)) return;
+        const availableSlots = Math.max(0, overlayCore.DANMAKU_MAX_PENDING_COMMENTS - pendingDanmakuTimers.size);
+        const plan = overlayCore.planDanmakuBatch(messages, availableSlots);
+        plan.forEach(({ message, delayMs }) => {
+            if (delayMs <= 0) {
+                renderDanmaku(message);
+                return;
+            }
+            const token = Symbol('pending-danmaku');
+            const timerId = window.setTimeout(() => {
+                pendingDanmakuTimers.delete(token);
+                renderDanmaku(message);
+            }, delayMs);
+            pendingDanmakuTimers.set(token, timerId);
+        });
     }
 
     function handleInitialContinuation(event) {
@@ -224,7 +261,7 @@
         if (currentMessages.length > MAX_MESSAGES) {
             currentMessages.splice(0, currentMessages.length - MAX_MESSAGES);
         }
-        newMessages.forEach(renderDanmaku);
+        scheduleDanmakuBatch(newMessages);
         logInfo(`READ #${readNumber} completed: HTTP ${event.data.status}`);
         logInfo(`READ #${readNumber} parsed messages: ${event.data.parsedMessageCount ?? messages.length}`);
         if (event.data.nextContinuationAvailable) logInfo(`READ #${readNumber} next continuation available`);
