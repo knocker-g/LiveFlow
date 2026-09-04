@@ -4,7 +4,6 @@
     const READ_REQUEST_TYPE = 'LIVEFLOW_REQUEST_CHAT_READ_ONCE';
     const READ_RESPONSE_TYPE = 'LIVEFLOW_CHAT_READ_ONCE_RESULT';
     const STOP_READ_LOOP_TYPE = 'LIVEFLOW_STOP_CHAT_READ_LOOP';
-    const MOBILE_BOOTSTRAP_TYPE = 'LIVEFLOW_MOBILE_PC_BOOTSTRAP_CONTINUATION';
     let pageRevision = 0;
     let pageKey = '';
     let pageState = { continuation: '', context: null };
@@ -70,22 +69,9 @@
         return core?.normalizeInternalApiContext?.(fallback) || null;
     }
 
-    function inspectBootstrap() {
-        return window.LiveFlowChatReadCore?.inspectLiveChatBootstrap?.(
-            window.ytInitialData,
-            window.ytInitialPlayerResponse
-        ) || null;
-    }
-
-    window.inspectMobileLiveChatBootstrap = inspectBootstrap;
-    window.inspectMobileGetWatchResponse = function (response) {
-        return window.LiveFlowChatReadCore?.inspectGetWatchResponse?.(response) || null;
-    };
-
     function respond() {
         const continuation = readContinuation();
         const context = readInternalApiContext();
-        const bootstrap = inspectBootstrap();
         const nextPageKey = `${location.origin}${location.pathname}${location.search}`;
         const revisionState = window.LiveFlowChatReadCore?.getPageRevisionState?.(pageKey, pageRevision, nextPageKey);
         if (revisionState?.changed || (!revisionState && nextPageKey !== pageKey)) {
@@ -105,7 +91,6 @@
             type: RESPONSE_TYPE,
             continuation: pageState.continuation,
             context: pageState.context,
-            bootstrap,
             pageRevision
         }, window.location.origin);
     }
@@ -248,24 +233,6 @@
         if (event.data.type === STOP_READ_LOOP_TYPE) {
             stopReadLoop();
             return;
-        }
-        if (event.data.type === MOBILE_BOOTSTRAP_TYPE) {
-            const expectedPageKey = `${location.pathname}${location.search}`;
-            if (!/Android|iPhone|Mobile/i.test(navigator.userAgent) || event.data.pageKey !== expectedPageKey) return;
-            if (typeof event.data.continuation !== 'string' || !event.data.continuation) return;
-            const context = event.data.pcContext && typeof event.data.pcContext === 'object'
-                ? event.data.pcContext
-                : null;
-            const canStart = window.LiveFlowChatReadCore?.canStartMobileBootstrapRead?.({
-                isMobile: true,
-                pageKeyMatches: true,
-                hasContinuation: Boolean(event.data.continuation),
-                hasContext: Boolean(context),
-                loopActive: activeLoopGeneration !== 0
-            });
-            if (!canStart) return;
-            pageState = { continuation: event.data.continuation, context };
-            startReadLoop();
         }
     });
 

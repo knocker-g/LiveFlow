@@ -6,8 +6,6 @@
     const READ_RESPONSE_TYPE = 'LIVEFLOW_CHAT_READ_ONCE_RESULT';
     const STOP_READ_LOOP_TYPE = 'LIVEFLOW_STOP_CHAT_READ_LOOP';
     const MAX_MESSAGES = 500;
-    const BOOTSTRAP_REQUEST_TYPE = 'GET_PC_WATCH_BOOTSTRAP_SUMMARY';
-    let bootstrapRequestedPageKey = '';
     const overlayCore = window.LiveFlowOverlayCore;
     let overlayRoot = null;
     let overlayList = null;
@@ -122,11 +120,6 @@
             logInfo('YouTube internal API context is not available');
         }
 
-        const bootstrap = event.data.bootstrap;
-        if (bootstrap && /Android|iPhone|Mobile/i.test(navigator.userAgent)) {
-            logInfo(`Mobile bootstrap: two-column=${Boolean(bootstrap.hasTwoColumnWatchNextResults)}, single-column=${Boolean(bootstrap.hasSingleColumnWatchNextResults)}, live-chat-renderer=${Boolean(bootstrap.hasLiveChatRenderer)}, candidates=${bootstrap.continuationCandidateCount || 0}`);
-        }
-
         renderOverlay();
         requestReadOnce();
     }
@@ -179,60 +172,16 @@
         return /(?:^|\.)youtube\.com\/(?:watch|live)(?:[/?]|$)/i.test(window.location.href);
     }
 
-    function requestPcWatchBootstrap() {
-        if (!/Android|iPhone|Mobile/i.test(navigator.userAgent)) return;
-        const pageKey = `${location.pathname}${location.search}`;
-        if (bootstrapRequestedPageKey === pageKey) return;
-        const videoId = new URLSearchParams(location.search).get('v') || '';
-        if (!videoId) return;
-        bootstrapRequestedPageKey = pageKey;
-        chrome.runtime.sendMessage({ type: BOOTSTRAP_REQUEST_TYPE, payload: { videoId } }).then((result) => {
-            if (!result?.ok) {
-                logInfo(`PC watch bootstrap fetch failed: ${result?.errorType || 'unknown'}`);
-                return;
-            }
-            logInfo(`PC watch bootstrap fetch completed: HTTP ${result.status}`);
-            const summary = result.summary || {};
-            if (`${location.pathname}${location.search}` !== pageKey) return;
-            if (summary.ytInitialDataFound) logInfo('PC watch bootstrap structure found');
-            if (summary.hasLiveChatRenderer) logInfo('PC liveChatRenderer found');
-            if (summary.hasInitialLiveChatContinuation) logInfo('PC initial live chat continuation found');
-            if (summary.contextMarkers?.presentFields?.length > 0) {
-                logInfo(`PC watch context markers found (${summary.contextMarkers.presentFields.join(', ')})`);
-            }
-            if (summary.htmlProfile) {
-                logInfo(`PC watch HTML profile: ytInitialData=${summary.htmlProfile.hasYtInitialDataMarker}, parse=${summary.htmlProfile.ytInitialDataParseSucceeded}, two-column=${summary.htmlProfile.hasTwoColumnWatchNextResults}, single-column=${summary.htmlProfile.hasSingleColumnWatchNextResults}`);
-                logInfo(`PC watch live-chat path: conversation-bar=${summary.htmlProfile.hasConversationBar}, live-chat-renderer=${summary.htmlProfile.hasLiveChatRenderer}, continuation=${summary.htmlProfile.hasInitialLiveChatContinuation}`);
-            }
-            if (summary.embeddingProfile) {
-                logInfo(`PC watch ytInitialData embedding: marker=${summary.embeddingProfile.markerPresent}, forms=${Object.entries(summary.embeddingProfile.assignmentForms).filter(([, present]) => present).map(([name]) => name).join(', ') || 'none'}, scripts=${summary.embeddingProfile.scriptContextTypes.join(', ') || 'unknown'}`);
-            }
-            if (result.initialContinuation) {
-                window.postMessage({
-                    source: 'liveflow-content-script',
-                    type: 'LIVEFLOW_MOBILE_PC_BOOTSTRAP_CONTINUATION',
-                    pageKey,
-                    continuation: result.initialContinuation,
-                    pcContext: result.pcContext
-                }, window.location.origin);
-                logInfo('Mobile PC bootstrap continuation acquired');
-                logInfo('Mobile PC bootstrap acquired');
-            }
-        }).catch(() => logInfo('PC watch bootstrap fetch failed: message-error'));
-    }
-
     function detectPage() {
         if (!isYouTubeWatchPage()) return;
         const nextPageKey = `${window.location.origin}${window.location.pathname}${window.location.search}`;
         if (currentPageKey !== nextPageKey) resetPageState();
         logInfo('YouTube watch page detected');
         requestInitialContinuation();
-        requestPcWatchBootstrap();
     }
 
     function handleNavigation() {
         requestInitialContinuation();
-        requestPcWatchBootstrap();
     }
 
     window.addEventListener('message', handleInitialContinuation);
