@@ -8,7 +8,8 @@
     const MAX_MESSAGES = 500;
     const overlayCore = window.LiveFlowOverlayCore;
     let overlayRoot = null;
-    let overlayList = null;
+    let laneAvailableAt = [];
+    const activeDanmaku = new Map();
     let initialContinuation = '';
     let internalApiContext = null;
     let chatAvailable = false;
@@ -50,9 +51,14 @@
     }
 
     function cleanupOverlay() {
+        activeDanmaku.forEach(({ animation, node }) => {
+            animation?.cancel();
+            node?.remove();
+        });
+        activeDanmaku.clear();
+        laneAvailableAt = [];
         overlayRoot?.remove();
         overlayRoot = null;
-        overlayList = null;
     }
 
     function attachOverlay() {
@@ -63,25 +69,64 @@
         cleanupOverlay();
         overlayRoot = document.createElement('div');
         overlayRoot.id = 'liveflow-overlay-root';
-        overlayRoot.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:20;display:flex;align-items:flex-end;justify-content:flex-end;padding:16px;box-sizing:border-box;';
-        overlayList = document.createElement('div');
-        overlayList.id = 'liveflow-message-list';
-        overlayList.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:4px;max-width:70%;max-height:60%;overflow:hidden;font:14px/1.35 sans-serif;color:#fff;text-shadow:0 1px 3px #000;';
-        overlayRoot.appendChild(overlayList);
+        overlayRoot.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:20;overflow:hidden;contain:layout paint;';
         player.appendChild(overlayRoot);
         logInfo('Overlay attached');
         return true;
     }
 
-    function renderOverlay() {
-        if (!attachOverlay() || !overlayList || !overlayCore) return;
-        overlayList.replaceChildren();
-        overlayCore.getVisibleMessages(currentMessages, overlayCore.MAX_VISIBLE_MESSAGES).forEach((message) => {
-            const node = document.createElement('div');
-            node.className = 'liveflow-message';
-            node.textContent = overlayCore.formatMessageText(message);
-            overlayList.appendChild(node);
+    function renderDanmaku(message) {
+        if (!attachOverlay() || !overlayRoot || !overlayCore) return false;
+        if (!overlayCore.canRenderDanmaku(message, activeDanmaku.size)) return false;
+
+        const bounds = overlayRoot.getBoundingClientRect();
+        const laneCount = overlayCore.calculateLaneCount(bounds.height);
+        if (laneCount <= 0 || bounds.width <= 0) return false;
+        if (laneAvailableAt.length !== laneCount) {
+            laneAvailableAt = Array.from({ length: laneCount }, (_, index) => laneAvailableAt[index] || 0);
+        }
+
+        const now = performance.now();
+        const lane = overlayCore.selectAvailableLane(laneAvailableAt, laneCount, now);
+        if (lane < 0) return false;
+        const normalized = overlayCore.normalizeDanmakuMessage(message);
+        if (!normalized) return false;
+
+        const node = document.createElement('div');
+        node.className = 'liveflow-danmaku';
+        node.textContent = normalized.text;
+        node.style.cssText = `position:absolute;left:0;top:${lane * (overlayCore.DANMAKU_LINE_HEIGHT_PX + overlayCore.DANMAKU_LANE_GAP_PX)}px;white-space:nowrap;font:${overlayCore.DANMAKU_FONT_SIZE_PX}px/${overlayCore.DANMAKU_LINE_HEIGHT_PX}px sans-serif;font-weight:600;color:#fff;text-shadow:0 1px 3px #000;will-change:transform;pointer-events:none;`;
+        overlayRoot.appendChild(node);
+        const commentWidth = node.getBoundingClientRect().width;
+        const motion = overlayCore.calculateDanmakuMotion({
+            overlayWidth: bounds.width,
+            commentWidth,
+            startTimeMs: now
         });
+        if (!motion || typeof node.animate !== 'function') {
+            node.remove();
+            return false;
+        }
+
+        laneAvailableAt[lane] = motion.laneAvailableAtMs;
+        const token = Symbol('danmaku');
+        const animation = node.animate([
+            { transform: `translateX(${motion.startX}px)` },
+            { transform: `translateX(${motion.endX}px)` }
+        ], {
+            duration: motion.durationMs,
+            easing: 'linear',
+            fill: 'forwards'
+        });
+        activeDanmaku.set(token, { animation, node });
+        animation.finished.then(() => {
+            activeDanmaku.delete(token);
+            node.remove();
+        }).catch(() => {
+            activeDanmaku.delete(token);
+            node.remove();
+        });
+        return true;
     }
 
     function handleInitialContinuation(event) {
@@ -119,7 +164,7 @@
             logInfo('YouTube internal API context is not available');
         }
 
-        renderOverlay();
+        attachOverlay();
         requestReadOnce();
     }
 
@@ -150,15 +195,17 @@
         const readNumber = event.data.readNumber || 0;
         const messages = Array.isArray(event.data.messages) ? event.data.messages : [];
         const messageIds = new Set(currentMessages.map((message) => message.id).filter(Boolean));
+        const newMessages = [];
         messages.forEach((message) => {
             if (message.id && messageIds.has(message.id)) return;
             if (message.id) messageIds.add(message.id);
             currentMessages.push(message);
+            newMessages.push(message);
         });
         if (currentMessages.length > MAX_MESSAGES) {
             currentMessages.splice(0, currentMessages.length - MAX_MESSAGES);
         }
-        renderOverlay();
+        newMessages.forEach(renderDanmaku);
         logInfo(`READ #${readNumber} completed: HTTP ${event.data.status}`);
         logInfo(`READ #${readNumber} parsed messages: ${event.data.parsedMessageCount ?? messages.length}`);
         if (event.data.nextContinuationAvailable) logInfo(`READ #${readNumber} next continuation available`);

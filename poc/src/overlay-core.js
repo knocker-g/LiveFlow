@@ -1,5 +1,13 @@
 (function (global) {
     const MAX_VISIBLE_MESSAGES = 20;
+    const DANMAKU_FONT_SIZE_PX = 24;
+    const DANMAKU_LINE_HEIGHT_PX = 32;
+    const DANMAKU_LANE_GAP_PX = 4;
+    const DANMAKU_HORIZONTAL_GAP_PX = 24;
+    const DANMAKU_SPEED_PX_PER_SECOND = 120;
+    const DANMAKU_MAX_ACTIVE_COMMENTS = 40;
+    const DANMAKU_MAX_LANES = 20;
+    const DANMAKU_MAX_MESSAGE_LENGTH = 300;
 
     function mergeMessagesById(currentMessages, incomingMessages, maxMessages = 500) {
         const messages = Array.isArray(currentMessages) ? currentMessages.slice() : [];
@@ -25,7 +33,65 @@
         return author ? `${author}: ${message.message}` : message.message;
     }
 
-    const api = { MAX_VISIBLE_MESSAGES, mergeMessagesById, getVisibleMessages, formatMessageText };
+    function normalizeDanmakuMessage(message) {
+        if (!message || message.messageType !== 'text' || typeof message.message !== 'string') return null;
+        const text = message.message.trim();
+        if (!text || text.length > DANMAKU_MAX_MESSAGE_LENGTH) return null;
+        return { id: typeof message.id === 'string' ? message.id : '', text };
+    }
+
+    function calculateLaneCount(overlayHeight, lineHeight = DANMAKU_LINE_HEIGHT_PX, laneGap = DANMAKU_LANE_GAP_PX, maxLanes = DANMAKU_MAX_LANES) {
+        if (![overlayHeight, lineHeight, laneGap, maxLanes].every((value) => typeof value === 'number' && Number.isFinite(value))) return 0;
+        if (overlayHeight <= 0 || lineHeight <= 0 || laneGap < 0 || maxLanes <= 0) return 0;
+        return Math.max(0, Math.min(Math.floor(overlayHeight / (lineHeight + laneGap)), Math.floor(maxLanes)));
+    }
+
+    function selectAvailableLane(laneAvailableAt, laneCount, nowMs) {
+        if (!Array.isArray(laneAvailableAt) || !Number.isFinite(nowMs) || laneCount <= 0) return -1;
+        const limit = Math.min(Math.floor(laneCount), laneAvailableAt.length);
+        for (let index = 0; index < limit; index += 1) {
+            const availableAt = laneAvailableAt[index];
+            if (!Number.isFinite(availableAt) || availableAt <= nowMs) return index;
+        }
+        return -1;
+    }
+
+    function calculateDanmakuMotion({ overlayWidth, commentWidth, speed = DANMAKU_SPEED_PX_PER_SECOND, horizontalGap = DANMAKU_HORIZONTAL_GAP_PX, startTimeMs } = {}) {
+        if (![overlayWidth, commentWidth, speed, horizontalGap, startTimeMs].every((value) => typeof value === 'number' && Number.isFinite(value))) return null;
+        if (overlayWidth <= 0 || commentWidth <= 0 || speed <= 0 || horizontalGap < 0 || startTimeMs < 0) return null;
+        const pixelsPerMs = speed / 1000;
+        return {
+            durationMs: Math.ceil((overlayWidth + commentWidth) / pixelsPerMs),
+            laneAvailableAtMs: startTimeMs + Math.ceil((commentWidth + horizontalGap) / pixelsPerMs),
+            startX: overlayWidth,
+            endX: -commentWidth
+        };
+    }
+
+    function canRenderDanmaku(message, activeCount, maxActive = DANMAKU_MAX_ACTIVE_COMMENTS) {
+        if (!Number.isInteger(activeCount) || !Number.isInteger(maxActive) || activeCount < 0 || maxActive <= 0 || activeCount >= maxActive) return false;
+        return normalizeDanmakuMessage(message) !== null;
+    }
+
+    const api = {
+        MAX_VISIBLE_MESSAGES,
+        DANMAKU_FONT_SIZE_PX,
+        DANMAKU_LINE_HEIGHT_PX,
+        DANMAKU_LANE_GAP_PX,
+        DANMAKU_HORIZONTAL_GAP_PX,
+        DANMAKU_SPEED_PX_PER_SECOND,
+        DANMAKU_MAX_ACTIVE_COMMENTS,
+        DANMAKU_MAX_LANES,
+        DANMAKU_MAX_MESSAGE_LENGTH,
+        mergeMessagesById,
+        getVisibleMessages,
+        formatMessageText,
+        normalizeDanmakuMessage,
+        calculateLaneCount,
+        selectAvailableLane,
+        calculateDanmakuMotion,
+        canRenderDanmaku
+    };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     global.LiveFlowOverlayCore = api;
 })(typeof window !== 'undefined' ? window : globalThis);
