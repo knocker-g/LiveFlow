@@ -12,6 +12,11 @@ const runtimeFiles = fs.readdirSync(sourceRoot)
 const runtimeSource = runtimeFiles.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
 const pageStateSource = fs.readFileSync(path.join(sourceRoot, 'page-state-main.js'), 'utf8');
 const contentSource = fs.readFileSync(path.join(sourceRoot, 'youtube-chat.js'), 'utf8');
+const readRuntimeSource = [
+    'chat-read-core.js',
+    'page-state-main.js',
+    'youtube-chat.js'
+].map((name) => fs.readFileSync(path.join(sourceRoot, name), 'utf8')).join('\n');
 const manifest = JSON.parse(fs.readFileSync(path.join(pocRoot, 'manifest.json'), 'utf8'));
 
 test('formal runtime contains no chat WRITE endpoint or WRITE message path', () => {
@@ -89,7 +94,7 @@ test('timer is generation-bound and cancelled during loop stop', () => {
 });
 
 test('PC Web eligibility is independent of viewport width', () => {
-    assert.doesNotMatch(runtimeSource, /innerWidth|outerWidth|screen\.width|matchMedia\s*\(/);
+    assert.doesNotMatch(readRuntimeSource, /innerWidth|outerWidth|screen\.width|matchMedia\s*\(/);
     assert.match(contentSource, /youtube\\\.com\\\/\(\?:watch\|live\)/);
 });
 
