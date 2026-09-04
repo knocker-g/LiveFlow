@@ -8,6 +8,7 @@
     const DANMAKU_MAX_ACTIVE_COMMENTS = 40;
     const DANMAKU_MAX_LANES = 20;
     const DANMAKU_MAX_MESSAGE_LENGTH = 300;
+    const MIN_PLAYABLE_READY_STATE = 2;
 
     function mergeMessagesById(currentMessages, incomingMessages, maxMessages = 500) {
         const messages = Array.isArray(currentMessages) ? currentMessages.slice() : [];
@@ -73,6 +74,34 @@
         return normalizeDanmakuMessage(message) !== null;
     }
 
+    function isPlaybackEligible(video) {
+        return Boolean(video) &&
+            video.paused === false &&
+            video.ended === false &&
+            typeof video.readyState === 'number' &&
+            Number.isFinite(video.readyState) &&
+            video.readyState >= MIN_PLAYABLE_READY_STATE;
+    }
+
+    function calculateVideoSurfaceRect(playerRect, videoRect) {
+        if (!playerRect || !videoRect) return null;
+        const values = [
+            playerRect.left, playerRect.top, playerRect.width, playerRect.height,
+            videoRect.left, videoRect.top, videoRect.width, videoRect.height
+        ];
+        if (!values.every((value) => typeof value === 'number' && Number.isFinite(value))) return null;
+        if (playerRect.width <= 0 || playerRect.height <= 0 || videoRect.width <= 0 || videoRect.height <= 0) return null;
+
+        const left = Math.max(0, videoRect.left - playerRect.left);
+        const top = Math.max(0, videoRect.top - playerRect.top);
+        const right = Math.min(playerRect.width, videoRect.left - playerRect.left + videoRect.width);
+        const bottom = Math.min(playerRect.height, videoRect.top - playerRect.top + videoRect.height);
+        const width = right - left;
+        const height = bottom - top;
+        if (width <= 0 || height <= 0) return null;
+        return { left, top, width, height };
+    }
+
     const api = {
         MAX_VISIBLE_MESSAGES,
         DANMAKU_FONT_SIZE_PX,
@@ -83,6 +112,7 @@
         DANMAKU_MAX_ACTIVE_COMMENTS,
         DANMAKU_MAX_LANES,
         DANMAKU_MAX_MESSAGE_LENGTH,
+        MIN_PLAYABLE_READY_STATE,
         mergeMessagesById,
         getVisibleMessages,
         formatMessageText,
@@ -90,7 +120,9 @@
         calculateLaneCount,
         selectAvailableLane,
         calculateDanmakuMotion,
-        canRenderDanmaku
+        canRenderDanmaku,
+        isPlaybackEligible,
+        calculateVideoSurfaceRect
     };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     global.LiveFlowOverlayCore = api;

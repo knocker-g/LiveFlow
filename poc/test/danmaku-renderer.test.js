@@ -9,7 +9,10 @@ const {
     selectAvailableLane,
     calculateDanmakuMotion,
     canRenderDanmaku,
-    normalizeDanmakuMessage
+    normalizeDanmakuMessage,
+    isPlaybackEligible,
+    calculateVideoSurfaceRect,
+    MIN_PLAYABLE_READY_STATE
 } = require('../src/overlay-core.js');
 
 const runtimeSource = fs.readFileSync(path.join(__dirname, '../src/youtube-chat.js'), 'utf8');
@@ -63,11 +66,65 @@ test('active hard limit drops new comments without disturbing existing comments'
     assert.equal(canRenderDanmaku(message, DANMAKU_MAX_ACTIVE_COMMENTS), false);
 });
 
+test('playback gating accepts only a playing and ready video', () => {
+    assert.equal(isPlaybackEligible({ paused: false, ended: false, readyState: MIN_PLAYABLE_READY_STATE }), true);
+    assert.equal(isPlaybackEligible({ paused: true, ended: false, readyState: 4 }), false);
+    assert.equal(isPlaybackEligible({ paused: false, ended: true, readyState: 4 }), false);
+    assert.equal(isPlaybackEligible(null), false);
+    assert.equal(isPlaybackEligible({ paused: false, ended: false, readyState: 1 }), false);
+    assert.equal(isPlaybackEligible({ paused: false, ended: false, readyState: Number.NaN }), false);
+});
+
+test('video surface matches video when player and video have equal rects', () => {
+    const rect = { left: 10, top: 20, width: 800, height: 450 };
+    assert.deepEqual(calculateVideoSurfaceRect(rect, rect), { left: 0, top: 0, width: 800, height: 450 });
+});
+
+test('video surface excludes landscape pillarbox regions', () => {
+    assert.deepEqual(calculateVideoSurfaceRect(
+        { left: 0, top: 0, width: 1000, height: 500 },
+        { left: 100, top: 0, width: 800, height: 500 }
+    ), { left: 100, top: 0, width: 800, height: 500 });
+});
+
+test('video surface excludes letterbox regions and preserves offsets', () => {
+    assert.deepEqual(calculateVideoSurfaceRect(
+        { left: 20, top: 30, width: 800, height: 600 },
+        { left: 20, top: 105, width: 800, height: 450 }
+    ), { left: 0, top: 75, width: 800, height: 450 });
+    assert.deepEqual(calculateVideoSurfaceRect(
+        { left: 50, top: 60, width: 900, height: 600 },
+        { left: 150, top: 110, width: 700, height: 400 }
+    ), { left: 100, top: 50, width: 700, height: 400 });
+});
+
+test('video surface rejects missing, invalid, zero, and non-overlapping rects', () => {
+    const player = { left: 0, top: 0, width: 800, height: 450 };
+    assert.equal(calculateVideoSurfaceRect(player, null), null);
+    assert.equal(calculateVideoSurfaceRect(player, { left: 0, top: 0, width: 0, height: 450 }), null);
+    assert.equal(calculateVideoSurfaceRect(player, { left: 0, top: 0, width: Number.NaN, height: 450 }), null);
+    assert.equal(calculateVideoSurfaceRect(player, { left: 900, top: 0, width: 100, height: 100 }), null);
+});
+
 test('new geometry can be calculated independently after resize', () => {
     const wide = calculateDanmakuMotion({ overlayWidth: 1000, commentWidth: 100, startTimeMs: 0 });
     const narrow = calculateDanmakuMotion({ overlayWidth: 400, commentWidth: 100, startTimeMs: 0 });
     assert.ok(wide.durationMs > narrow.durationMs);
     assert.equal(wide.laneAvailableAtMs, narrow.laneAvailableAtMs);
+});
+
+test('renderer drops paused messages without queueing or resume bursts', () => {
+    assert.match(runtimeSource, /if \(!player \|\| !overlayCore\?\.isPlaybackEligible\?\.\(video\)\) return false;/);
+    assert.doesNotMatch(runtimeSource, /addEventListener\(['"]play|addEventListener\(['"]playing|pendingMessages|messageQueue/);
+    assert.match(runtimeSource, /newMessages\.forEach\(renderDanmaku\)/);
+});
+
+test('renderer refreshes the actual video rect for each new comment', () => {
+    assert.match(runtimeSource, /calculateVideoSurfaceRect\(player\.getBoundingClientRect\(\), video\.getBoundingClientRect\(\)\)/);
+    assert.match(runtimeSource, /overlaySurface\.style\.left/);
+    assert.match(runtimeSource, /overlaySurface\.style\.width/);
+    assert.match(runtimeSource, /calculateLaneCount\(surfaceRect\.height\)/);
+    assert.match(runtimeSource, /overlayWidth: surfaceRect\.width/);
 });
 
 test('renderer uses browser animation and removes completed or torn-down comments', () => {

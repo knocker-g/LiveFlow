@@ -8,6 +8,7 @@
     const MAX_MESSAGES = 500;
     const overlayCore = window.LiveFlowOverlayCore;
     let overlayRoot = null;
+    let overlaySurface = null;
     let laneAvailableAt = [];
     const activeDanmaku = new Map();
     let initialContinuation = '';
@@ -50,6 +51,10 @@
         return document.querySelector('#movie_player') || document.querySelector('.html5-video-player');
     }
 
+    function getVideo() {
+        return document.querySelector('video.html5-main-video') || document.querySelector('video');
+    }
+
     function cleanupOverlay() {
         activeDanmaku.forEach(({ animation, node }) => {
             animation?.cancel();
@@ -59,6 +64,7 @@
         laneAvailableAt = [];
         overlayRoot?.remove();
         overlayRoot = null;
+        overlaySurface = null;
     }
 
     function attachOverlay() {
@@ -70,18 +76,31 @@
         overlayRoot = document.createElement('div');
         overlayRoot.id = 'liveflow-overlay-root';
         overlayRoot.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:20;overflow:hidden;contain:layout paint;';
+        overlaySurface = document.createElement('div');
+        overlaySurface.id = 'liveflow-danmaku-surface';
+        overlaySurface.style.cssText = 'position:absolute;pointer-events:none;overflow:hidden;contain:layout paint;';
+        overlayRoot.appendChild(overlaySurface);
         player.appendChild(overlayRoot);
         logInfo('Overlay attached');
         return true;
     }
 
     function renderDanmaku(message) {
-        if (!attachOverlay() || !overlayRoot || !overlayCore) return false;
+        const player = getPlayer();
+        const video = getVideo();
+        if (!player || !overlayCore?.isPlaybackEligible?.(video)) return false;
+        if (!attachOverlay() || !overlayRoot || !overlaySurface) return false;
         if (!overlayCore.canRenderDanmaku(message, activeDanmaku.size)) return false;
 
-        const bounds = overlayRoot.getBoundingClientRect();
-        const laneCount = overlayCore.calculateLaneCount(bounds.height);
-        if (laneCount <= 0 || bounds.width <= 0) return false;
+        const surfaceRect = overlayCore.calculateVideoSurfaceRect(player.getBoundingClientRect(), video.getBoundingClientRect());
+        if (!surfaceRect) return false;
+        overlaySurface.style.left = `${surfaceRect.left}px`;
+        overlaySurface.style.top = `${surfaceRect.top}px`;
+        overlaySurface.style.width = `${surfaceRect.width}px`;
+        overlaySurface.style.height = `${surfaceRect.height}px`;
+
+        const laneCount = overlayCore.calculateLaneCount(surfaceRect.height);
+        if (laneCount <= 0) return false;
         if (laneAvailableAt.length !== laneCount) {
             laneAvailableAt = Array.from({ length: laneCount }, (_, index) => laneAvailableAt[index] || 0);
         }
@@ -96,10 +115,10 @@
         node.className = 'liveflow-danmaku';
         node.textContent = normalized.text;
         node.style.cssText = `position:absolute;left:0;top:${lane * (overlayCore.DANMAKU_LINE_HEIGHT_PX + overlayCore.DANMAKU_LANE_GAP_PX)}px;white-space:nowrap;font:${overlayCore.DANMAKU_FONT_SIZE_PX}px/${overlayCore.DANMAKU_LINE_HEIGHT_PX}px sans-serif;font-weight:600;color:#fff;text-shadow:0 1px 3px #000;will-change:transform;pointer-events:none;`;
-        overlayRoot.appendChild(node);
+        overlaySurface.appendChild(node);
         const commentWidth = node.getBoundingClientRect().width;
         const motion = overlayCore.calculateDanmakuMotion({
-            overlayWidth: bounds.width,
+            overlayWidth: surfaceRect.width,
             commentWidth,
             startTimeMs: now
         });
