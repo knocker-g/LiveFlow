@@ -1,4 +1,13 @@
 (function (global) {
+    const LIVEFLOW_MIN_READ_DELAY_MS = 1000;
+    const LIVEFLOW_MAX_TIMER_DELAY_MS = 2147483647;
+    const SUPPORTED_CONTINUATION_TYPES = [
+        'nextContinuationData',
+        'invalidationContinuationData',
+        'timedContinuationData',
+        'reloadContinuationData'
+    ];
+
     class ChatMessage {
         constructor({ id, authorName, message, timestampUsec, authorPhoto, badges, messageType, authorExternalChannelId }) {
             this.id = id || '';
@@ -61,14 +70,7 @@
 
     function extractContinuationInfoFromResponse(response) {
         const continuations = response?.continuationContents?.liveChatContinuation?.continuations || [];
-        const continuationTypes = [
-            'nextContinuationData',
-            'invalidationContinuationData',
-            'timedContinuationData',
-            'reloadContinuationData'
-        ];
-
-        for (const type of continuationTypes) {
+        for (const type of SUPPORTED_CONTINUATION_TYPES) {
             for (const continuation of continuations) {
                 const data = continuation?.[type];
                 if (data?.continuation) {
@@ -85,9 +87,7 @@
 
     function getContinuationTypes(response) {
         const continuations = response?.continuationContents?.liveChatContinuation?.continuations || [];
-        const types = ['nextContinuationData', 'invalidationContinuationData', 'timedContinuationData', 'reloadContinuationData'];
-
-        return types.filter((type) => continuations.some((continuation) => Boolean(continuation?.[type])));
+        return SUPPORTED_CONTINUATION_TYPES.filter((type) => continuations.some((continuation) => Boolean(continuation?.[type])));
     }
 
     function extractInitialLiveChatContinuation(initialData) {
@@ -189,15 +189,67 @@
             readCount < 2;
     }
 
-    function getReadDelayMs(timeoutMs, minimumMs = 100, fallbackMs = 1000) {
-        if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
-            return fallbackMs;
+    function getReadDelayMs(timeoutMs) {
+        if (typeof timeoutMs !== 'number' ||
+            !Number.isFinite(timeoutMs) ||
+            timeoutMs < 0 ||
+            timeoutMs > LIVEFLOW_MAX_TIMER_DELAY_MS) {
+            return null;
         }
 
-        return Math.max(timeoutMs, minimumMs);
+        return Math.max(timeoutMs, LIVEFLOW_MIN_READ_DELAY_MS);
+    }
+
+    function validateLiveChatReadResponse(response) {
+        if (!response || typeof response !== 'object' || Array.isArray(response)) {
+            return { ok: false, errorType: 'unexpected_response_shape' };
+        }
+        const liveChatContinuation = response.continuationContents?.liveChatContinuation;
+        if (!liveChatContinuation || typeof liveChatContinuation !== 'object' || Array.isArray(liveChatContinuation)) {
+            return { ok: false, errorType: 'missing_live_chat_continuation' };
+        }
+        if (!Array.isArray(liveChatContinuation.continuations)) {
+            return { ok: false, errorType: 'missing_continuation' };
+        }
+        const continuationInfo = extractContinuationInfoFromResponse(response);
+        if (!continuationInfo) {
+            const hasUnknownType = liveChatContinuation.continuations.some((entry) =>
+                entry && typeof entry === 'object' && Object.keys(entry).some((key) => !SUPPORTED_CONTINUATION_TYPES.includes(key))
+            );
+            return { ok: false, errorType: hasUnknownType ? 'unknown_continuation_type' : 'missing_continuation' };
+        }
+        if (typeof continuationInfo.continuation !== 'string' || !continuationInfo.continuation) {
+            return { ok: false, errorType: 'missing_continuation' };
+        }
+        const effectiveDelayMs = getReadDelayMs(continuationInfo.timeoutMs);
+        if (effectiveDelayMs === null) {
+            return { ok: false, errorType: 'invalid_timeout' };
+        }
+        return { ok: true, continuationInfo, effectiveDelayMs };
+    }
+
+    function isSuccessfulHttpStatus(status) {
+        return Number.isInteger(status) && status >= 200 && status < 300;
+    }
+
+    function canStartReadLoop({ activeLoopGeneration, requestInFlight, hasContinuation, hasContext, hidden }) {
+        return activeLoopGeneration === 0 &&
+            requestInFlight === false &&
+            hasContinuation === true &&
+            hasContext === true &&
+            hidden === false;
+    }
+
+    function canScheduleNextRead({ generation, currentGeneration, revision, currentRevision, aborted, validationOk }) {
+        return generation === currentGeneration &&
+            revision === currentRevision &&
+            aborted === false &&
+            validationOk === true;
     }
 
     const api = {
+        LIVEFLOW_MIN_READ_DELAY_MS,
+        LIVEFLOW_MAX_TIMER_DELAY_MS,
         ChatMessage,
         extractChatMessagesFromResponse,
         extractContinuationFromResponse,
@@ -210,7 +262,11 @@
         canAttemptOneShotRead,
         getPageRevisionState,
         canIssueSecondRead,
-        getReadDelayMs
+        getReadDelayMs,
+        validateLiveChatReadResponse,
+        isSuccessfulHttpStatus,
+        canStartReadLoop,
+        canScheduleNextRead
     };
 
     if (typeof module !== 'undefined' && module.exports) {

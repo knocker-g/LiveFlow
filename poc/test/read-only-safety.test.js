@@ -45,20 +45,37 @@ test('manifest requests no extension API or cross-origin host permissions', () =
 
 test('READ loop does not use an interval or permit a duplicate active loop', () => {
     assert.doesNotMatch(pageStateSource, /setInterval\s*\(/);
-    assert.match(pageStateSource, /if \(activeLoopGeneration !== 0\) return;/);
+    assert.match(pageStateSource, /canStartReadLoop/);
+    assert.match(pageStateSource, /requestInFlight: readRequestInFlight/);
     assert.match(pageStateSource, /while \(generation === currentLoopGeneration && revision === pageRevision && continuation\)/);
 });
 
 test('navigation and pagehide invalidate or abort stale READ work', () => {
     assert.match(pageStateSource, /if \(revisionState\?\.changed[^]*?stopReadLoop\(\)/);
     assert.match(pageStateSource, /activeAbortController\.abort\(\)/);
+    assert.match(pageStateSource, /addEventListener\('yt-navigate-start', stopReadLoop\)/);
     assert.match(pageStateSource, /addEventListener\('pagehide', stopReadLoop\)/);
+    assert.match(pageStateSource, /addEventListener\('visibilitychange'/);
+    assert.match(pageStateSource, /if \(document\.hidden\) stopReadLoop\(\)/);
     assert.match(contentSource, /addEventListener\('yt-navigate-finish', detectPage\)/);
 });
 
 test('unexpected READ response structure stops instead of polling again', () => {
-    assert.match(pageStateSource, /if \(!result\.ok\) break;/);
-    assert.match(pageStateSource, /if \(!continuationInfo\?\.continuation\) break;/);
+    assert.match(pageStateSource, /errorType: 'invalid_json'/);
+    assert.match(pageStateSource, /validateLiveChatReadResponse/);
+    assert.match(pageStateSource, /validationOk: Boolean\(result\?\.ok\)/);
+    assert.match(pageStateSource, /errorType: 'parser_exception'/);
+});
+
+test('runtime has no retry, backoff, Retry-After, or timeout fallback polling', () => {
+    assert.doesNotMatch(runtimeSource, /Retry-After|exponential|backoff|\bretry\b/i);
+    assert.doesNotMatch(pageStateSource, /fallbackMs|\|\|\s*1000/);
+    assert.equal((pageStateSource.match(/\bfetch\s*\(/g) || []).length, 1);
+});
+
+test('timer is generation-bound and cancelled during loop stop', () => {
+    assert.match(pageStateSource, /window\.clearTimeout\(activeWaitTimer\)/);
+    assert.match(pageStateSource, /resolve\(generation === currentLoopGeneration\)/);
 });
 
 test('PC Web eligibility is independent of viewport width', () => {

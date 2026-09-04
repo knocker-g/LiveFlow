@@ -13,6 +13,7 @@
     let activeLoopGeneration = 0;
     let activeAbortController = null;
     let activeWaitTimer = null;
+    let readRequestInFlight = false;
 
     function getYtcfgValue(key) {
         try {
@@ -118,9 +119,7 @@
         activeWaitTimer = null;
     }
 
-    function waitForNextRead(timeoutMs, generation) {
-        const delay = window.LiveFlowChatReadCore?.getReadDelayMs?.(timeoutMs) || 1000;
-
+    function waitForNextRead(delay, generation) {
         return new Promise((resolve) => {
             activeWaitTimer = window.setTimeout(() => {
                 activeWaitTimer = null;
@@ -147,7 +146,7 @@
                 signal: abortController.signal
             });
 
-            if (!response.ok) {
+            if (!window.LiveFlowChatReadCore?.isSuccessfulHttpStatus?.(response.status)) {
                 return { ok: false, status: response.status, errorType: 'http_error', readNumber, revision };
             }
 
@@ -159,9 +158,19 @@
             }
 
             const parser = window.LiveFlowChatReadCore;
-            const messages = parser?.extractChatMessagesFromResponse?.(payload) || [];
-            const continuationInfo = parser?.extractContinuationInfoFromResponse?.(payload) || null;
-            const summary = parser?.summarizeLiveChatResponse?.(payload) || {};
+            let validation;
+            let messages;
+            let summary;
+            try {
+                validation = parser?.validateLiveChatReadResponse?.(payload) || { ok: false, errorType: 'parser_unavailable' };
+                if (!validation.ok) {
+                    return { ok: false, status: response.status, errorType: validation.errorType, readNumber, revision };
+                }
+                messages = parser.extractChatMessagesFromResponse(payload);
+                summary = parser.summarizeLiveChatResponse(payload);
+            } catch (error) {
+                return { ok: false, status: response.status, errorType: 'parser_exception', readNumber, revision };
+            }
             const normalizedMessages = messages.map((message) => ({
                 id: message.id,
                 authorName: message.authorName,
@@ -180,7 +189,8 @@
                 revision,
                 generation,
                 messages: normalizedMessages,
-                continuationInfo,
+                continuationInfo: validation.continuationInfo,
+                effectiveDelayMs: validation.effectiveDelayMs,
                 summary
             };
         } catch (error) {
@@ -189,8 +199,14 @@
     }
 
     async function startReadLoop() {
-        if (activeLoopGeneration !== 0) return;
-        if (!pageState.continuation || !pageState.context) return;
+        const core = window.LiveFlowChatReadCore;
+        if (!core?.canStartReadLoop?.({
+            activeLoopGeneration,
+            requestInFlight: readRequestInFlight,
+            hasContinuation: Boolean(pageState.continuation),
+            hasContext: Boolean(pageState.context),
+            hidden: document.hidden
+        })) return;
 
         const generation = ++currentLoopGeneration;
         activeLoopGeneration = generation;
@@ -202,16 +218,27 @@
             readCount += 1;
             const abortController = new AbortController();
             activeAbortController = abortController;
-            const result = await performRead(continuation, context, readCount, revision, generation, abortController);
+            readRequestInFlight = true;
+            let result;
+            try {
+                result = await performRead(continuation, context, readCount, revision, generation, abortController);
+            } finally {
+                readRequestInFlight = false;
+            }
             if (activeAbortController === abortController) activeAbortController = null;
-            if (generation !== currentLoopGeneration || revision !== pageRevision) break;
+            if (!core.canScheduleNextRead({
+                generation,
+                currentGeneration: currentLoopGeneration,
+                revision,
+                currentRevision: pageRevision,
+                aborted: abortController.signal.aborted,
+                validationOk: Boolean(result?.ok)
+            })) break;
 
             postReadResult(result);
-            if (!result.ok) break;
             const continuationInfo = result.continuationInfo;
-            if (!continuationInfo?.continuation) break;
             continuation = continuationInfo.continuation;
-            if (!await waitForNextRead(continuationInfo.timeoutMs, generation)) break;
+            if (!await waitForNextRead(result.effectiveDelayMs, generation)) break;
         }
 
         if (activeLoopGeneration === generation) {
@@ -237,6 +264,10 @@
     });
 
     window.addEventListener('yt-navigate-finish', respond);
+    window.addEventListener('yt-navigate-start', stopReadLoop);
     window.addEventListener('yt-page-data-updated', respond);
     window.addEventListener('pagehide', stopReadLoop);
+    window.addEventListener('visibilitychange', () => {
+        if (document.hidden) stopReadLoop();
+    });
 })();

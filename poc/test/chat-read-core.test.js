@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { MAX_VISIBLE_MESSAGES, mergeMessagesById, getVisibleMessages, formatMessageText } = require('../src/overlay-core.js');
 
-const { ChatMessage, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs } = require('../src/chat-read-core.js');
+const { ChatMessage, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs, validateLiveChatReadResponse, isSuccessfulHttpStatus, canStartReadLoop, canScheduleNextRead, LIVEFLOW_MIN_READ_DELAY_MS, LIVEFLOW_MAX_TIMER_DELAY_MS } = require('../src/chat-read-core.js');
 
 const sampleResponse = {
     continuationContents: {
@@ -224,12 +224,80 @@ test('canIssueSecondRead requires a successful parsed first response with next c
     assert.equal(canIssueSecondRead({ ...valid, readCount: 2 }), false);
 });
 
-test('getReadDelayMs respects valid timeout and safely handles invalid values', () => {
+test('getReadDelayMs applies a one-second safety floor without shortening YouTube timeout', () => {
+    assert.equal(LIVEFLOW_MIN_READ_DELAY_MS, 1000);
+    assert.equal(getReadDelayMs(0), 1000);
+    assert.equal(getReadDelayMs(999), 1000);
+    assert.equal(getReadDelayMs(1000), 1000);
     assert.equal(getReadDelayMs(1500), 1500);
-    assert.equal(getReadDelayMs(0), 100);
-    assert.equal(getReadDelayMs(-1), 1000);
-    assert.equal(getReadDelayMs(Number.NaN), 1000);
-    assert.equal(getReadDelayMs('1500'), 1000);
+});
+
+test('getReadDelayMs rejects every invalid timeout without a fallback poll', () => {
+    for (const timeout of [undefined, null, '1500', Number.NaN, Infinity, -1, LIVEFLOW_MAX_TIMER_DELAY_MS + 1]) {
+        assert.equal(getReadDelayMs(timeout), null);
+    }
+});
+
+test('HTTP policy accepts 2xx and stops every requested failure status', () => {
+    assert.equal(isSuccessfulHttpStatus(200), true);
+    for (const status of [400, 401, 403, 404, 409, 429, 500, 503, 399, 600]) {
+        assert.equal(isSuccessfulHttpStatus(status), false);
+    }
+});
+
+function responseWithContinuation(type = 'timedContinuationData', continuation = 'next', timeoutMs = 1500) {
+    return {
+        continuationContents: {
+            liveChatContinuation: {
+                actions: [],
+                continuations: [{ [type]: { continuation, timeoutMs } }]
+            }
+        }
+    };
+}
+
+test('response validation accepts only a supported continuation with a valid timeout', () => {
+    const result = validateLiveChatReadResponse(responseWithContinuation());
+    assert.equal(result.ok, true);
+    assert.equal(result.effectiveDelayMs, 1500);
+    assert.equal(result.continuationInfo.type, 'timedContinuationData');
+});
+
+test('response validation fails closed on missing or unexpected structures', () => {
+    assert.equal(validateLiveChatReadResponse(null).errorType, 'unexpected_response_shape');
+    assert.equal(validateLiveChatReadResponse([]).errorType, 'unexpected_response_shape');
+    assert.equal(validateLiveChatReadResponse({}).errorType, 'missing_live_chat_continuation');
+    assert.equal(validateLiveChatReadResponse({ continuationContents: { liveChatContinuation: {} } }).errorType, 'missing_continuation');
+    assert.equal(validateLiveChatReadResponse(responseWithContinuation('timedContinuationData', '')).errorType, 'missing_continuation');
+    assert.equal(validateLiveChatReadResponse(responseWithContinuation('unknownContinuationData')).errorType, 'unknown_continuation_type');
+});
+
+test('response validation rejects missing and invalid timeout values', () => {
+    const missingTimeout = responseWithContinuation();
+    delete missingTimeout.continuationContents.liveChatContinuation.continuations[0].timedContinuationData.timeoutMs;
+    assert.equal(validateLiveChatReadResponse(missingTimeout).errorType, 'invalid_timeout');
+    for (const timeout of [null, '1500', Number.NaN, Infinity, -1, LIVEFLOW_MAX_TIMER_DELAY_MS + 1]) {
+        assert.equal(validateLiveChatReadResponse(responseWithContinuation('timedContinuationData', 'next', timeout)).errorType, 'invalid_timeout');
+    }
+});
+
+test('loop start policy rejects duplicates, in-flight requests, missing state, and hidden pages', () => {
+    const valid = { activeLoopGeneration: 0, requestInFlight: false, hasContinuation: true, hasContext: true, hidden: false };
+    assert.equal(canStartReadLoop(valid), true);
+    assert.equal(canStartReadLoop({ ...valid, activeLoopGeneration: 1 }), false);
+    assert.equal(canStartReadLoop({ ...valid, requestInFlight: true }), false);
+    assert.equal(canStartReadLoop({ ...valid, hasContinuation: false }), false);
+    assert.equal(canStartReadLoop({ ...valid, hasContext: false }), false);
+    assert.equal(canStartReadLoop({ ...valid, hidden: true }), false);
+});
+
+test('stale, aborted, or invalid responses cannot schedule another READ', () => {
+    const valid = { generation: 2, currentGeneration: 2, revision: 3, currentRevision: 3, aborted: false, validationOk: true };
+    assert.equal(canScheduleNextRead(valid), true);
+    assert.equal(canScheduleNextRead({ ...valid, currentGeneration: 4 }), false);
+    assert.equal(canScheduleNextRead({ ...valid, currentRevision: 4 }), false);
+    assert.equal(canScheduleNextRead({ ...valid, aborted: true }), false);
+    assert.equal(canScheduleNextRead({ ...valid, validationOk: false }), false);
 });
 
 test('overlay helpers deduplicate messages and retain the newest bounded history', () => {

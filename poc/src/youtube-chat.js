@@ -114,8 +114,7 @@
         }
 
         if (internalApiContext) {
-            const fields = Object.keys(internalApiContext.client || {}).sort();
-            logInfo(`YouTube internal API context found (${fields.join(', ')})`);
+            logInfo('YouTube internal API context found');
         } else {
             logInfo('YouTube internal API context is not available');
         }
