@@ -19,7 +19,8 @@ const {
     planDanmakuBatch,
     DANMAKU_MAX_BATCH_SPREAD_MS,
     DANMAKU_BATCH_STAGGER_MS,
-    DANMAKU_MAX_PENDING_COMMENTS
+    DANMAKU_MAX_PENDING_COMMENTS,
+    isRendererTargetCurrent
 } = require('../src/overlay-core.js');
 
 const runtimeSource = fs.readFileSync(path.join(__dirname, '../src/youtube-chat.js'), 'utf8');
@@ -203,9 +204,72 @@ test('new geometry can be calculated independently after resize', () => {
 });
 
 test('renderer drops paused messages without queueing or resume bursts', () => {
-    assert.match(runtimeSource, /if \(!player \|\| !overlayCore\?\.isPlaybackEligible\?\.\(video\)\) return false;/);
+    assert.match(runtimeSource, /if \(!media \|\| !overlayCore\?\.isPlaybackEligible\?\.\(media\.video\)\) return;/);
     assert.doesNotMatch(runtimeSource, /addEventListener\(['"]play|addEventListener\(['"]playing|pendingMessages|messageQueue/);
     assert.match(runtimeSource, /scheduleDanmakuBatch\(newMessages\)/);
+});
+
+test('renderer generation rejects stale timers across repeated transitions', () => {
+    const firstVideo = {};
+    const secondVideo = {};
+    assert.equal(isRendererTargetCurrent({
+        scheduledGeneration: 1,
+        currentGeneration: 2,
+        scheduledVideo: firstVideo,
+        currentVideo: secondVideo,
+        currentPlayerOwnsVideo: true
+    }), false);
+    assert.equal(isRendererTargetCurrent({
+        scheduledGeneration: 1,
+        currentGeneration: 3,
+        scheduledVideo: firstVideo,
+        currentVideo: secondVideo,
+        currentPlayerOwnsVideo: true
+    }), false);
+});
+
+test('renderer target accepts only the same current main video', () => {
+    const currentVideo = {};
+    assert.equal(isRendererTargetCurrent({
+        scheduledGeneration: 4,
+        currentGeneration: 4,
+        scheduledVideo: currentVideo,
+        currentVideo,
+        currentPlayerOwnsVideo: true
+    }), true);
+    assert.equal(isRendererTargetCurrent({
+        scheduledGeneration: 4,
+        currentGeneration: 4,
+        scheduledVideo: {},
+        currentVideo,
+        currentPlayerOwnsVideo: true
+    }), false);
+    assert.equal(isRendererTargetCurrent({
+        scheduledGeneration: 4,
+        currentGeneration: 4,
+        scheduledVideo: currentVideo,
+        currentVideo,
+        currentPlayerOwnsVideo: false
+    }), false);
+});
+
+test('navigation invalidates renderer and cancels pending and active work', () => {
+    assert.match(runtimeSource, /function cleanupOverlay\(\)\s*\{\s*rendererGeneration \+= 1;/);
+    assert.match(runtimeSource, /pendingDanmakuTimers\.forEach\(\(timerId\) => window\.clearTimeout\(timerId\)\)/);
+    assert.match(runtimeSource, /activeDanmaku\.forEach\([^]*?animation\?\.cancel\(\)/);
+    assert.match(runtimeSource, /addEventListener\('yt-navigate-start', handleNavigationStart\)/);
+    assert.match(runtimeSource, /function handleNavigationStart\(\)\s*\{\s*cleanupOverlay\(\)/);
+});
+
+test('stale timer callback verifies generation and video before DOM insertion', () => {
+    assert.match(runtimeSource, /const currentMedia = getCurrentMainMedia\(\);[^]*?isRendererTargetCurrent\([^]*?\)\) return;[^]*?renderDanmaku\(message, scheduledGeneration, scheduledVideo\)/);
+});
+
+test('main-player lookup is scoped to the current watch root and rejects MiniPlayer', () => {
+    assert.match(runtimeSource, /watchRoot\?\.querySelector\(PLAYER_SELECTORS\.player\)/);
+    assert.match(runtimeSource, /player\.closest\(PLAYER_SELECTORS\.miniPlayerAncestor\)/);
+    assert.match(runtimeSource, /player\.classList\.contains\('ytp-player-minimized'\)/);
+    assert.doesNotMatch(runtimeSource, /document\.querySelector\('#movie_player'\)/);
 });
 
 test('pending batch timers are bounded and cancelled during teardown and SPA cleanup', () => {

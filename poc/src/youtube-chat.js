@@ -6,6 +6,12 @@
     const READ_RESPONSE_TYPE = 'LIVEFLOW_CHAT_READ_ONCE_RESULT';
     const STOP_READ_LOOP_TYPE = 'LIVEFLOW_STOP_CHAT_READ_LOOP';
     const MAX_MESSAGES = 500;
+    const PLAYER_SELECTORS = Object.freeze({
+        watchRoot: 'ytd-watch-flexy',
+        player: '#movie_player, .html5-video-player',
+        video: 'video.html5-main-video, video',
+        miniPlayerAncestor: 'ytd-miniplayer, #miniplayer'
+    });
     const overlayCore = window.LiveFlowOverlayCore;
     let overlayRoot = null;
     let overlaySurface = null;
@@ -19,6 +25,7 @@
     let readRequestedRevision = -1;
     let currentMessages = [];
     let currentPageKey = '';
+    let rendererGeneration = 0;
 
     function logInfo(message) {
         console.log(`${LOG_PREFIX} ${message}`);
@@ -48,15 +55,17 @@
         cleanupOverlay();
     }
 
-    function getPlayer() {
-        return document.querySelector('#movie_player') || document.querySelector('.html5-video-player');
-    }
-
-    function getVideo() {
-        return document.querySelector('video.html5-main-video') || document.querySelector('video');
+    function getCurrentMainMedia() {
+        if (!isYouTubeWatchPage()) return null;
+        const watchRoot = document.querySelector(PLAYER_SELECTORS.watchRoot);
+        const player = watchRoot?.querySelector(PLAYER_SELECTORS.player) || null;
+        if (!player || player.closest(PLAYER_SELECTORS.miniPlayerAncestor) || player.classList.contains('ytp-player-minimized')) return null;
+        const video = player.querySelector(PLAYER_SELECTORS.video);
+        return video ? { player, video } : null;
     }
 
     function cleanupOverlay() {
+        rendererGeneration += 1;
         activeDanmaku.forEach(({ animation, node }) => {
             animation?.cancel();
             node?.remove();
@@ -70,8 +79,7 @@
         overlaySurface = null;
     }
 
-    function attachOverlay() {
-        const player = getPlayer();
+    function attachOverlay(player) {
         if (!player) return false;
 
         if (overlayRoot?.isConnected && overlayRoot.parentElement === player) return true;
@@ -88,11 +96,18 @@
         return true;
     }
 
-    function renderDanmaku(message) {
-        const player = getPlayer();
-        const video = getVideo();
-        if (!player || !overlayCore?.isPlaybackEligible?.(video)) return false;
-        if (!attachOverlay() || !overlayRoot || !overlaySurface) return false;
+    function renderDanmaku(message, scheduledGeneration = rendererGeneration, scheduledVideo = null) {
+        const media = getCurrentMainMedia();
+        if (!media || !overlayCore?.isRendererTargetCurrent?.({
+            scheduledGeneration,
+            currentGeneration: rendererGeneration,
+            scheduledVideo: scheduledVideo || media.video,
+            currentVideo: media.video,
+            currentPlayerOwnsVideo: true
+        })) return false;
+        const { player, video } = media;
+        if (!overlayCore.isPlaybackEligible(video)) return false;
+        if (!attachOverlay(player) || !overlayRoot || !overlaySurface) return false;
         if (!overlayCore.canRenderDanmaku(message, activeDanmaku.size)) return false;
 
         const surfaceRect = overlayCore.calculateVideoSurfaceRect(player.getBoundingClientRect(), video.getBoundingClientRect());
@@ -167,19 +182,29 @@
     }
 
     function scheduleDanmakuBatch(messages) {
-        const video = getVideo();
-        if (!overlayCore?.isPlaybackEligible?.(video)) return;
+        const media = getCurrentMainMedia();
+        if (!media || !overlayCore?.isPlaybackEligible?.(media.video)) return;
+        const scheduledGeneration = rendererGeneration;
+        const scheduledVideo = media.video;
         const availableSlots = Math.max(0, overlayCore.DANMAKU_MAX_PENDING_COMMENTS - pendingDanmakuTimers.size);
         const plan = overlayCore.planDanmakuBatch(messages, availableSlots);
         plan.forEach(({ message, delayMs }) => {
             if (delayMs <= 0) {
-                renderDanmaku(message);
+                renderDanmaku(message, scheduledGeneration, scheduledVideo);
                 return;
             }
             const token = Symbol('pending-danmaku');
             const timerId = window.setTimeout(() => {
                 pendingDanmakuTimers.delete(token);
-                renderDanmaku(message);
+                const currentMedia = getCurrentMainMedia();
+                if (!overlayCore.isRendererTargetCurrent({
+                    scheduledGeneration,
+                    currentGeneration: rendererGeneration,
+                    scheduledVideo,
+                    currentVideo: currentMedia?.video || null,
+                    currentPlayerOwnsVideo: Boolean(currentMedia)
+                })) return;
+                renderDanmaku(message, scheduledGeneration, scheduledVideo);
             }, delayMs);
             pendingDanmakuTimers.set(token, timerId);
         });
@@ -191,21 +216,24 @@
 
         const previousRevision = currentPageRevision;
         const nextPageKey = `${window.location.origin}${window.location.pathname}${window.location.search}`;
+        const pageChanged = Boolean(currentPageKey && currentPageKey !== nextPageKey);
         const continuation = event.data.continuation;
         initialContinuation = typeof continuation === 'string' ? continuation : '';
         internalApiContext = event.data.context && typeof event.data.context === 'object'
             ? event.data.context
             : null;
         currentPageRevision = Number.isInteger(event.data.pageRevision) ? event.data.pageRevision : currentPageRevision;
-        if (currentPageKey && currentPageKey !== nextPageKey) {
+        if (pageChanged) {
             readRequestedRevision = -1;
             currentMessages = [];
         }
         currentPageKey = nextPageKey;
-        if (previousRevision !== currentPageRevision) {
+        const revisionChanged = previousRevision !== currentPageRevision;
+        if (revisionChanged) {
             readRequestedRevision = -1;
             currentMessages = [];
         }
+        if (pageChanged || revisionChanged) cleanupOverlay();
         chatAvailable = Boolean(initialContinuation);
 
         if (chatAvailable) {
@@ -220,7 +248,8 @@
             logInfo('YouTube internal API context is not available');
         }
 
-        attachOverlay();
+        const media = getCurrentMainMedia();
+        if (media) attachOverlay(media.player);
         requestReadOnce();
     }
 
@@ -286,8 +315,13 @@
         requestInitialContinuation();
     }
 
+    function handleNavigationStart() {
+        cleanupOverlay();
+    }
+
     window.addEventListener('message', handleInitialContinuation);
     window.addEventListener('message', handleReadResult);
+    window.addEventListener('yt-navigate-start', handleNavigationStart);
     window.addEventListener('yt-navigate-finish', detectPage);
     window.addEventListener('yt-page-data-updated', handleNavigation);
     window.addEventListener('pagehide', cleanupOverlay);

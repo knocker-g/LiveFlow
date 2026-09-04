@@ -140,6 +140,14 @@
         });
     }
 
+    function isRendererTargetCurrent({ scheduledGeneration, currentGeneration, scheduledVideo, currentVideo, currentPlayerOwnsVideo } = {}) {
+        return Number.isInteger(scheduledGeneration) &&
+            scheduledGeneration === currentGeneration &&
+            Boolean(scheduledVideo) &&
+            scheduledVideo === currentVideo &&
+            currentPlayerOwnsVideo === true;
+    }
+
     function canRenderDanmaku(message, activeCount, maxActive = DANMAKU_MAX_ACTIVE_COMMENTS) {
         if (!Number.isInteger(activeCount) || !Number.isInteger(maxActive) || activeCount < 0 || maxActive <= 0 || activeCount >= maxActive) return false;
         return normalizeDanmakuMessage(message) !== null;
@@ -201,6 +209,7 @@
         isLaneCollisionSafe,
         selectCollisionSafeLane,
         planDanmakuBatch,
+        isRendererTargetCurrent,
         canRenderDanmaku,
         isPlaybackEligible,
         calculateVideoSurfaceRect
