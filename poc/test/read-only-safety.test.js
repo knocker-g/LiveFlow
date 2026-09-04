@@ -73,6 +73,16 @@ test('runtime has no retry, backoff, Retry-After, or timeout fallback polling', 
     assert.equal((pageStateSource.match(/\bfetch\s*\(/g) || []).length, 1);
 });
 
+test('READ uses the unchanged endpoint without ambient credentials', () => {
+    assert.match(pageStateSource, /fetch\('\/youtubei\/v1\/live_chat\/get_live_chat\?prettyPrint=false'/);
+    assert.match(pageStateSource, /headers:\s*\{\s*'Content-Type':\s*'application\/json'\s*\}/);
+    assert.match(pageStateSource, /body:\s*JSON\.stringify\(requestBody\)/);
+    assert.match(runtimeSource, /return\s*\{\s*context,\s*continuation\s*\}/);
+    assert.match(pageStateSource, /credentials:\s*'omit'/);
+    assert.doesNotMatch(pageStateSource, /credentials:\s*'include'/);
+    assert.equal((pageStateSource.match(/\bfetch\s*\(/g) || []).length, 1);
+});
+
 test('timer is generation-bound and cancelled during loop stop', () => {
     assert.match(pageStateSource, /window\.clearTimeout\(activeWaitTimer\)/);
     assert.match(pageStateSource, /resolve\(generation === currentLoopGeneration\)/);

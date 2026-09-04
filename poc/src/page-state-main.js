@@ -142,7 +142,7 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(requestBody),
-                credentials: 'include',
+                credentials: 'omit',
                 signal: abortController.signal
             });
 
