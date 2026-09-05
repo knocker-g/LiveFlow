@@ -6,9 +6,18 @@
     const READ_RESPONSE_TYPE = 'LIVEFLOW_CHAT_READ_ONCE_RESULT';
     const STOP_READ_LOOP_TYPE = 'LIVEFLOW_STOP_CHAT_READ_LOOP';
     const MAX_MESSAGES = 500;
+    const MANAGEMENT_BAR_ID = 'liveflow-management-bar';
+    const MANAGEMENT_STYLE_ID = 'liveflow-management-bar-style';
+    const MANAGEMENT_HEIGHT_PROPERTY = '--liveflow-management-height';
+    const DISPLAY_LINK_SETTINGS = Object.freeze({
+        autoEnableLiveFlowWhenNativeChatClosed: true,
+        autoOpenNativeChatWhenLiveFlowDisabled: true
+    });
     const PLAYER_SELECTORS = Object.freeze({
         watchRoot: 'ytd-watch-flexy',
         nativeChat: 'ytd-live-chat-frame#chat, ytd-live-chat-frame',
+        nativeChatOpenButton: '#show-hide-button button, #show-hide-button tp-yt-paper-button',
+        playerHost: '#player',
         player: '#movie_player, .html5-video-player',
         video: 'video.html5-main-video, video',
         miniPlayerAncestor: 'ytd-miniplayer, #miniplayer'
@@ -29,9 +38,15 @@
     let rendererGeneration = 0;
     let userEnabled = true;
     let nativeChatVisible = true;
+    let nativeChatKnown = false;
     let nativeChatObserver = null;
     let observedWatchRoot = null;
     let visibilityEvaluationQueued = false;
+    let managementBar = null;
+    let managementToggleButton = null;
+    let managementReadIndicator = null;
+    let managementCloseButton = null;
+    let readIndicatorState = 'idle';
 
     function logInfo(message) {
         console.log(`${LOG_PREFIX} ${message}`);
@@ -58,6 +73,7 @@
         readRequestedRevision = -1;
         currentMessages = [];
         currentPageKey = '';
+        setReadIndicatorState('idle');
         cleanupOverlay();
     }
 
@@ -89,18 +105,25 @@
         return overlayCore?.isEffectiveDisplayActive?.({ userEnabled, nativeChatVisible }) === true;
     }
 
-    function setDisplayState(nextState) {
-        const transition = overlayCore.getDisplayStateTransition({ userEnabled, nativeChatVisible }, nextState);
+    function applyDisplayAction(action) {
+        const transition = overlayCore.reduceDisplayState(
+            { userEnabled, nativeChatVisible, nativeChatKnown },
+            action,
+            DISPLAY_LINK_SETTINGS
+        );
         userEnabled = transition.userEnabled;
         nativeChatVisible = transition.nativeChatVisible;
+        nativeChatKnown = transition.nativeChatKnown;
         if (transition.cleanupRequired) cleanupOverlay();
-        return transition.effectiveActive;
+        updateManagementBar();
+        if (transition.requestNativeChatOpen) tryOpenNativeChat();
+        return transition;
     }
 
     window.LiveFlowDisplayState = Object.freeze({
         setUserEnabled(value) {
             if (typeof value !== 'boolean') return false;
-            setDisplayState({ userEnabled: value });
+            applyDisplayAction({ type: 'set-user-enabled', value });
             return true;
         },
         getUserEnabled() {
@@ -140,11 +163,11 @@
     function evaluateNativeChatVisibility() {
         visibilityEvaluationQueued = false;
         if (!isYouTubeWatchPage()) {
-            setDisplayState({ nativeChatVisible: true });
+            applyDisplayAction({ type: 'reset-native-chat' });
             return;
         }
         const watchRoot = document.querySelector(PLAYER_SELECTORS.watchRoot);
-        setDisplayState({ nativeChatVisible: readNativeChatVisibility(watchRoot) });
+        applyDisplayAction({ type: 'native-chat-visibility', value: readNativeChatVisibility(watchRoot) });
         observeNativeChat(watchRoot);
     }
 
@@ -191,6 +214,180 @@
         nativeChatObserver = null;
         observedWatchRoot = null;
         visibilityEvaluationQueued = false;
+    }
+
+    function tryOpenNativeChat() {
+        if (!nativeChatKnown || nativeChatVisible) return false;
+        const watchRoot = document.querySelector(PLAYER_SELECTORS.watchRoot);
+        const frame = watchRoot?.querySelector(PLAYER_SELECTORS.nativeChat) || null;
+        if (!watchRoot || !frame || !watchRoot.contains(frame)) return false;
+        const knownClosedState = frame.hasAttribute('collapsed') || frame.hidden === true ||
+            frame.hasAttribute('hidden') || frame.getAttribute('aria-hidden') === 'true';
+        if (!knownClosedState) return false;
+        const button = frame.querySelector(PLAYER_SELECTORS.nativeChatOpenButton);
+        if (!button) return false;
+        let style;
+        let rect;
+        try {
+            style = window.getComputedStyle(button);
+            rect = button.getBoundingClientRect();
+        } catch (error) {
+            return false;
+        }
+        if (!overlayCore.isNativeChatOpenButtonUsable({
+            belongsToCurrentWatchRoot: watchRoot.contains(button),
+            disabled: button.disabled === true,
+            ariaDisabled: button.getAttribute('aria-disabled'),
+            display: style.display,
+            visibility: style.visibility,
+            width: rect.width,
+            height: rect.height
+        })) return false;
+        button.click();
+        return true;
+    }
+
+    function ensureManagementStyle() {
+        if (document.getElementById(MANAGEMENT_STYLE_ID)) return;
+        const style = document.createElement('style');
+        style.id = MANAGEMENT_STYLE_ID;
+        style.textContent = `
+            #${MANAGEMENT_BAR_ID} {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                box-sizing: border-box;
+                width: 100%;
+                min-height: 36px;
+                padding: 4px 8px;
+                color: var(--yt-spec-text-primary, #f1f1f1);
+                background: var(--yt-spec-base-background, #0f0f0f);
+                font: 500 13px/1.2 Roboto, Arial, sans-serif;
+            }
+            #${MANAGEMENT_BAR_ID} button {
+                min-height: 28px;
+                border: 0;
+                border-radius: 3px;
+                padding: 0 9px;
+                color: inherit;
+                background: var(--yt-spec-badge-chip-background, rgba(255,255,255,.1));
+                font: inherit;
+                cursor: pointer;
+            }
+            #${MANAGEMENT_BAR_ID} button:focus-visible {
+                outline: 2px solid currentColor;
+                outline-offset: 1px;
+            }
+            #${MANAGEMENT_BAR_ID} .liveflow-read-indicator {
+                flex: 1;
+                overflow: hidden;
+                color: var(--yt-spec-call-to-action, #3ea6ff);
+                letter-spacing: 3px;
+                white-space: nowrap;
+                opacity: .35;
+            }
+            #${MANAGEMENT_BAR_ID}[data-read-state="active"] .liveflow-read-indicator {
+                opacity: 1;
+                animation: liveflow-read-indicator 1.2s ease-in-out infinite alternate;
+            }
+            #${MANAGEMENT_BAR_ID}[data-enabled="false"] .liveflow-read-indicator,
+            #${MANAGEMENT_BAR_ID}[data-enabled="false"] .liveflow-close-button {
+                display: none;
+            }
+            @keyframes liveflow-read-indicator { from { opacity: .35; } to { opacity: 1; } }
+            @media (prefers-reduced-motion: reduce) {
+                #${MANAGEMENT_BAR_ID}[data-read-state="active"] .liveflow-read-indicator { animation: none; }
+            }
+        `;
+        (document.head || document.documentElement).appendChild(style);
+    }
+
+    function updateManagementHeight() {
+        const height = managementBar?.isConnected ? managementBar.getBoundingClientRect().height : 0;
+        const safeHeight = Number.isFinite(height) && height > 0 ? Math.ceil(height) : 0;
+        document.documentElement.style.setProperty(MANAGEMENT_HEIGHT_PROPERTY, `${safeHeight}px`);
+    }
+
+    function updateManagementBar() {
+        if (!managementBar) return;
+        const view = overlayCore.getManagementBarViewModel({ userEnabled, readState: readIndicatorState });
+        managementBar.dataset.enabled = String(view.enabled);
+        managementBar.dataset.readState = view.readState;
+        managementToggleButton.textContent = view.toggleLabel;
+        managementToggleButton.setAttribute('aria-pressed', String(view.togglePressed));
+        managementReadIndicator.hidden = !view.enabled;
+        managementCloseButton.hidden = !view.showCloseButton;
+    }
+
+    function cleanupManagementBar() {
+        managementBar?.remove();
+        managementBar = null;
+        managementToggleButton = null;
+        managementReadIndicator = null;
+        managementCloseButton = null;
+        document.documentElement.style.setProperty(MANAGEMENT_HEIGHT_PROPERTY, '0px');
+    }
+
+    function attachManagementBar() {
+        const media = getCurrentMainMedia();
+        if (!media) return false;
+        const watchRoot = document.querySelector(PLAYER_SELECTORS.watchRoot);
+        const playerHost = media.player.closest(PLAYER_SELECTORS.playerHost);
+        if (!watchRoot || !playerHost || !watchRoot.contains(playerHost)) return false;
+        if (managementBar?.isConnected && watchRoot.contains(managementBar)) {
+            updateManagementBar();
+            updateManagementHeight();
+            return true;
+        }
+        cleanupManagementBar();
+        document.getElementById(MANAGEMENT_BAR_ID)?.remove();
+        ensureManagementStyle();
+
+        const bar = document.createElement('div');
+        bar.id = MANAGEMENT_BAR_ID;
+        bar.setAttribute('role', 'toolbar');
+        bar.setAttribute('aria-label', 'LiveFlow controls');
+
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'liveflow-toggle-button';
+        toggle.addEventListener('click', () => applyDisplayAction({ type: 'set-user-enabled', value: !userEnabled }));
+
+        const indicator = document.createElement('span');
+        indicator.className = 'liveflow-read-indicator';
+        indicator.textContent = '›››››';
+        indicator.setAttribute('aria-hidden', 'true');
+
+        const gear = document.createElement('button');
+        gear.type = 'button';
+        gear.className = 'liveflow-settings-button';
+        gear.textContent = '⚙';
+        gear.title = 'Settings (not yet available)';
+        gear.setAttribute('aria-label', 'LiveFlow settings (not yet available)');
+        gear.addEventListener('click', () => {});
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'liveflow-close-button';
+        close.textContent = '×';
+        close.title = 'Turn LiveFlow off';
+        close.setAttribute('aria-label', 'Turn LiveFlow off');
+        close.addEventListener('click', () => applyDisplayAction({ type: 'set-user-enabled', value: false }));
+
+        bar.append(toggle, indicator, gear, close);
+        playerHost.insertAdjacentElement('afterend', bar);
+        managementBar = bar;
+        managementToggleButton = toggle;
+        managementReadIndicator = indicator;
+        managementCloseButton = close;
+        updateManagementBar();
+        updateManagementHeight();
+        return true;
+    }
+
+    function setReadIndicatorState(state) {
+        readIndicatorState = state;
+        updateManagementBar();
     }
 
     function attachOverlay(player) {
@@ -366,6 +563,7 @@
         }
 
         const media = getCurrentMainMedia();
+        attachManagementBar();
         if (media && isEffectiveDisplayActive()) attachOverlay(media.player);
         requestReadOnce();
     }
@@ -377,6 +575,7 @@
             source: 'liveflow-content-script',
             type: READ_REQUEST_TYPE
         }, window.location.origin);
+        setReadIndicatorState('active');
     }
 
     function handleReadResult(event) {
@@ -385,6 +584,7 @@
         if (event.data.pageRevision !== currentPageRevision) return;
 
         if (!event.data.ok) {
+            setReadIndicatorState('stopped');
             const readNumber = event.data.readNumber || 0;
             if (event.data.status === null || event.data.status === undefined) {
                 logInfo(`READ #${readNumber} failed: ${event.data.errorType}`);
@@ -395,6 +595,7 @@
         }
 
         const readNumber = event.data.readNumber || 0;
+        setReadIndicatorState('active');
         const messages = Array.isArray(event.data.messages) ? event.data.messages : [];
         const messageIds = new Set(currentMessages.map((message) => message.id).filter(Boolean));
         const newMessages = [];
@@ -425,22 +626,27 @@
         const nextPageKey = `${window.location.origin}${window.location.pathname}${window.location.search}`;
         if (currentPageKey !== nextPageKey) resetPageState();
         logInfo('YouTube watch page detected');
+        attachManagementBar();
         evaluateNativeChatVisibility();
         requestInitialContinuation();
     }
 
     function handleNavigation() {
+        attachManagementBar();
         requestInitialContinuation();
     }
 
     function handleNavigationStart() {
         disconnectNativeChatObserver();
-        setDisplayState({ nativeChatVisible: true });
+        applyDisplayAction({ type: 'reset-native-chat' });
+        cleanupManagementBar();
+        setReadIndicatorState('idle');
         cleanupOverlay();
     }
 
     function handlePageHide() {
         disconnectNativeChatObserver();
+        cleanupManagementBar();
         cleanupOverlay();
     }
 
@@ -450,6 +656,7 @@
     window.addEventListener('yt-navigate-finish', detectPage);
     window.addEventListener('yt-page-data-updated', handleNavigation);
     window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('resize', updateManagementHeight);
 
     if (isYouTubeWatchPage()) {
         detectPage();

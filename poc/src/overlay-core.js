@@ -158,7 +158,7 @@
     }
 
     function isEffectiveDisplayActive({ userEnabled, nativeChatVisible } = {}) {
-        return userEnabled === true && nativeChatVisible === false;
+        return userEnabled === true;
     }
 
     function getDisplayStateTransition(currentState = {}, nextState = {}) {
@@ -169,6 +169,70 @@
         const wasActive = isEffectiveDisplayActive(currentState);
         const effectiveActive = isEffectiveDisplayActive(resolved);
         return { ...resolved, effectiveActive, cleanupRequired: wasActive && !effectiveActive };
+    }
+
+    function reduceDisplayState(currentState = {}, action = {}, settings = {}) {
+        const state = {
+            userEnabled: currentState.userEnabled === true,
+            nativeChatVisible: currentState.nativeChatVisible === true,
+            nativeChatKnown: currentState.nativeChatKnown === true
+        };
+        const result = {
+            ...state,
+            effectiveActive: isEffectiveDisplayActive(state),
+            changed: false,
+            cleanupRequired: false,
+            requestNativeChatOpen: false
+        };
+
+        if (action.type === 'native-chat-visibility' && typeof action.value === 'boolean') {
+            const closedTransition = state.nativeChatKnown && state.nativeChatVisible && !action.value;
+            result.nativeChatVisible = action.value;
+            result.nativeChatKnown = true;
+            if (closedTransition && settings.autoEnableLiveFlowWhenNativeChatClosed === true && !state.userEnabled) {
+                result.userEnabled = true;
+            }
+        } else if (action.type === 'set-user-enabled' && typeof action.value === 'boolean') {
+            result.userEnabled = action.value;
+            result.requestNativeChatOpen = state.userEnabled && !action.value &&
+                state.nativeChatKnown && !state.nativeChatVisible &&
+                settings.autoOpenNativeChatWhenLiveFlowDisabled === true;
+        } else if (action.type === 'reset-native-chat') {
+            result.nativeChatVisible = true;
+            result.nativeChatKnown = false;
+        } else {
+            return result;
+        }
+
+        result.effectiveActive = isEffectiveDisplayActive(result);
+        result.changed = result.userEnabled !== state.userEnabled ||
+            result.nativeChatVisible !== state.nativeChatVisible ||
+            result.nativeChatKnown !== state.nativeChatKnown;
+        result.cleanupRequired = isEffectiveDisplayActive(state) && !result.effectiveActive;
+        return result;
+    }
+
+    function getManagementBarViewModel({ userEnabled, readState } = {}) {
+        const enabled = userEnabled === true;
+        const normalizedReadState = ['idle', 'active', 'stopped'].includes(readState) ? readState : 'idle';
+        return {
+            enabled,
+            toggleLabel: enabled ? 'LiveFlow ON' : 'LiveFlow OFF',
+            togglePressed: enabled,
+            readState: normalizedReadState,
+            showCloseButton: enabled
+        };
+    }
+
+    function isNativeChatOpenButtonUsable({ belongsToCurrentWatchRoot, disabled, ariaDisabled, display, visibility, width, height } = {}) {
+        return belongsToCurrentWatchRoot === true &&
+            disabled !== true &&
+            ariaDisabled !== 'true' &&
+            display !== 'none' &&
+            visibility !== 'hidden' &&
+            visibility !== 'collapse' &&
+            typeof width === 'number' && Number.isFinite(width) && width > 0 &&
+            typeof height === 'number' && Number.isFinite(height) && height > 0;
     }
 
     function isNativeChatFrameVisible({
@@ -251,6 +315,9 @@
         isRendererTargetCurrent,
         isEffectiveDisplayActive,
         getDisplayStateTransition,
+        reduceDisplayState,
+        getManagementBarViewModel,
+        isNativeChatOpenButtonUsable,
         isNativeChatFrameVisible,
         canRenderDanmaku,
         isPlaybackEligible,

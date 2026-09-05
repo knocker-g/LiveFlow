@@ -23,6 +23,9 @@ const {
     isRendererTargetCurrent,
     isEffectiveDisplayActive,
     getDisplayStateTransition,
+    reduceDisplayState,
+    getManagementBarViewModel,
+    isNativeChatOpenButtonUsable,
     isNativeChatFrameVisible
 } = require('../src/overlay-core.js');
 
@@ -321,20 +324,20 @@ test('overlay root is reused and remains non-interactive', () => {
     assert.match(runtimeSource, /node\.textContent = normalized\.text/);
 });
 
-test('display state defaults and truth table permit only enabled without visible Native Chat', () => {
+test('display state permits every Native Chat combination and follows userEnabled only', () => {
     assert.equal(isEffectiveDisplayActive({ userEnabled: true, nativeChatVisible: false }), true);
-    assert.equal(isEffectiveDisplayActive({ userEnabled: true, nativeChatVisible: true }), false);
+    assert.equal(isEffectiveDisplayActive({ userEnabled: true, nativeChatVisible: true }), true);
     assert.equal(isEffectiveDisplayActive({ userEnabled: false, nativeChatVisible: false }), false);
     assert.equal(isEffectiveDisplayActive({ userEnabled: false, nativeChatVisible: true }), false);
     assert.match(runtimeSource, /let userEnabled = true;/);
 });
 
-test('display transitions clean only when active becomes inactive and never restore a backlog', () => {
+test('Native Chat visibility transitions do not disable or clean an enabled renderer', () => {
     const chatOpened = getDisplayStateTransition(
         { userEnabled: true, nativeChatVisible: false },
         { nativeChatVisible: true }
     );
-    assert.deepEqual(chatOpened, { userEnabled: true, nativeChatVisible: true, effectiveActive: false, cleanupRequired: true });
+    assert.deepEqual(chatOpened, { userEnabled: true, nativeChatVisible: true, effectiveActive: true, cleanupRequired: false });
 
     const chatClosed = getDisplayStateTransition(chatOpened, { nativeChatVisible: false });
     assert.deepEqual(chatClosed, { userEnabled: true, nativeChatVisible: false, effectiveActive: true, cleanupRequired: false });
@@ -344,6 +347,70 @@ test('display transitions clean only when active becomes inactive and never rest
 
     const userEnabled = getDisplayStateTransition(userDisabled, { userEnabled: true });
     assert.deepEqual(userEnabled, { userEnabled: true, nativeChatVisible: false, effectiveActive: true, cleanupRequired: false });
+});
+
+test('closing Native Chat auto-enables LiveFlow only on a known open-to-closed edge', () => {
+    const settings = { autoEnableLiveFlowWhenNativeChatClosed: true, autoOpenNativeChatWhenLiveFlowDisabled: true };
+    const closed = reduceDisplayState(
+        { userEnabled: false, nativeChatVisible: true, nativeChatKnown: true },
+        { type: 'native-chat-visibility', value: false },
+        settings
+    );
+    assert.equal(closed.userEnabled, true);
+    assert.equal(closed.effectiveActive, true);
+
+    const alreadyEnabled = reduceDisplayState(
+        { userEnabled: true, nativeChatVisible: true, nativeChatKnown: true },
+        { type: 'native-chat-visibility', value: false },
+        settings
+    );
+    assert.equal(alreadyEnabled.userEnabled, true);
+    assert.equal(alreadyEnabled.cleanupRequired, false);
+
+    const initialClosed = reduceDisplayState(
+        { userEnabled: false, nativeChatVisible: true, nativeChatKnown: false },
+        { type: 'native-chat-visibility', value: false },
+        settings
+    );
+    assert.equal(initialClosed.userEnabled, false);
+});
+
+test('disabling LiveFlow requests Native Chat open only for a known closed Chat', () => {
+    const settings = { autoEnableLiveFlowWhenNativeChatClosed: true, autoOpenNativeChatWhenLiveFlowDisabled: true };
+    const closed = reduceDisplayState(
+        { userEnabled: true, nativeChatVisible: false, nativeChatKnown: true },
+        { type: 'set-user-enabled', value: false },
+        settings
+    );
+    assert.equal(closed.requestNativeChatOpen, true);
+    assert.equal(closed.cleanupRequired, true);
+
+    const open = reduceDisplayState(
+        { userEnabled: true, nativeChatVisible: true, nativeChatKnown: true },
+        { type: 'set-user-enabled', value: false },
+        settings
+    );
+    assert.equal(open.requestNativeChatOpen, false);
+
+    const repeated = reduceDisplayState(closed, { type: 'set-user-enabled', value: false }, settings);
+    assert.equal(repeated.requestNativeChatOpen, false);
+    assert.equal(repeated.changed, false);
+});
+
+test('disabled linkage settings never change the opposite state', () => {
+    const disabled = { autoEnableLiveFlowWhenNativeChatClosed: false, autoOpenNativeChatWhenLiveFlowDisabled: false };
+    const closed = reduceDisplayState(
+        { userEnabled: false, nativeChatVisible: true, nativeChatKnown: true },
+        { type: 'native-chat-visibility', value: false },
+        disabled
+    );
+    assert.equal(closed.userEnabled, false);
+    const turnedOff = reduceDisplayState(
+        { userEnabled: true, nativeChatVisible: false, nativeChatKnown: true },
+        { type: 'set-user-enabled', value: false },
+        disabled
+    );
+    assert.equal(turnedOff.requestNativeChatOpen, false);
 });
 
 test('Native Chat visibility handles visible, hidden, collapsed, and missing ownership states', () => {
@@ -396,7 +463,77 @@ test('Native Chat observer is single, scoped, mutation-filtered, and cleaned up 
 });
 
 test('SPA evaluation uses the new current watch root and MiniPlayer policy remains intact', () => {
-    assert.match(runtimeSource, /const watchRoot = document\.querySelector\(PLAYER_SELECTORS\.watchRoot\);\s*setDisplayState/);
+    assert.match(runtimeSource, /const watchRoot = document\.querySelector\(PLAYER_SELECTORS\.watchRoot\);\s*applyDisplayAction/);
     assert.match(runtimeSource, /player\.closest\(PLAYER_SELECTORS\.miniPlayerAncestor\)/);
     assert.match(runtimeSource, /addEventListener\('yt-navigate-finish', detectPage\)/);
+});
+
+test('Native Chat open button is usable only when visible, enabled, and owned by current watch root', () => {
+    const usable = { belongsToCurrentWatchRoot: true, disabled: false, ariaDisabled: 'false', display: 'block', visibility: 'visible', width: 100, height: 32 };
+    assert.equal(isNativeChatOpenButtonUsable(usable), true);
+    assert.equal(isNativeChatOpenButtonUsable({ ...usable, belongsToCurrentWatchRoot: false }), false);
+    assert.equal(isNativeChatOpenButtonUsable({ ...usable, disabled: true }), false);
+    assert.equal(isNativeChatOpenButtonUsable({ ...usable, display: 'none' }), false);
+    assert.equal(isNativeChatOpenButtonUsable({ ...usable, width: 0 }), false);
+});
+
+test('Native Chat open uses an outer structural button and fails safe for open or unknown state', () => {
+    assert.match(runtimeSource, /if \(!nativeChatKnown \|\| nativeChatVisible\) return false;/);
+    assert.match(runtimeSource, /frame\.querySelector\(PLAYER_SELECTORS\.nativeChatOpenButton\)/);
+    assert.match(runtimeSource, /if \(!knownClosedState\) return false;/);
+    assert.match(runtimeSource, /if \(!button\) return false;/);
+    assert.match(runtimeSource, /button\.click\(\)/);
+    assert.doesNotMatch(runtimeSource, /contentDocument|contentWindow/);
+});
+
+test('management bar view reflects enabled state without controlling READ timing', () => {
+    assert.deepEqual(getManagementBarViewModel({ userEnabled: true, readState: 'active' }), {
+        enabled: true,
+        toggleLabel: 'LiveFlow ON',
+        togglePressed: true,
+        readState: 'active',
+        showCloseButton: true
+    });
+    assert.deepEqual(getManagementBarViewModel({ userEnabled: false, readState: 'active' }), {
+        enabled: false,
+        toggleLabel: 'LiveFlow OFF',
+        togglePressed: false,
+        readState: 'active',
+        showCloseButton: false
+    });
+});
+
+test('management bar attaches below current main player once and remains when disabled', () => {
+    assert.match(runtimeSource, /const media = getCurrentMainMedia\(\);\s*if \(!media\) return false;/);
+    assert.match(runtimeSource, /managementBar\?\.isConnected && watchRoot\.contains\(managementBar\)/);
+    assert.match(runtimeSource, /playerHost\.insertAdjacentElement\('afterend', bar\)/);
+    assert.match(runtimeSource, /data-enabled="false"[^]*?\.liveflow-close-button/);
+    assert.doesNotMatch(runtimeSource, /data-enabled="false"[^}]*display:\s*none[^}]*#liveflow-management-bar/);
+});
+
+test('management controls toggle future rendering, close means OFF, and gear is a safe stub', () => {
+    assert.match(runtimeSource, /toggle\.addEventListener\('click', \(\) => applyDisplayAction\(\{ type: 'set-user-enabled', value: !userEnabled \}\)\)/);
+    assert.match(runtimeSource, /close\.addEventListener\('click', \(\) => applyDisplayAction\(\{ type: 'set-user-enabled', value: false \}\)\)/);
+    assert.match(runtimeSource, /gear\.addEventListener\('click', \(\) => \{\}\)/);
+    assert.doesNotMatch(runtimeSource, /settings.*throw|gear.*console\.error/is);
+});
+
+test('management bar cleanup and reattach follow SPA lifecycle and exclude MiniPlayer', () => {
+    assert.match(runtimeSource, /function handleNavigationStart\(\)[^]*?cleanupManagementBar\(\)/);
+    assert.match(runtimeSource, /function detectPage\(\)[^]*?attachManagementBar\(\)/);
+    assert.match(runtimeSource, /function cleanupManagementBar\(\)[^]*?MANAGEMENT_HEIGHT_PROPERTY, '0px'/);
+    assert.match(runtimeSource, /player\.closest\(PLAYER_SELECTORS\.miniPlayerAncestor\)/);
+});
+
+test('management bar stays outside the player while danmaku remains player-owned for fullscreen', () => {
+    assert.match(runtimeSource, /playerHost\.insertAdjacentElement\('afterend', bar\)/);
+    assert.match(runtimeSource, /player\.appendChild\(overlayRoot\)/);
+    assert.doesNotMatch(runtimeSource, /player\.appendChild\(bar\)/);
+});
+
+test('READ indicator is response-driven presentation and never initiates fetch or polling', () => {
+    assert.match(runtimeSource, /setReadIndicatorState\('active'\)/);
+    assert.match(runtimeSource, /setReadIndicatorState\('stopped'\)/);
+    assert.match(runtimeSource, /liveflow-read-indicator/);
+    assert.doesNotMatch(runtimeSource, /setInterval\s*\(/);
 });
