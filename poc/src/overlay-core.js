@@ -15,6 +15,8 @@
     const DANMAKU_MAX_BATCH_SPREAD_MS = 800;
     const DANMAKU_BATCH_STAGGER_MS = 50;
     const DANMAKU_MAX_PENDING_COMMENTS = 40;
+    const DANMAKU_MAX_RENDER_QUEUE = 150;
+    const DANMAKU_ENTRY_CLEAR_FRACTION = 0.25;
 
     function mergeMessagesById(currentMessages, incomingMessages, maxMessages = 500) {
         const messages = Array.isArray(currentMessages) ? currentMessages.slice() : [];
@@ -161,6 +163,42 @@
         return userEnabled === true;
     }
 
+    function calculateLaneSafeAtMs(previous, next, overlayWidth, nowMs, horizontalGap = DANMAKU_HORIZONTAL_GAP_PX, clearFraction = DANMAKU_ENTRY_CLEAR_FRACTION) {
+        if (!previous) return nowMs;
+        const values = [
+            previous.startTimeMs, previous.startX, previous.commentWidth, previous.speed, previous.endTimeMs,
+            next?.startX, next?.speed, overlayWidth, nowMs, horizontalGap, clearFraction
+        ];
+        if (!values.every((value) => typeof value === 'number' && Number.isFinite(value))) return null;
+        if (previous.commentWidth <= 0 || previous.speed <= 0 || next.speed <= 0 || overlayWidth <= 0 || horizontalGap < 0 || clearFraction <= 0 || clearFraction >= 1) return null;
+        if (nowMs >= previous.endTimeMs) return nowMs;
+
+        const quarterClearRight = overlayWidth * (1 - clearFraction);
+        const entryGapRight = next.startX - horizontalGap;
+        const futureCollisionRight = next.speed > previous.speed
+            ? (next.startX - horizontalGap) * previous.speed / next.speed
+            : Infinity;
+        const requiredPreviousRight = Math.min(quarterClearRight, entryGapRight, futureCollisionRight);
+        const travelPx = Math.max(0, previous.startX + previous.commentWidth - requiredPreviousRight);
+        const safeAtMs = previous.startTimeMs + Math.ceil(travelPx / previous.speed * 1000);
+        return Math.min(previous.endTimeMs, Math.max(nowMs, safeAtMs));
+    }
+
+    function findNextLaneAvailability(laneStates, laneCount, next, overlayWidth, nowMs, horizontalGap = DANMAKU_HORIZONTAL_GAP_PX) {
+        if (!Array.isArray(laneStates) || !Number.isInteger(laneCount) || laneCount <= 0) return { lane: -1, nextSafeAtMs: null };
+        let nextSafeAtMs = null;
+        const limit = Math.min(laneCount, laneStates.length);
+        for (let index = 0; index < limit; index += 1) {
+            const safeAtMs = calculateLaneSafeAtMs(laneStates[index], next, overlayWidth, nowMs, horizontalGap);
+            if (safeAtMs === null) continue;
+            if (safeAtMs <= nowMs && isLaneCollisionSafe(laneStates[index], next, nowMs, horizontalGap)) {
+                return { lane: index, nextSafeAtMs: nowMs };
+            }
+            if (nextSafeAtMs === null || safeAtMs < nextSafeAtMs) nextSafeAtMs = safeAtMs;
+        }
+        return { lane: -1, nextSafeAtMs };
+    }
+
     function getDisplayStateTransition(currentState = {}, nextState = {}) {
         const resolved = {
             userEnabled: typeof nextState.userEnabled === 'boolean' ? nextState.userEnabled : currentState.userEnabled === true,
@@ -217,12 +255,19 @@
         const normalizedReadState = ['idle', 'active', 'stopped'].includes(readState) ? readState : 'idle';
         return {
             enabled,
-            statusIcon: enabled ? '▶' : '⏹',
+            statusShape: enabled ? 'playing' : 'stopped',
             toggleLabel: enabled ? 'LiveFlow ON' : 'LiveFlow OFF',
             togglePressed: enabled,
-            readState: normalizedReadState,
-            showCloseButton: enabled
+            readState: normalizedReadState
         };
+    }
+
+    function selectFirstUsableNativeChatButton(candidates) {
+        if (!Array.isArray(candidates)) return null;
+        for (const candidate of candidates) {
+            if (candidate?.element && isNativeChatOpenButtonUsable(candidate)) return candidate.element;
+        }
+        return null;
     }
 
     function isChatStackedBelowPlayer(playerRect, chatRect) {
@@ -315,6 +360,8 @@
         DANMAKU_MAX_BATCH_SPREAD_MS,
         DANMAKU_BATCH_STAGGER_MS,
         DANMAKU_MAX_PENDING_COMMENTS,
+        DANMAKU_MAX_RENDER_QUEUE,
+        DANMAKU_ENTRY_CLEAR_FRACTION,
         mergeMessagesById,
         getVisibleMessages,
         formatMessageText,
@@ -325,6 +372,8 @@
         calculateDanmakuSpeed,
         isLaneCollisionSafe,
         selectCollisionSafeLane,
+        calculateLaneSafeAtMs,
+        findNextLaneAvailability,
         planDanmakuBatch,
         isRendererTargetCurrent,
         isEffectiveDisplayActive,
@@ -333,6 +382,7 @@
         getManagementBarViewModel,
         isChatStackedBelowPlayer,
         isNativeChatOpenButtonUsable,
+        selectFirstUsableNativeChatButton,
         isNativeChatFrameVisible,
         canRenderDanmaku,
         isPlaybackEligible,

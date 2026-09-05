@@ -16,7 +16,13 @@
     const PLAYER_SELECTORS = Object.freeze({
         watchRoot: 'ytd-watch-flexy',
         nativeChat: 'ytd-live-chat-frame#chat, ytd-live-chat-frame',
-        nativeChatOpenButton: '#show-hide-button button, #show-hide-button tp-yt-paper-button',
+        nativeChatContainer: '#chat-container, #secondary-inner',
+        nativeChatOpenButtons: Object.freeze([
+            'ytd-live-chat-frame#chat #show-hide-button button',
+            'ytd-live-chat-frame#chat #show-hide-button tp-yt-paper-button',
+            '#chat-container #show-hide-button button',
+            '#chat-container #show-hide-button tp-yt-paper-button'
+        ]),
         belowPlayer: '#below',
         player: '#movie_player, .html5-video-player',
         video: 'video.html5-main-video, video',
@@ -27,7 +33,9 @@
     let overlaySurface = null;
     let laneStates = [];
     const activeDanmaku = new Map();
-    const pendingDanmakuTimers = new Map();
+    const rendererQueue = [];
+    let rendererQueueTimer = null;
+    let rendererQueueTimerDueAt = null;
     let initialContinuation = '';
     let internalApiContext = null;
     let chatAvailable = false;
@@ -36,6 +44,10 @@
     let currentMessages = [];
     let currentPageKey = '';
     let rendererGeneration = 0;
+    let acceptingReadResults = false;
+    let minimumAcceptedPageRevision = 0;
+    let geometryChangeQueued = false;
+    let pageGeneration = 0;
     let userEnabled = true;
     let nativeChatVisible = true;
     let nativeChatKnown = false;
@@ -44,11 +56,10 @@
     let visibilityEvaluationQueued = false;
     let managementBar = null;
     let managementToggleButton = null;
-    let managementStatusIcon = null;
     let managementToggleLabel = null;
     let managementReadIndicator = null;
-    let managementCloseButton = null;
     let readIndicatorState = 'idle';
+    let nativeChatOpenAttempt = null;
 
     function logInfo(message) {
         console.log(`${LOG_PREFIX} ${message}`);
@@ -95,8 +106,10 @@
             node?.remove();
         });
         activeDanmaku.clear();
-        pendingDanmakuTimers.forEach((timerId) => window.clearTimeout(timerId));
-        pendingDanmakuTimers.clear();
+        if (rendererQueueTimer !== null) window.clearTimeout(rendererQueueTimer);
+        rendererQueueTimer = null;
+        rendererQueueTimerDueAt = null;
+        rendererQueue.length = 0;
         laneStates = [];
         overlayRoot?.remove();
         overlayRoot = null;
@@ -116,6 +129,7 @@
         userEnabled = transition.userEnabled;
         nativeChatVisible = transition.nativeChatVisible;
         nativeChatKnown = transition.nativeChatKnown;
+        if (nativeChatVisible) clearNativeChatOpenAttempt();
         if (transition.cleanupRequired) cleanupOverlay();
         updateManagementBar();
         if (transition.requestNativeChatOpen) tryOpenNativeChat();
@@ -218,34 +232,62 @@
         visibilityEvaluationQueued = false;
     }
 
+    function clearNativeChatOpenAttempt() {
+        if (!nativeChatOpenAttempt) return;
+        window.clearTimeout(nativeChatOpenAttempt.timerId);
+        nativeChatOpenAttempt = null;
+    }
+
     function tryOpenNativeChat() {
-        if (!nativeChatKnown || nativeChatVisible) return false;
+        if (!nativeChatKnown || nativeChatVisible || nativeChatOpenAttempt) return false;
         const watchRoot = document.querySelector(PLAYER_SELECTORS.watchRoot);
         const frame = watchRoot?.querySelector(PLAYER_SELECTORS.nativeChat) || null;
         if (!watchRoot || !frame || !watchRoot.contains(frame)) return false;
-        const knownClosedState = frame.hasAttribute('collapsed') || frame.hidden === true ||
-            frame.hasAttribute('hidden') || frame.getAttribute('aria-hidden') === 'true';
-        if (!knownClosedState) return false;
-        const button = frame.querySelector(PLAYER_SELECTORS.nativeChatOpenButton);
-        if (!button) return false;
-        let style;
-        let rect;
-        try {
-            style = window.getComputedStyle(button);
-            rect = button.getBoundingClientRect();
-        } catch (error) {
+        if (readNativeChatVisibility(watchRoot) !== false) return false;
+        const chatContainer = frame.closest(PLAYER_SELECTORS.nativeChatContainer);
+        const elements = [];
+        PLAYER_SELECTORS.nativeChatOpenButtons.forEach((selector) => {
+            watchRoot.querySelectorAll(selector).forEach((element) => {
+                if (!elements.includes(element)) elements.push(element);
+            });
+        });
+        const candidates = elements.map((element) => {
+            let style;
+            let rect;
+            try {
+                style = window.getComputedStyle(element);
+                rect = element.getBoundingClientRect();
+            } catch (error) {
+                return { element: null };
+            }
+            const associatedWithChat = frame.contains(element) || Boolean(
+                chatContainer && chatContainer.contains(frame) && chatContainer.contains(element)
+            );
+            return {
+                element,
+                belongsToCurrentWatchRoot: watchRoot.contains(element) && associatedWithChat,
+                disabled: element.disabled === true,
+                ariaDisabled: element.getAttribute('aria-disabled'),
+                display: style.display,
+                visibility: style.visibility,
+                width: rect.width,
+                height: rect.height
+            };
+        });
+        const button = overlayCore.selectFirstUsableNativeChatButton(candidates);
+        if (!button) {
+            logInfo(`Native Chat open attempt: candidates=${elements.length}, clicked=false`);
             return false;
         }
-        if (!overlayCore.isNativeChatOpenButtonUsable({
-            belongsToCurrentWatchRoot: watchRoot.contains(button),
-            disabled: button.disabled === true,
-            ariaDisabled: button.getAttribute('aria-disabled'),
-            display: style.display,
-            visibility: style.visibility,
-            width: rect.width,
-            height: rect.height
-        })) return false;
+        const attemptGeneration = pageGeneration;
         button.click();
+        const timerId = window.setTimeout(() => {
+            if (nativeChatOpenAttempt?.generation !== attemptGeneration) return;
+            nativeChatOpenAttempt = null;
+            logInfo(`Native Chat open confirmation: visible=${nativeChatVisible}`);
+        }, 1500);
+        nativeChatOpenAttempt = { generation: attemptGeneration, timerId };
+        logInfo(`Native Chat open attempt: candidates=${elements.length}, clicked=true`);
         return true;
     }
 
@@ -289,6 +331,22 @@
                 white-space: nowrap;
             }
             #${MANAGEMENT_BAR_ID} .liveflow-status-icon { width: 1em; text-align: center; }
+            #${MANAGEMENT_BAR_ID} .liveflow-status-icon::before {
+                display: block;
+                width: 0;
+                height: 0;
+                margin: auto;
+                border-top: 7px solid transparent;
+                border-bottom: 7px solid transparent;
+                border-left: 11px solid currentColor;
+                content: '';
+            }
+            #${MANAGEMENT_BAR_ID}[data-status-shape="stopped"] .liveflow-status-icon::before {
+                width: 12px;
+                height: 12px;
+                border: 0;
+                background: currentColor;
+            }
             #${MANAGEMENT_BAR_ID} button:focus-visible {
                 outline: 2px solid currentColor;
                 outline-offset: 1px;
@@ -306,9 +364,8 @@
                 opacity: 1;
                 animation: liveflow-read-indicator 1.2s ease-in-out infinite alternate;
             }
-            #${MANAGEMENT_BAR_ID}[data-enabled="false"] .liveflow-read-indicator,
-            #${MANAGEMENT_BAR_ID}[data-enabled="false"] .liveflow-close-button {
-                display: none;
+            #${MANAGEMENT_BAR_ID}[data-enabled="false"] .liveflow-read-indicator {
+                visibility: hidden;
             }
             @keyframes liveflow-read-indicator { from { opacity: .35; } to { opacity: 1; } }
             @media (prefers-reduced-motion: reduce) {
@@ -329,21 +386,17 @@
         const view = overlayCore.getManagementBarViewModel({ userEnabled, readState: readIndicatorState });
         managementBar.dataset.enabled = String(view.enabled);
         managementBar.dataset.readState = view.readState;
-        managementStatusIcon.textContent = view.statusIcon;
+        managementBar.dataset.statusShape = view.statusShape;
         managementToggleLabel.textContent = view.toggleLabel;
         managementToggleButton.setAttribute('aria-pressed', String(view.togglePressed));
-        managementReadIndicator.hidden = !view.enabled;
-        managementCloseButton.hidden = !view.showCloseButton;
     }
 
     function cleanupManagementBar() {
         managementBar?.remove();
         managementBar = null;
         managementToggleButton = null;
-        managementStatusIcon = null;
         managementToggleLabel = null;
         managementReadIndicator = null;
-        managementCloseButton = null;
         document.documentElement.style.setProperty(MANAGEMENT_HEIGHT_PROPERTY, '0px');
     }
 
@@ -416,22 +469,12 @@
         gear.setAttribute('aria-label', 'LiveFlow settings (not yet available)');
         gear.addEventListener('click', () => {});
 
-        const close = document.createElement('button');
-        close.type = 'button';
-        close.className = 'liveflow-close-button';
-        close.textContent = '×';
-        close.title = 'Turn LiveFlow off';
-        close.setAttribute('aria-label', 'Turn LiveFlow off');
-        close.addEventListener('click', () => applyDisplayAction({ type: 'set-user-enabled', value: false }));
-
-        bar.append(toggle, indicator, gear, close);
+        bar.append(toggle, indicator, gear);
         placement.parent.insertBefore(bar, placement.before);
         managementBar = bar;
         managementToggleButton = toggle;
-        managementStatusIcon = statusIcon;
         managementToggleLabel = toggleLabel;
         managementReadIndicator = indicator;
-        managementCloseButton = close;
         updateManagementBar();
         updateManagementHeight();
         return true;
@@ -450,7 +493,10 @@
         if (!player) return false;
 
         if (overlayRoot?.isConnected && overlayRoot.parentElement === player) return true;
-        cleanupOverlay();
+        if (overlayRoot) {
+            cleanupOverlay();
+            return false;
+        }
         overlayRoot = document.createElement('div');
         overlayRoot.id = 'liveflow-overlay-root';
         overlayRoot.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:20;overflow:hidden;contain:layout paint;';
@@ -464,7 +510,7 @@
     }
 
     function renderDanmaku(message, scheduledGeneration = rendererGeneration, scheduledVideo = null) {
-        if (!isEffectiveDisplayActive()) return false;
+        if (!isEffectiveDisplayActive()) return { status: 'drop' };
         const media = getCurrentMainMedia();
         if (!media || !overlayCore?.isRendererTargetCurrent?.({
             scheduledGeneration,
@@ -472,28 +518,34 @@
             scheduledVideo: scheduledVideo || media.video,
             currentVideo: media.video,
             currentPlayerOwnsVideo: true
-        })) return false;
+        })) return { status: 'drop' };
         const { player, video } = media;
-        if (!overlayCore.isPlaybackEligible(video)) return false;
-        if (!attachOverlay(player) || !overlayRoot || !overlaySurface) return false;
-        if (!overlayCore.canRenderDanmaku(message, activeDanmaku.size)) return false;
+        if (!overlayCore.isPlaybackEligible(video)) return { status: 'drop' };
+        if (!attachOverlay(player) || !overlayRoot || !overlaySurface) return { status: 'drop' };
+        const normalized = overlayCore.normalizeDanmakuMessage(message);
+        if (!normalized) return { status: 'drop' };
 
         const surfaceRect = overlayCore.calculateVideoSurfaceRect(player.getBoundingClientRect(), video.getBoundingClientRect());
-        if (!surfaceRect) return false;
+        if (!surfaceRect) return { status: 'drop' };
         overlaySurface.style.left = `${surfaceRect.left}px`;
         overlaySurface.style.top = `${surfaceRect.top}px`;
         overlaySurface.style.width = `${surfaceRect.width}px`;
         overlaySurface.style.height = `${surfaceRect.height}px`;
 
         const laneCount = overlayCore.calculateLaneCount(surfaceRect.height);
-        if (laneCount <= 0) return false;
+        if (laneCount <= 0) return { status: 'drop' };
         if (laneStates.length !== laneCount) {
             laneStates = Array.from({ length: laneCount }, (_, index) => laneStates[index] || null);
         }
 
         const now = performance.now();
-        const normalized = overlayCore.normalizeDanmakuMessage(message);
-        if (!normalized) return false;
+        if (activeDanmaku.size >= overlayCore.DANMAKU_MAX_ACTIVE_COMMENTS) {
+            const resumeAtMs = laneStates.reduce((earliest, lane) => {
+                if (!Number.isFinite(lane?.endTimeMs) || lane.endTimeMs <= now) return earliest;
+                return earliest === null || lane.endTimeMs < earliest ? lane.endTimeMs : earliest;
+            }, null);
+            return { status: resumeAtMs === null ? 'drop' : 'wait', resumeAtMs };
+        }
 
         const node = document.createElement('div');
         node.className = 'liveflow-danmaku';
@@ -503,11 +555,14 @@
         const commentWidth = node.getBoundingClientRect().width;
         const speed = overlayCore.calculateDanmakuSpeed({ overlayWidth: surfaceRect.width, commentWidth });
         const nextMotion = { startX: surfaceRect.width, speed };
-        const lane = overlayCore.selectCollisionSafeLane(laneStates, laneCount, nextMotion, now);
-        if (lane < 0) {
+        const availability = overlayCore.findNextLaneAvailability(laneStates, laneCount, nextMotion, surfaceRect.width, now);
+        if (availability.lane < 0) {
             node.remove();
-            return false;
+            return Number.isFinite(availability.nextSafeAtMs)
+                ? { status: 'wait', resumeAtMs: availability.nextSafeAtMs }
+                : { status: 'drop' };
         }
+        const lane = availability.lane;
         const motion = overlayCore.calculateDanmakuMotion({
             overlayWidth: surfaceRect.width,
             commentWidth,
@@ -516,7 +571,7 @@
         });
         if (!motion || typeof node.animate !== 'function') {
             node.remove();
-            return false;
+            return { status: 'drop' };
         }
 
         const token = Symbol('danmaku');
@@ -542,47 +597,104 @@
         animation.finished.then(() => {
             activeDanmaku.delete(token);
             node.remove();
+            drainRendererQueue();
         }).catch(() => {
             activeDanmaku.delete(token);
             node.remove();
         });
-        return true;
+        return { status: 'rendered' };
+    }
+
+    function clearRendererQueue() {
+        if (rendererQueueTimer !== null) window.clearTimeout(rendererQueueTimer);
+        rendererQueueTimer = null;
+        rendererQueueTimerDueAt = null;
+        rendererQueue.length = 0;
+    }
+
+    function scheduleRendererQueueDrain(dueAtMs) {
+        if (!Number.isFinite(dueAtMs)) return;
+        if (rendererQueueTimer !== null && Number.isFinite(rendererQueueTimerDueAt) && rendererQueueTimerDueAt <= dueAtMs) return;
+        if (rendererQueueTimer !== null) window.clearTimeout(rendererQueueTimer);
+        rendererQueueTimerDueAt = dueAtMs;
+        rendererQueueTimer = window.setTimeout(() => {
+            rendererQueueTimer = null;
+            rendererQueueTimerDueAt = null;
+            drainRendererQueue();
+        }, Math.max(1, Math.ceil(dueAtMs - performance.now())));
+    }
+
+    function drainRendererQueue() {
+        if (rendererQueueTimer !== null) {
+            window.clearTimeout(rendererQueueTimer);
+            rendererQueueTimer = null;
+            rendererQueueTimerDueAt = null;
+        }
+        if (!isEffectiveDisplayActive()) {
+            clearRendererQueue();
+            return;
+        }
+        const media = getCurrentMainMedia();
+        if (!media || !overlayCore?.isPlaybackEligible?.(media.video)) {
+            clearRendererQueue();
+            return;
+        }
+        while (rendererQueue.length > 0) {
+            const entry = rendererQueue[0];
+            const currentMedia = getCurrentMainMedia();
+            if (!overlayCore.isRendererTargetCurrent({
+                scheduledGeneration: entry.generation,
+                currentGeneration: rendererGeneration,
+                scheduledVideo: entry.video,
+                currentVideo: currentMedia?.video || null,
+                currentPlayerOwnsVideo: Boolean(currentMedia)
+            })) {
+                rendererQueue.shift();
+                continue;
+            }
+            const now = performance.now();
+            if (entry.notBeforeMs > now) {
+                scheduleRendererQueueDrain(entry.notBeforeMs);
+                return;
+            }
+            const result = renderDanmaku(entry.message, entry.generation, entry.video);
+            if (result.status === 'rendered' || result.status === 'drop') {
+                rendererQueue.shift();
+                continue;
+            }
+            scheduleRendererQueueDrain(result.resumeAtMs);
+            return;
+        }
     }
 
     function scheduleDanmakuBatch(messages) {
         if (!isEffectiveDisplayActive()) return;
         const media = getCurrentMainMedia();
-        if (!media || !overlayCore?.isPlaybackEligible?.(media.video)) return;
+        if (!media || !overlayCore?.isPlaybackEligible?.(media.video)) {
+            clearRendererQueue();
+            return;
+        }
         const scheduledGeneration = rendererGeneration;
         const scheduledVideo = media.video;
-        const availableSlots = Math.max(0, overlayCore.DANMAKU_MAX_PENDING_COMMENTS - pendingDanmakuTimers.size);
-        const plan = overlayCore.planDanmakuBatch(messages, availableSlots);
-        plan.forEach(({ message, delayMs }) => {
-            if (delayMs <= 0) {
-                renderDanmaku(message, scheduledGeneration, scheduledVideo);
-                return;
-            }
-            const token = Symbol('pending-danmaku');
-            const timerId = window.setTimeout(() => {
-                pendingDanmakuTimers.delete(token);
-                if (!isEffectiveDisplayActive()) return;
-                const currentMedia = getCurrentMainMedia();
-                if (!overlayCore.isRendererTargetCurrent({
-                    scheduledGeneration,
-                    currentGeneration: rendererGeneration,
-                    scheduledVideo,
-                    currentVideo: currentMedia?.video || null,
-                    currentPlayerOwnsVideo: Boolean(currentMedia)
-                })) return;
-                renderDanmaku(message, scheduledGeneration, scheduledVideo);
-            }, delayMs);
-            pendingDanmakuTimers.set(token, timerId);
-        });
+        const availableSlots = Math.max(0, overlayCore.DANMAKU_MAX_RENDER_QUEUE - rendererQueue.length);
+        const incoming = Array.isArray(messages) ? messages.slice(0, availableSlots) : [];
+        const droppedCount = Array.isArray(messages) ? messages.length - incoming.length : 0;
+        if (droppedCount > 0) logInfo(`Renderer queue overflow dropped: ${droppedCount}`);
+        const batchStartMs = performance.now();
+        const plan = overlayCore.planDanmakuBatch(incoming, incoming.length || 1);
+        plan.forEach(({ message, delayMs }) => rendererQueue.push({
+            message,
+            notBeforeMs: batchStartMs + delayMs,
+            generation: scheduledGeneration,
+            video: scheduledVideo
+        }));
+        drainRendererQueue();
     }
 
     function handleInitialContinuation(event) {
         if (event.source !== window || event.origin !== window.location.origin) return;
         if (event.data?.source !== 'liveflow-page-state' || event.data.type !== RESPONSE_TYPE) return;
+        if (!Number.isInteger(event.data.pageRevision) || event.data.pageRevision < minimumAcceptedPageRevision) return;
 
         const previousRevision = currentPageRevision;
         const nextPageKey = `${window.location.origin}${window.location.pathname}${window.location.search}`;
@@ -593,6 +705,7 @@
             ? event.data.context
             : null;
         currentPageRevision = Number.isInteger(event.data.pageRevision) ? event.data.pageRevision : currentPageRevision;
+        acceptingReadResults = true;
         if (pageChanged) {
             readRequestedRevision = -1;
             currentMessages = [];
@@ -637,6 +750,7 @@
     function handleReadResult(event) {
         if (event.source !== window || event.origin !== window.location.origin) return;
         if (event.data?.source !== 'liveflow-page-state' || event.data.type !== READ_RESPONSE_TYPE) return;
+        if (!acceptingReadResults) return;
         if (event.data.pageRevision !== currentPageRevision) return;
 
         if (!event.data.ok) {
@@ -693,6 +807,10 @@
     }
 
     function handleNavigationStart() {
+        pageGeneration += 1;
+        acceptingReadResults = false;
+        minimumAcceptedPageRevision = currentPageRevision + 1;
+        clearNativeChatOpenAttempt();
         disconnectNativeChatObserver();
         applyDisplayAction({ type: 'reset-native-chat' });
         cleanupManagementBar();
@@ -701,9 +819,21 @@
     }
 
     function handlePageHide() {
+        acceptingReadResults = false;
+        clearNativeChatOpenAttempt();
         disconnectNativeChatObserver();
         cleanupManagementBar();
         cleanupOverlay();
+    }
+
+    function handleGeometryChange() {
+        if (geometryChangeQueued) return;
+        geometryChangeQueued = true;
+        window.queueMicrotask(() => {
+            geometryChangeQueued = false;
+            cleanupOverlay();
+            refreshManagementBarPlacement();
+        });
     }
 
     window.addEventListener('message', handleInitialContinuation);
@@ -712,7 +842,11 @@
     window.addEventListener('yt-navigate-finish', detectPage);
     window.addEventListener('yt-page-data-updated', handleNavigation);
     window.addEventListener('pagehide', handlePageHide);
-    window.addEventListener('resize', refreshManagementBarPlacement);
+    window.addEventListener('resize', handleGeometryChange);
+    window.addEventListener('orientationchange', handleGeometryChange);
+    document.addEventListener('fullscreenchange', handleGeometryChange);
+    window.visualViewport?.addEventListener('resize', handleGeometryChange);
+    window.visualViewport?.addEventListener('scroll', handleGeometryChange);
 
     if (isYouTubeWatchPage()) {
         detectPage();

@@ -20,6 +20,10 @@ const {
     DANMAKU_MAX_BATCH_SPREAD_MS,
     DANMAKU_BATCH_STAGGER_MS,
     DANMAKU_MAX_PENDING_COMMENTS,
+    DANMAKU_MAX_RENDER_QUEUE,
+    DANMAKU_ENTRY_CLEAR_FRACTION,
+    calculateLaneSafeAtMs,
+    findNextLaneAvailability,
     isRendererTargetCurrent,
     isEffectiveDisplayActive,
     getDisplayStateTransition,
@@ -27,6 +31,7 @@ const {
     getManagementBarViewModel,
     isChatStackedBelowPlayer,
     isNativeChatOpenButtonUsable,
+    selectFirstUsableNativeChatButton,
     isNativeChatFrameVisible
 } = require('../src/overlay-core.js');
 
@@ -224,7 +229,7 @@ test('new geometry can be calculated independently after resize', () => {
 });
 
 test('renderer drops paused messages without queueing or resume bursts', () => {
-    assert.match(runtimeSource, /if \(!media \|\| !overlayCore\?\.isPlaybackEligible\?\.\(media\.video\)\) return;/);
+    assert.match(runtimeSource, /if \(!media \|\| !overlayCore\?\.isPlaybackEligible\?\.\(media\.video\)\) \{\s*clearRendererQueue\(\)/);
     assert.doesNotMatch(runtimeSource, /addEventListener\(['"]play|addEventListener\(['"]playing|pendingMessages|messageQueue/);
     assert.match(runtimeSource, /scheduleDanmakuBatch\(newMessages\)/);
 });
@@ -275,14 +280,15 @@ test('renderer target accepts only the same current main video', () => {
 
 test('navigation invalidates renderer and cancels pending and active work', () => {
     assert.match(runtimeSource, /function cleanupOverlay\(\)\s*\{\s*rendererGeneration \+= 1;/);
-    assert.match(runtimeSource, /pendingDanmakuTimers\.forEach\(\(timerId\) => window\.clearTimeout\(timerId\)\)/);
+    assert.match(runtimeSource, /if \(rendererQueueTimer !== null\) window\.clearTimeout\(rendererQueueTimer\)/);
+    assert.match(runtimeSource, /rendererQueue\.length = 0/);
     assert.match(runtimeSource, /activeDanmaku\.forEach\([^]*?animation\?\.cancel\(\)/);
     assert.match(runtimeSource, /addEventListener\('yt-navigate-start', handleNavigationStart\)/);
     assert.match(runtimeSource, /function handleNavigationStart\(\)[^]*?disconnectNativeChatObserver\(\)[^]*?cleanupOverlay\(\)/);
 });
 
 test('stale timer callback verifies generation and video before DOM insertion', () => {
-    assert.match(runtimeSource, /const currentMedia = getCurrentMainMedia\(\);[^]*?isRendererTargetCurrent\([^]*?\)\) return;[^]*?renderDanmaku\(message, scheduledGeneration, scheduledVideo\)/);
+    assert.match(runtimeSource, /const entry = rendererQueue\[0\];[^]*?isRendererTargetCurrent\([^]*?entry\.generation[^]*?entry\.video[^]*?rendererQueue\.shift\(\)/);
 });
 
 test('main-player lookup is scoped to the current watch root and rejects MiniPlayer', () => {
@@ -292,12 +298,33 @@ test('main-player lookup is scoped to the current watch root and rejects MiniPla
     assert.doesNotMatch(runtimeSource, /document\.querySelector\('#movie_player'\)/);
 });
 
-test('pending batch timers are bounded and cancelled during teardown and SPA cleanup', () => {
-    assert.match(runtimeSource, /DANMAKU_MAX_PENDING_COMMENTS - pendingDanmakuTimers\.size/);
-    assert.match(runtimeSource, /pendingDanmakuTimers\.set\(token, timerId\)/);
-    assert.match(runtimeSource, /pendingDanmakuTimers\.forEach\(\(timerId\) => window\.clearTimeout\(timerId\)\)/);
-    assert.match(runtimeSource, /pendingDanmakuTimers\.clear\(\)/);
+test('renderer queue is bounded with one timer and cancelled during teardown and SPA cleanup', () => {
+    assert.equal(DANMAKU_MAX_RENDER_QUEUE, 150);
+    assert.match(runtimeSource, /DANMAKU_MAX_RENDER_QUEUE - rendererQueue\.length/);
+    assert.match(runtimeSource, /messages\.slice\(0, availableSlots\)/);
+    assert.equal((runtimeSource.match(/let rendererQueueTimer = null/g) || []).length, 1);
+    assert.match(runtimeSource, /if \(rendererQueueTimer !== null\) window\.clearTimeout\(rendererQueueTimer\)/);
+    assert.match(runtimeSource, /rendererQueue\.length = 0/);
     assert.match(runtimeSource, /function resetPageState\(\)[^]*?cleanupOverlay\(\)/);
+});
+
+test('quarter-width rule and variable-speed collision safety determine lane release', () => {
+    assert.equal(DANMAKU_ENTRY_CLEAR_FRACTION, 0.25);
+    const previous = previousLaneState();
+    const sameSpeed = { startX: 800, speed: 120 };
+    assert.equal(calculateLaneSafeAtMs(previous, sameSpeed, 800, 3000), 3334);
+    assert.deepEqual(findNextLaneAvailability([previous], 1, sameSpeed, 800, 3333), { lane: -1, nextSafeAtMs: 3334 });
+    assert.equal(findNextLaneAvailability([previous], 1, sameSpeed, 800, 3334).lane, 0);
+    const faster = { startX: 800, speed: 200 };
+    const waiting = findNextLaneAvailability([previous], 1, faster, 800, 4000);
+    assert.equal(waiting.lane, -1);
+    assert.ok(waiting.nextSafeAtMs > 4000);
+    assert.equal(findNextLaneAvailability([previous], 1, faster, 800, waiting.nextSafeAtMs).lane, 0);
+});
+
+test('empty lane is immediately available and invalid lane data fails closed', () => {
+    assert.deepEqual(findNextLaneAvailability([null], 1, { startX: 800, speed: 120 }, 800, 1000), { lane: 0, nextSafeAtMs: 1000 });
+    assert.equal(calculateLaneSafeAtMs({ startTimeMs: 0 }, { startX: 800, speed: 120 }, 800, 1000), null);
 });
 
 test('renderer refreshes the actual video rect for each new comment', () => {
@@ -448,7 +475,7 @@ test('display controller is memory-only and exposes future UI integration withou
 test('inactive transitions clean pending and active danmaku without replay on re-enable', () => {
     assert.match(runtimeSource, /if \(transition\.cleanupRequired\) cleanupOverlay\(\)/);
     assert.match(runtimeSource, /function scheduleDanmakuBatch\(messages\) \{\s*if \(!isEffectiveDisplayActive\(\)\) return;/);
-    assert.match(runtimeSource, /pendingDanmakuTimers\.delete\(token\);\s*if \(!isEffectiveDisplayActive\(\)\) return;/);
+    assert.match(runtimeSource, /if \(!isEffectiveDisplayActive\(\)\) \{\s*clearRendererQueue\(\)/);
     assert.match(runtimeSource, /if \(media && isEffectiveDisplayActive\(\)\) attachOverlay\(media\.player\)/);
     assert.doesNotMatch(runtimeSource, /disabledMessages|displayBacklog|replayPending/);
 });
@@ -458,8 +485,8 @@ test('Native Chat observer is single, scoped, mutation-filtered, and cleaned up 
     assert.match(runtimeSource, /nativeChatObserver\.observe\(watchRoot,/);
     assert.match(runtimeSource, /mutations\.some\(mutationAffectsNativeChat\)/);
     assert.match(runtimeSource, /window\.queueMicrotask\(evaluateNativeChatVisibility\)/);
-    assert.match(runtimeSource, /function handleNavigationStart\(\) \{\s*disconnectNativeChatObserver\(\)/);
-    assert.match(runtimeSource, /function handlePageHide\(\) \{\s*disconnectNativeChatObserver\(\)/);
+    assert.match(runtimeSource, /function handleNavigationStart\(\)[^]*?disconnectNativeChatObserver\(\)/);
+    assert.match(runtimeSource, /function handlePageHide\(\)[^]*?disconnectNativeChatObserver\(\)/);
     assert.doesNotMatch(runtimeSource, /nativeChatObserver\.observe\(document/);
 });
 
@@ -476,33 +503,47 @@ test('Native Chat open button is usable only when visible, enabled, and owned by
     assert.equal(isNativeChatOpenButtonUsable({ ...usable, disabled: true }), false);
     assert.equal(isNativeChatOpenButtonUsable({ ...usable, display: 'none' }), false);
     assert.equal(isNativeChatOpenButtonUsable({ ...usable, width: 0 }), false);
+    const first = {};
+    const second = {};
+    assert.equal(selectFirstUsableNativeChatButton([
+        { element: first, ...usable, disabled: true },
+        { element: second, ...usable }
+    ]), second);
+    assert.equal(selectFirstUsableNativeChatButton([{ element: first, ...usable, width: 0 }]), null);
 });
 
 test('Native Chat open uses an outer structural button and fails safe for open or unknown state', () => {
-    assert.match(runtimeSource, /if \(!nativeChatKnown \|\| nativeChatVisible\) return false;/);
-    assert.match(runtimeSource, /frame\.querySelector\(PLAYER_SELECTORS\.nativeChatOpenButton\)/);
-    assert.match(runtimeSource, /if \(!knownClosedState\) return false;/);
-    assert.match(runtimeSource, /if \(!button\) return false;/);
+    assert.match(runtimeSource, /if \(!nativeChatKnown \|\| nativeChatVisible \|\| nativeChatOpenAttempt\) return false;/);
+    assert.match(runtimeSource, /PLAYER_SELECTORS\.nativeChatOpenButtons\.forEach/);
+    assert.match(runtimeSource, /readNativeChatVisibility\(watchRoot\) !== false/);
+    assert.match(runtimeSource, /if \(!button\) \{\s*logInfo\(`Native Chat open attempt: candidates=\$\{elements\.length\}, clicked=false`\);\s*return false;\s*\}/);
     assert.match(runtimeSource, /button\.click\(\)/);
+    assert.match(runtimeSource, /nativeChatOpenAttempt = \{ generation: attemptGeneration, timerId \}/);
+    assert.match(runtimeSource, /if \(nativeChatVisible\) clearNativeChatOpenAttempt\(\)/);
+    assert.match(runtimeSource, /clearNativeChatOpenAttempt\(\);[^]*?disconnectNativeChatObserver\(\)/);
     assert.doesNotMatch(runtimeSource, /contentDocument|contentWindow/);
+});
+
+test('Native Chat open failure remains fail-safe and reports only structural counts and booleans', () => {
+    assert.match(runtimeSource, /if \(!button\) \{\s*logInfo\(`Native Chat open attempt: candidates=\$\{elements\.length\}, clicked=false`\);\s*return false;/);
+    assert.match(runtimeSource, /Native Chat open confirmation: visible=\$\{nativeChatVisible\}/);
+    assert.doesNotMatch(runtimeSource, /Native Chat open[^\r\n]*(?:outerHTML|innerHTML|continuation|visitorData)/i);
 });
 
 test('management bar view reflects enabled state without controlling READ timing', () => {
     assert.deepEqual(getManagementBarViewModel({ userEnabled: true, readState: 'active' }), {
         enabled: true,
-        statusIcon: '▶',
+        statusShape: 'playing',
         toggleLabel: 'LiveFlow ON',
         togglePressed: true,
-        readState: 'active',
-        showCloseButton: true
+        readState: 'active'
     });
     assert.deepEqual(getManagementBarViewModel({ userEnabled: false, readState: 'active' }), {
         enabled: false,
-        statusIcon: '⏹',
+        statusShape: 'stopped',
         toggleLabel: 'LiveFlow OFF',
         togglePressed: false,
-        readState: 'active',
-        showCloseButton: false
+        readState: 'active'
     });
 });
 
@@ -519,22 +560,23 @@ test('management bar attaches before stacked Native Chat with below-player fallb
     assert.match(runtimeSource, /watchRoot\.querySelector\(PLAYER_SELECTORS\.belowPlayer\)/);
     assert.match(runtimeSource, /placement\.parent\.insertBefore\(bar, placement\.before\)/);
     assert.match(runtimeSource, /managementBar\.parentElement === placement\.parent && managementBar\.nextSibling === placement\.before/);
-    assert.match(runtimeSource, /data-enabled="false"[^]*?\.liveflow-close-button/);
-    assert.doesNotMatch(runtimeSource, /data-enabled="false"[^}]*display:\s*none[^}]*#liveflow-management-bar/);
+    assert.match(runtimeSource, /data-enabled="false"[^]*?\.liveflow-read-indicator[^]*?visibility: hidden/);
 });
 
-test('management bar uses touch-friendly bounded sizing and status icons', () => {
+test('management bar uses touch-friendly sizing and CSS-only status shapes', () => {
     assert.match(runtimeSource, /min-height: 52px/);
     assert.match(runtimeSource, /padding: 4px 12px/);
     assert.match(runtimeSource, /min-width: 44px/);
     assert.match(runtimeSource, /min-height: 44px/);
-    assert.match(runtimeSource, /managementStatusIcon\.textContent = view\.statusIcon/);
+    assert.match(runtimeSource, /liveflow-status-icon::before/);
+    assert.match(runtimeSource, /data-status-shape="stopped"/);
+    assert.doesNotMatch(runtimeSource, /▶|⏹/);
     assert.match(runtimeSource, /managementToggleLabel\.textContent = view\.toggleLabel/);
 });
 
-test('management controls toggle future rendering, close means OFF, and gear is a safe stub', () => {
+test('management controls toggle future rendering, omit close, and keep gear as a safe stub', () => {
     assert.match(runtimeSource, /toggle\.addEventListener\('click', \(\) => applyDisplayAction\(\{ type: 'set-user-enabled', value: !userEnabled \}\)\)/);
-    assert.match(runtimeSource, /close\.addEventListener\('click', \(\) => applyDisplayAction\(\{ type: 'set-user-enabled', value: false \}\)\)/);
+    assert.doesNotMatch(runtimeSource, /liveflow-close-button|Turn LiveFlow off|close\.addEventListener/);
     assert.match(runtimeSource, /gear\.addEventListener\('click', \(\) => \{\}\)/);
     assert.doesNotMatch(runtimeSource, /settings.*throw|gear.*console\.error/is);
 });
@@ -557,4 +599,29 @@ test('READ indicator is response-driven presentation and never initiates fetch o
     assert.match(runtimeSource, /setReadIndicatorState\('stopped'\)/);
     assert.match(runtimeSource, /liveflow-read-indicator/);
     assert.doesNotMatch(runtimeSource, /setInterval\s*\(/);
+});
+
+test('geometry changes invalidate active and queued renderer work before using new rects', () => {
+    assert.match(runtimeSource, /function handleGeometryChange\(\)[^]*?window\.queueMicrotask\([^]*?cleanupOverlay\(\)[^]*?refreshManagementBarPlacement\(\)/);
+    assert.match(runtimeSource, /addEventListener\('orientationchange', handleGeometryChange\)/);
+    assert.match(runtimeSource, /visualViewport\?\.addEventListener\('resize', handleGeometryChange\)/);
+    assert.match(runtimeSource, /visualViewport\?\.addEventListener\('scroll', handleGeometryChange\)/);
+    assert.match(runtimeSource, /document\.addEventListener\('fullscreenchange', handleGeometryChange\)/);
+});
+
+test('SPA blocks old bridge results until a newer page revision is accepted', () => {
+    assert.match(runtimeSource, /acceptingReadResults = false/);
+    assert.match(runtimeSource, /minimumAcceptedPageRevision = currentPageRevision \+ 1/);
+    assert.match(runtimeSource, /event\.data\.pageRevision < minimumAcceptedPageRevision\) return/);
+    assert.match(runtimeSource, /acceptingReadResults = true/);
+    assert.match(runtimeSource, /if \(!acceptingReadResults\) return/);
+});
+
+test('collision queue preserves FIFO order, drops newest only at its bound, and uses no polling', () => {
+    assert.match(runtimeSource, /const entry = rendererQueue\[0\]/);
+    assert.match(runtimeSource, /rendererQueue\.shift\(\)/);
+    assert.match(runtimeSource, /messages\.slice\(0, availableSlots\)/);
+    assert.match(runtimeSource, /Renderer queue overflow dropped: \$\{droppedCount\}/);
+    assert.match(runtimeSource, /scheduleRendererQueueDrain\(result\.resumeAtMs\)/);
+    assert.doesNotMatch(runtimeSource, /setInterval\s*\(|requestAnimationFrame\s*\(/);
 });
