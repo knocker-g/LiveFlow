@@ -217,11 +217,25 @@
         const normalizedReadState = ['idle', 'active', 'stopped'].includes(readState) ? readState : 'idle';
         return {
             enabled,
+            statusIcon: enabled ? '▶' : '⏹',
             toggleLabel: enabled ? 'LiveFlow ON' : 'LiveFlow OFF',
             togglePressed: enabled,
             readState: normalizedReadState,
             showCloseButton: enabled
         };
+    }
+
+    function isChatStackedBelowPlayer(playerRect, chatRect) {
+        if (!playerRect || !chatRect) return false;
+        const values = [
+            playerRect.left, playerRect.top, playerRect.width, playerRect.height,
+            chatRect.left, chatRect.top, chatRect.width, chatRect.height
+        ];
+        if (!values.every((value) => typeof value === 'number' && Number.isFinite(value))) return false;
+        if (playerRect.width <= 0 || playerRect.height <= 0 || chatRect.width <= 0 || chatRect.height <= 0) return false;
+        const horizontalOverlap = Math.min(playerRect.left + playerRect.width, chatRect.left + chatRect.width) -
+            Math.max(playerRect.left, chatRect.left);
+        return horizontalOverlap > 0 && chatRect.top >= playerRect.top + playerRect.height - 1;
     }
 
     function isNativeChatOpenButtonUsable({ belongsToCurrentWatchRoot, disabled, ariaDisabled, display, visibility, width, height } = {}) {
@@ -317,6 +331,7 @@
         getDisplayStateTransition,
         reduceDisplayState,
         getManagementBarViewModel,
+        isChatStackedBelowPlayer,
         isNativeChatOpenButtonUsable,
         isNativeChatFrameVisible,
         canRenderDanmaku,

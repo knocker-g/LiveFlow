@@ -17,7 +17,7 @@
         watchRoot: 'ytd-watch-flexy',
         nativeChat: 'ytd-live-chat-frame#chat, ytd-live-chat-frame',
         nativeChatOpenButton: '#show-hide-button button, #show-hide-button tp-yt-paper-button',
-        playerHost: '#player',
+        belowPlayer: '#below',
         player: '#movie_player, .html5-video-player',
         video: 'video.html5-main-video, video',
         miniPlayerAncestor: 'ytd-miniplayer, #miniplayer'
@@ -44,6 +44,8 @@
     let visibilityEvaluationQueued = false;
     let managementBar = null;
     let managementToggleButton = null;
+    let managementStatusIcon = null;
+    let managementToggleLabel = null;
     let managementReadIndicator = null;
     let managementCloseButton = null;
     let readIndicatorState = 'idle';
@@ -255,31 +257,45 @@
             #${MANAGEMENT_BAR_ID} {
                 display: flex;
                 align-items: center;
-                gap: 10px;
+                gap: clamp(4px, 2vw, 10px);
                 box-sizing: border-box;
                 width: 100%;
-                min-height: 36px;
-                padding: 4px 8px;
+                min-height: 52px;
+                padding: 4px 12px;
+                border-top: 1px solid var(--yt-spec-10-percent-layer, rgba(255,255,255,.1));
+                border-bottom: 1px solid var(--yt-spec-10-percent-layer, rgba(255,255,255,.1));
+                border-radius: 6px;
                 color: var(--yt-spec-text-primary, #f1f1f1);
                 background: var(--yt-spec-base-background, #0f0f0f);
-                font: 500 13px/1.2 Roboto, Arial, sans-serif;
+                font: 500 14px/1.2 Roboto, Arial, sans-serif;
             }
             #${MANAGEMENT_BAR_ID} button {
-                min-height: 28px;
+                flex: 0 0 auto;
+                min-width: 44px;
+                min-height: 44px;
                 border: 0;
-                border-radius: 3px;
-                padding: 0 9px;
+                border-radius: 5px;
+                padding: 0 12px;
                 color: inherit;
                 background: var(--yt-spec-badge-chip-background, rgba(255,255,255,.1));
                 font: inherit;
                 cursor: pointer;
             }
+            #${MANAGEMENT_BAR_ID} .liveflow-toggle-button {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                max-width: 100%;
+                white-space: nowrap;
+            }
+            #${MANAGEMENT_BAR_ID} .liveflow-status-icon { width: 1em; text-align: center; }
             #${MANAGEMENT_BAR_ID} button:focus-visible {
                 outline: 2px solid currentColor;
                 outline-offset: 1px;
             }
             #${MANAGEMENT_BAR_ID} .liveflow-read-indicator {
                 flex: 1;
+                min-width: 0;
                 overflow: hidden;
                 color: var(--yt-spec-call-to-action, #3ea6ff);
                 letter-spacing: 3px;
@@ -313,7 +329,8 @@
         const view = overlayCore.getManagementBarViewModel({ userEnabled, readState: readIndicatorState });
         managementBar.dataset.enabled = String(view.enabled);
         managementBar.dataset.readState = view.readState;
-        managementToggleButton.textContent = view.toggleLabel;
+        managementStatusIcon.textContent = view.statusIcon;
+        managementToggleLabel.textContent = view.toggleLabel;
         managementToggleButton.setAttribute('aria-pressed', String(view.togglePressed));
         managementReadIndicator.hidden = !view.enabled;
         managementCloseButton.hidden = !view.showCloseButton;
@@ -323,18 +340,45 @@
         managementBar?.remove();
         managementBar = null;
         managementToggleButton = null;
+        managementStatusIcon = null;
+        managementToggleLabel = null;
         managementReadIndicator = null;
         managementCloseButton = null;
         document.documentElement.style.setProperty(MANAGEMENT_HEIGHT_PROPERTY, '0px');
     }
 
+    function getManagementBarPlacement(watchRoot, media) {
+        const nativeChat = watchRoot.querySelector(PLAYER_SELECTORS.nativeChat);
+        if (nativeChat && watchRoot.contains(nativeChat) && overlayCore.isChatStackedBelowPlayer(
+            media.player.getBoundingClientRect(),
+            nativeChat.getBoundingClientRect()
+        )) return { parent: nativeChat.parentElement, before: nativeChat };
+
+        const belowPlayer = watchRoot.querySelector(PLAYER_SELECTORS.belowPlayer);
+        if (belowPlayer?.parentElement && watchRoot.contains(belowPlayer)) {
+            return { parent: belowPlayer.parentElement, before: belowPlayer };
+        }
+        return null;
+    }
+
     function attachManagementBar() {
         const media = getCurrentMainMedia();
-        if (!media) return false;
+        if (!media) {
+            cleanupManagementBar();
+            return false;
+        }
         const watchRoot = document.querySelector(PLAYER_SELECTORS.watchRoot);
-        const playerHost = media.player.closest(PLAYER_SELECTORS.playerHost);
-        if (!watchRoot || !playerHost || !watchRoot.contains(playerHost)) return false;
-        if (managementBar?.isConnected && watchRoot.contains(managementBar)) {
+        if (!watchRoot || !watchRoot.contains(media.player)) {
+            cleanupManagementBar();
+            return false;
+        }
+        const placement = getManagementBarPlacement(watchRoot, media);
+        if (!placement?.parent || !watchRoot.contains(placement.parent)) {
+            cleanupManagementBar();
+            return false;
+        }
+        if (managementBar?.isConnected && watchRoot.contains(managementBar) &&
+            managementBar.parentElement === placement.parent && managementBar.nextSibling === placement.before) {
             updateManagementBar();
             updateManagementHeight();
             return true;
@@ -352,6 +396,12 @@
         toggle.type = 'button';
         toggle.className = 'liveflow-toggle-button';
         toggle.addEventListener('click', () => applyDisplayAction({ type: 'set-user-enabled', value: !userEnabled }));
+        const statusIcon = document.createElement('span');
+        statusIcon.className = 'liveflow-status-icon';
+        statusIcon.setAttribute('aria-hidden', 'true');
+        const toggleLabel = document.createElement('span');
+        toggleLabel.className = 'liveflow-toggle-label';
+        toggle.append(statusIcon, toggleLabel);
 
         const indicator = document.createElement('span');
         indicator.className = 'liveflow-read-indicator';
@@ -375,9 +425,11 @@
         close.addEventListener('click', () => applyDisplayAction({ type: 'set-user-enabled', value: false }));
 
         bar.append(toggle, indicator, gear, close);
-        playerHost.insertAdjacentElement('afterend', bar);
+        placement.parent.insertBefore(bar, placement.before);
         managementBar = bar;
         managementToggleButton = toggle;
+        managementStatusIcon = statusIcon;
+        managementToggleLabel = toggleLabel;
         managementReadIndicator = indicator;
         managementCloseButton = close;
         updateManagementBar();
@@ -388,6 +440,10 @@
     function setReadIndicatorState(state) {
         readIndicatorState = state;
         updateManagementBar();
+    }
+
+    function refreshManagementBarPlacement() {
+        attachManagementBar();
     }
 
     function attachOverlay(player) {
@@ -656,7 +712,7 @@
     window.addEventListener('yt-navigate-finish', detectPage);
     window.addEventListener('yt-page-data-updated', handleNavigation);
     window.addEventListener('pagehide', handlePageHide);
-    window.addEventListener('resize', updateManagementHeight);
+    window.addEventListener('resize', refreshManagementBarPlacement);
 
     if (isYouTubeWatchPage()) {
         detectPage();

@@ -25,6 +25,7 @@ const {
     getDisplayStateTransition,
     reduceDisplayState,
     getManagementBarViewModel,
+    isChatStackedBelowPlayer,
     isNativeChatOpenButtonUsable,
     isNativeChatFrameVisible
 } = require('../src/overlay-core.js');
@@ -489,6 +490,7 @@ test('Native Chat open uses an outer structural button and fails safe for open o
 test('management bar view reflects enabled state without controlling READ timing', () => {
     assert.deepEqual(getManagementBarViewModel({ userEnabled: true, readState: 'active' }), {
         enabled: true,
+        statusIcon: '▶',
         toggleLabel: 'LiveFlow ON',
         togglePressed: true,
         readState: 'active',
@@ -496,6 +498,7 @@ test('management bar view reflects enabled state without controlling READ timing
     });
     assert.deepEqual(getManagementBarViewModel({ userEnabled: false, readState: 'active' }), {
         enabled: false,
+        statusIcon: '⏹',
         toggleLabel: 'LiveFlow OFF',
         togglePressed: false,
         readState: 'active',
@@ -503,12 +506,30 @@ test('management bar view reflects enabled state without controlling READ timing
     });
 });
 
-test('management bar attaches below current main player once and remains when disabled', () => {
-    assert.match(runtimeSource, /const media = getCurrentMainMedia\(\);\s*if \(!media\) return false;/);
-    assert.match(runtimeSource, /managementBar\?\.isConnected && watchRoot\.contains\(managementBar\)/);
-    assert.match(runtimeSource, /playerHost\.insertAdjacentElement\('afterend', bar\)/);
+test('management placement identifies narrow stacked Chat without viewport classification', () => {
+    const player = { left: 0, top: 0, width: 400, height: 225 };
+    assert.equal(isChatStackedBelowPlayer(player, { left: 0, top: 225, width: 400, height: 300 }), true);
+    assert.equal(isChatStackedBelowPlayer(player, { left: 400, top: 0, width: 300, height: 400 }), false);
+    assert.equal(isChatStackedBelowPlayer(player, { left: 0, top: 225, width: 0, height: 300 }), false);
+});
+
+test('management bar attaches before stacked Native Chat with below-player fallback', () => {
+    assert.match(runtimeSource, /const media = getCurrentMainMedia\(\);\s*if \(!media\) \{\s*cleanupManagementBar\(\)/);
+    assert.match(runtimeSource, /isChatStackedBelowPlayer\([^]*?return \{ parent: nativeChat\.parentElement, before: nativeChat \}/);
+    assert.match(runtimeSource, /watchRoot\.querySelector\(PLAYER_SELECTORS\.belowPlayer\)/);
+    assert.match(runtimeSource, /placement\.parent\.insertBefore\(bar, placement\.before\)/);
+    assert.match(runtimeSource, /managementBar\.parentElement === placement\.parent && managementBar\.nextSibling === placement\.before/);
     assert.match(runtimeSource, /data-enabled="false"[^]*?\.liveflow-close-button/);
     assert.doesNotMatch(runtimeSource, /data-enabled="false"[^}]*display:\s*none[^}]*#liveflow-management-bar/);
+});
+
+test('management bar uses touch-friendly bounded sizing and status icons', () => {
+    assert.match(runtimeSource, /min-height: 52px/);
+    assert.match(runtimeSource, /padding: 4px 12px/);
+    assert.match(runtimeSource, /min-width: 44px/);
+    assert.match(runtimeSource, /min-height: 44px/);
+    assert.match(runtimeSource, /managementStatusIcon\.textContent = view\.statusIcon/);
+    assert.match(runtimeSource, /managementToggleLabel\.textContent = view\.toggleLabel/);
 });
 
 test('management controls toggle future rendering, close means OFF, and gear is a safe stub', () => {
@@ -526,7 +547,7 @@ test('management bar cleanup and reattach follow SPA lifecycle and exclude MiniP
 });
 
 test('management bar stays outside the player while danmaku remains player-owned for fullscreen', () => {
-    assert.match(runtimeSource, /playerHost\.insertAdjacentElement\('afterend', bar\)/);
+    assert.match(runtimeSource, /placement\.parent\.insertBefore\(bar, placement\.before\)/);
     assert.match(runtimeSource, /player\.appendChild\(overlayRoot\)/);
     assert.doesNotMatch(runtimeSource, /player\.appendChild\(bar\)/);
 });
