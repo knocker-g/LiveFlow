@@ -53,17 +53,41 @@ test('READ loop does not use an interval or permit a duplicate active loop', () 
     assert.doesNotMatch(pageStateSource, /setInterval\s*\(/);
     assert.match(pageStateSource, /canStartReadLoop/);
     assert.match(pageStateSource, /requestInFlight: readRequestInFlight/);
-    assert.match(pageStateSource, /while \(generation === currentLoopGeneration && revision === pageRevision && continuation\)/);
+    assert.match(pageStateSource, /while \(generation === currentLoopGeneration && revision === pageRevision &&\s*lifecycleGeneration === pageLifecycleGeneration && !navigationPending && continuation\)/);
 });
 
 test('navigation and pagehide invalidate or abort stale READ work', () => {
     assert.match(pageStateSource, /if \(revisionState\?\.changed[^]*?stopReadLoop\(\)/);
     assert.match(pageStateSource, /activeAbortController\.abort\(\)/);
-    assert.match(pageStateSource, /addEventListener\('yt-navigate-start', stopReadLoop\)/);
+    assert.match(pageStateSource, /function invalidatePageLifecycle\(\)[^]*?stopReadLoop\(\)/);
+    assert.match(pageStateSource, /addEventListener\('yt-navigate-start', invalidatePageLifecycle\)/);
     assert.match(pageStateSource, /addEventListener\('pagehide', stopReadLoop\)/);
     assert.match(pageStateSource, /addEventListener\('visibilitychange'/);
     assert.match(pageStateSource, /if \(document\.hidden\) stopReadLoop\(\)/);
     assert.match(contentSource, /addEventListener\('yt-navigate-finish', detectPage\)/);
+});
+
+test('SPA lifecycle prevents delayed old-page requests and responses from restarting READ', () => {
+    assert.match(pageStateSource, /pageLifecycleGeneration \+= 1/);
+    assert.match(pageStateSource, /navigationPending = true/);
+    assert.match(pageStateSource, /requestedLifecycleGeneration !== pageLifecycleGeneration \|\| navigationPending/);
+    assert.match(pageStateSource, /lifecycleGeneration === pageLifecycleGeneration && !navigationPending/);
+    assert.match(pageStateSource, /postReadResult\(result, lifecycleGeneration\)/);
+    assert.match(contentSource, /event\.data\.pageLifecycleGeneration !== currentPageLifecycleGeneration/);
+});
+
+test('new page bootstrap is not established before YouTube page data is updated', () => {
+    assert.match(pageStateSource, /const hadEstablishedPage = pageKey !== '';/);
+    assert.match(pageStateSource, /if \(hadEstablishedPage && !navigationPending\)/);
+    assert.match(pageStateSource, /if \(navigationPending && !pageDataUpdated\) return;/);
+    assert.match(pageStateSource, /if \(pageDataUpdated\) navigationPending = false;/);
+    assert.match(pageStateSource, /addEventListener\('yt-page-data-updated', \(\) => respond\(\{ pageDataUpdated: true \}\)\)/);
+});
+
+test('a new lifecycle start signal waits for an aborted old request to settle without parallel READ', () => {
+    assert.match(pageStateSource, /if \(readRequestInFlight \|\| activeLoopGeneration !== 0\) \{\s*deferredReadStartGeneration = requestedLifecycleGeneration;/);
+    assert.match(pageStateSource, /deferredGeneration === pageLifecycleGeneration && !navigationPending/);
+    assert.match(pageStateSource, /window\.queueMicrotask\(\(\) => startReadLoop\(deferredGeneration\)\)/);
 });
 
 test('unexpected READ response structure stops instead of polling again', () => {

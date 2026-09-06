@@ -32,6 +32,7 @@ const {
     isChatStackedBelowPlayer,
     isNativeChatOpenButtonUsable,
     selectFirstUsableNativeChatButton,
+    getNativeChatOpenCandidateRejectionReason,
     isNativeChatFrameVisible
 } = require('../src/overlay-core.js');
 
@@ -497,7 +498,7 @@ test('SPA evaluation uses the new current watch root and MiniPlayer policy remai
 });
 
 test('Native Chat open button is usable only when visible, enabled, and owned by current watch root', () => {
-    const usable = { belongsToCurrentWatchRoot: true, disabled: false, ariaDisabled: 'false', display: 'block', visibility: 'visible', width: 100, height: 32 };
+    const usable = { belongsToCurrentWatchRoot: true, associatedWithNativeChat: true, disabled: false, ariaDisabled: 'false', display: 'block', visibility: 'visible', width: 100, height: 32 };
     assert.equal(isNativeChatOpenButtonUsable(usable), true);
     assert.equal(isNativeChatOpenButtonUsable({ ...usable, belongsToCurrentWatchRoot: false }), false);
     assert.equal(isNativeChatOpenButtonUsable({ ...usable, disabled: true }), false);
@@ -510,24 +511,49 @@ test('Native Chat open button is usable only when visible, enabled, and owned by
         { element: second, ...usable }
     ]), second);
     assert.equal(selectFirstUsableNativeChatButton([{ element: first, ...usable, width: 0 }]), null);
+    assert.equal(getNativeChatOpenCandidateRejectionReason(usable), 'none');
+    assert.equal(getNativeChatOpenCandidateRejectionReason({ ...usable, associatedWithNativeChat: false }), 'not-chat-associated');
+    assert.equal(getNativeChatOpenCandidateRejectionReason({ ...usable, belongsToCurrentWatchRoot: false }), 'wrong-watch-ownership');
+    assert.equal(getNativeChatOpenCandidateRejectionReason({ ...usable, disabled: true }), 'disabled');
+    assert.equal(getNativeChatOpenCandidateRejectionReason({ ...usable, width: 0 }), 'zero-or-invalid-geometry');
 });
 
 test('Native Chat open uses an outer structural button and fails safe for open or unknown state', () => {
     assert.match(runtimeSource, /if \(!nativeChatKnown \|\| nativeChatVisible \|\| nativeChatOpenAttempt\) return false;/);
     assert.match(runtimeSource, /PLAYER_SELECTORS\.nativeChatOpenButtons\.forEach/);
     assert.match(runtimeSource, /readNativeChatVisibility\(watchRoot\) !== false/);
-    assert.match(runtimeSource, /if \(!button\) \{\s*logInfo\(`Native Chat open attempt: candidates=\$\{elements\.length\}, clicked=false`\);\s*return false;\s*\}/);
+    assert.doesNotMatch(runtimeSource, /if \(!watchRoot \|\| !frame/);
+    assert.match(runtimeSource, /chatContainer = watchRoot\.querySelector/);
+    assert.match(runtimeSource, /if \(!button\) \{\s*logInfo\(`Native Chat open attempt: started=true, candidates=\$\{elements\.length\}, clickIssued=false, result=no-candidate`\);\s*return false;\s*\}/);
     assert.match(runtimeSource, /button\.click\(\)/);
     assert.match(runtimeSource, /nativeChatOpenAttempt = \{ generation: attemptGeneration, timerId \}/);
-    assert.match(runtimeSource, /if \(nativeChatVisible\) clearNativeChatOpenAttempt\(\)/);
+    assert.match(runtimeSource, /if \(nativeChatVisible && nativeChatOpenAttempt\) \{/);
     assert.match(runtimeSource, /clearNativeChatOpenAttempt\(\);[^]*?disconnectNativeChatObserver\(\)/);
     assert.doesNotMatch(runtimeSource, /contentDocument|contentWindow/);
 });
 
 test('Native Chat open failure remains fail-safe and reports only structural counts and booleans', () => {
-    assert.match(runtimeSource, /if \(!button\) \{\s*logInfo\(`Native Chat open attempt: candidates=\$\{elements\.length\}, clicked=false`\);\s*return false;/);
-    assert.match(runtimeSource, /Native Chat open confirmation: visible=\$\{nativeChatVisible\}/);
+    assert.match(runtimeSource, /Native Chat open linkage: triggered=true, visible=\$\{nativeChatVisible\}/);
+    assert.match(runtimeSource, /Native Chat open candidate: strategy=\$\{strategy\}, accepted=\$\{candidate\.rejectionReason === 'none'\}, reason=\$\{candidate\.rejectionReason\}/);
+    assert.match(runtimeSource, /Native Chat open confirmation: visible=\$\{nativeChatVisible\}, result=\$\{nativeChatVisible \? 'confirmed' : 'not-confirmed'\}/);
+    assert.match(runtimeSource, /Native Chat open confirmation: observerTransition=true, result=confirmed/);
     assert.doesNotMatch(runtimeSource, /Native Chat open[^\r\n]*(?:outerHTML|innerHTML|continuation|visitorData)/i);
+});
+
+test('Native Chat reopen can use an existing scoped container control when the frame is absent', () => {
+    assert.match(runtimeSource, /const frame = watchRoot\?\.querySelector\(PLAYER_SELECTORS\.nativeChat\) \|\| null;/);
+    assert.match(runtimeSource, /const chatContainer = watchRoot\.querySelector\(PLAYER_SELECTORS\.nativeChatContainer\);/);
+    assert.match(runtimeSource, /frame\?\.contains\(element\) \|\| chatContainer\?\.contains\(element\)/);
+    assert.match(runtimeSource, /belongsToCurrentWatchRoot: watchRoot\.contains\(element\)/);
+    assert.match(runtimeSource, /button\.click\(\)/);
+    assert.equal((runtimeSource.match(/button\.click\(\)/g) || []).length, 1);
+});
+
+test('Native Chat open attempt is single-shot, observer-confirmed, and never retries', () => {
+    assert.match(runtimeSource, /nativeChatVisible \|\| nativeChatOpenAttempt/);
+    assert.match(runtimeSource, /nativeChatOpenAttempt = \{ generation: attemptGeneration, timerId \}/);
+    assert.match(runtimeSource, /if \(nativeChatVisible && nativeChatOpenAttempt\) \{/);
+    assert.doesNotMatch(runtimeSource, /tryOpenNativeChat\(\)[^]*?setTimeout[^]*?tryOpenNativeChat\(\)/);
 });
 
 test('management bar view reflects enabled state without controlling READ timing', () => {
@@ -612,9 +638,25 @@ test('geometry changes invalidate active and queued renderer work before using n
 test('SPA blocks old bridge results until a newer page revision is accepted', () => {
     assert.match(runtimeSource, /acceptingReadResults = false/);
     assert.match(runtimeSource, /minimumAcceptedPageRevision = currentPageRevision \+ 1/);
-    assert.match(runtimeSource, /event\.data\.pageRevision < minimumAcceptedPageRevision\) return/);
+    assert.match(runtimeSource, /event\.data\.pageRevision < minimumAcceptedPageRevision\) \{/);
     assert.match(runtimeSource, /acceptingReadResults = true/);
-    assert.match(runtimeSource, /if \(!acceptingReadResults\) return/);
+    assert.match(runtimeSource, /if \(!acceptingReadResults\) \{/);
+});
+
+test('SPA lifecycle token covers READ request, bridge response, queue, and delayed rendering', () => {
+    assert.match(runtimeSource, /pageLifecycleGeneration: currentPageLifecycleGeneration/);
+    assert.match(runtimeSource, /event\.data\.pageLifecycleGeneration !== currentPageLifecycleGeneration/);
+    assert.match(runtimeSource, /entry\.pageLifecycleGeneration !== currentPageLifecycleGeneration/);
+    assert.match(runtimeSource, /type !== NAVIGATION_INVALIDATED_TYPE/);
+    assert.match(runtimeSource, /acceptingReadResults = false;[^]*?rendererQueue\.length = 0/);
+});
+
+test('A to B to C navigation repeatedly invalidates every asynchronous renderer boundary', () => {
+    assert.match(runtimeSource, /function handleNavigationStart\(\)[^]*?pageGeneration \+= 1/);
+    assert.match(runtimeSource, /function handleNavigationStart\(\)[^]*?cleanupOverlay\(\)/);
+    assert.match(runtimeSource, /function cleanupOverlay\(\)[^]*?rendererGeneration \+= 1/);
+    assert.match(runtimeSource, /function cleanupOverlay\(\)[^]*?activeDanmaku\.clear\(\)/);
+    assert.match(runtimeSource, /function cleanupOverlay\(\)[^]*?rendererQueue\.length = 0/);
 });
 
 test('collision queue preserves FIFO order, drops newest only at its bound, and uses no polling', () => {

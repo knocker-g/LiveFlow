@@ -4,6 +4,7 @@
     const READ_REQUEST_TYPE = 'LIVEFLOW_REQUEST_CHAT_READ_ONCE';
     const READ_RESPONSE_TYPE = 'LIVEFLOW_CHAT_READ_ONCE_RESULT';
     const STOP_READ_LOOP_TYPE = 'LIVEFLOW_STOP_CHAT_READ_LOOP';
+    const NAVIGATION_INVALIDATED_TYPE = 'LIVEFLOW_PAGE_LIFECYCLE_INVALIDATED';
     let pageRevision = 0;
     let pageKey = '';
     let pageState = { continuation: '', context: null };
@@ -14,6 +15,9 @@
     let activeAbortController = null;
     let activeWaitTimer = null;
     let readRequestInFlight = false;
+    let pageLifecycleGeneration = 0;
+    let navigationPending = false;
+    let deferredReadStartGeneration = null;
 
     function getYtcfgValue(key) {
         try {
@@ -70,19 +74,47 @@
         return core?.normalizeInternalApiContext?.(fallback) || null;
     }
 
-    function respond() {
-        const continuation = readContinuation();
-        const context = readInternalApiContext();
+    function postLifecycleInvalidated() {
+        window.postMessage({
+            source: 'liveflow-page-state',
+            type: NAVIGATION_INVALIDATED_TYPE,
+            pageRevision,
+            pageLifecycleGeneration
+        }, window.location.origin);
+    }
+
+    function invalidatePageLifecycle() {
+        stopReadLoop();
+        pageRevision += 1;
+        pageLifecycleGeneration += 1;
+        navigationPending = true;
+        readAttemptedRevision = -1;
+        readCount = 0;
+        pageState = { continuation: '', context: null };
+        postLifecycleInvalidated();
+    }
+
+    function respond({ pageDataUpdated = false } = {}) {
         const nextPageKey = `${location.origin}${location.pathname}${location.search}`;
+        const hadEstablishedPage = pageKey !== '';
         const revisionState = window.LiveFlowChatReadCore?.getPageRevisionState?.(pageKey, pageRevision, nextPageKey);
         if (revisionState?.changed || (!revisionState && nextPageKey !== pageKey)) {
-            stopReadLoop();
+            if (hadEstablishedPage && !navigationPending) {
+                stopReadLoop();
+                pageRevision = revisionState?.revision || pageRevision + 1;
+                pageLifecycleGeneration += 1;
+                navigationPending = !pageDataUpdated;
+                postLifecycleInvalidated();
+            }
             pageKey = revisionState?.key || nextPageKey;
-            pageRevision = revisionState?.revision || pageRevision + 1;
             readAttemptedRevision = -1;
             readCount = 0;
             pageState = { continuation: '', context: null };
         }
+        if (navigationPending && !pageDataUpdated) return;
+        if (pageDataUpdated) navigationPending = false;
+        const continuation = readContinuation();
+        const context = readInternalApiContext();
         pageState = {
             continuation: typeof continuation === 'string' ? continuation : '',
             context
@@ -92,16 +124,18 @@
             type: RESPONSE_TYPE,
             continuation: pageState.continuation,
             context: pageState.context,
-            pageRevision
+            pageRevision,
+            pageLifecycleGeneration
         }, window.location.origin);
     }
 
-    function postReadResult(result) {
+    function postReadResult(result, lifecycleGeneration) {
         const { continuationInfo, messages, summary, ...safeResult } = result;
         window.postMessage({
             source: 'liveflow-page-state',
             type: READ_RESPONSE_TYPE,
-            pageRevision,
+            pageRevision: result.revision,
+            pageLifecycleGeneration: lifecycleGeneration,
             ...safeResult,
             messages,
             continuationTypes: Array.isArray(summary?.continuationTypes) ? summary.continuationTypes : [],
@@ -117,6 +151,7 @@
         activeAbortController = null;
         if (activeWaitTimer !== null) window.clearTimeout(activeWaitTimer);
         activeWaitTimer = null;
+        deferredReadStartGeneration = null;
     }
 
     function waitForNextRead(delay, generation) {
@@ -198,8 +233,13 @@
         }
     }
 
-    async function startReadLoop() {
+    async function startReadLoop(requestedLifecycleGeneration) {
         const core = window.LiveFlowChatReadCore;
+        if (requestedLifecycleGeneration !== pageLifecycleGeneration || navigationPending) return;
+        if (readRequestInFlight || activeLoopGeneration !== 0) {
+            deferredReadStartGeneration = requestedLifecycleGeneration;
+            return;
+        }
         if (!core?.canStartReadLoop?.({
             activeLoopGeneration,
             requestInFlight: readRequestInFlight,
@@ -211,10 +251,12 @@
         const generation = ++currentLoopGeneration;
         activeLoopGeneration = generation;
         const revision = pageRevision;
+        const lifecycleGeneration = pageLifecycleGeneration;
         const context = pageState.context;
         let continuation = pageState.continuation;
 
-        while (generation === currentLoopGeneration && revision === pageRevision && continuation) {
+        while (generation === currentLoopGeneration && revision === pageRevision &&
+            lifecycleGeneration === pageLifecycleGeneration && !navigationPending && continuation) {
             readCount += 1;
             const abortController = new AbortController();
             activeAbortController = abortController;
@@ -235,7 +277,7 @@
                 validationOk: Boolean(result?.ok)
             })) break;
 
-            postReadResult(result);
+            postReadResult(result, lifecycleGeneration);
             const continuationInfo = result.continuationInfo;
             continuation = continuationInfo.continuation;
             if (!await waitForNextRead(result.effectiveDelayMs, generation)) break;
@@ -243,6 +285,11 @@
 
         if (activeLoopGeneration === generation) {
             activeLoopGeneration = 0;
+        }
+        const deferredGeneration = deferredReadStartGeneration;
+        deferredReadStartGeneration = null;
+        if (deferredGeneration === pageLifecycleGeneration && !navigationPending) {
+            window.queueMicrotask(() => startReadLoop(deferredGeneration));
         }
     }
 
@@ -254,7 +301,7 @@
             return;
         }
         if (event.data.type === READ_REQUEST_TYPE) {
-            startReadLoop();
+            startReadLoop(event.data.pageLifecycleGeneration);
             return;
         }
         if (event.data.type === STOP_READ_LOOP_TYPE) {
@@ -263,9 +310,9 @@
         }
     });
 
-    window.addEventListener('yt-navigate-finish', respond);
-    window.addEventListener('yt-navigate-start', stopReadLoop);
-    window.addEventListener('yt-page-data-updated', respond);
+    window.addEventListener('yt-navigate-finish', () => respond());
+    window.addEventListener('yt-navigate-start', invalidatePageLifecycle);
+    window.addEventListener('yt-page-data-updated', () => respond({ pageDataUpdated: true }));
     window.addEventListener('pagehide', stopReadLoop);
     window.addEventListener('visibilitychange', () => {
         if (document.hidden) stopReadLoop();

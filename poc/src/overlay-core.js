@@ -265,9 +265,22 @@
     function selectFirstUsableNativeChatButton(candidates) {
         if (!Array.isArray(candidates)) return null;
         for (const candidate of candidates) {
-            if (candidate?.element && isNativeChatOpenButtonUsable(candidate)) return candidate.element;
+            if (candidate?.element && getNativeChatOpenCandidateRejectionReason(candidate) === 'none') return candidate.element;
         }
         return null;
+    }
+
+    function getNativeChatOpenCandidateRejectionReason(candidate = {}) {
+        if (candidate.belongsToCurrentWatchRoot !== true) return 'wrong-watch-ownership';
+        if (candidate.associatedWithNativeChat !== true) return 'not-chat-associated';
+        if (candidate.disabled === true || candidate.ariaDisabled === 'true') return 'disabled';
+        if (candidate.display === 'none') return 'display-none';
+        if (candidate.visibility === 'hidden' || candidate.visibility === 'collapse') return 'visibility-hidden';
+        if (typeof candidate.width !== 'number' || !Number.isFinite(candidate.width) || candidate.width <= 0 ||
+            typeof candidate.height !== 'number' || !Number.isFinite(candidate.height) || candidate.height <= 0) {
+            return 'zero-or-invalid-geometry';
+        }
+        return 'none';
     }
 
     function isChatStackedBelowPlayer(playerRect, chatRect) {
@@ -383,6 +396,7 @@
         isChatStackedBelowPlayer,
         isNativeChatOpenButtonUsable,
         selectFirstUsableNativeChatButton,
+        getNativeChatOpenCandidateRejectionReason,
         isNativeChatFrameVisible,
         canRenderDanmaku,
         isPlaybackEligible,

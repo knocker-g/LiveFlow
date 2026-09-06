@@ -5,6 +5,7 @@
     const READ_REQUEST_TYPE = 'LIVEFLOW_REQUEST_CHAT_READ_ONCE';
     const READ_RESPONSE_TYPE = 'LIVEFLOW_CHAT_READ_ONCE_RESULT';
     const STOP_READ_LOOP_TYPE = 'LIVEFLOW_STOP_CHAT_READ_LOOP';
+    const NAVIGATION_INVALIDATED_TYPE = 'LIVEFLOW_PAGE_LIFECYCLE_INVALIDATED';
     const MAX_MESSAGES = 500;
     const MANAGEMENT_BAR_ID = 'liveflow-management-bar';
     const MANAGEMENT_STYLE_ID = 'liveflow-management-bar-style';
@@ -48,6 +49,7 @@
     let minimumAcceptedPageRevision = 0;
     let geometryChangeQueued = false;
     let pageGeneration = 0;
+    let currentPageLifecycleGeneration = -1;
     let userEnabled = true;
     let nativeChatVisible = true;
     let nativeChatKnown = false;
@@ -129,10 +131,16 @@
         userEnabled = transition.userEnabled;
         nativeChatVisible = transition.nativeChatVisible;
         nativeChatKnown = transition.nativeChatKnown;
-        if (nativeChatVisible) clearNativeChatOpenAttempt();
+        if (nativeChatVisible && nativeChatOpenAttempt) {
+            logInfo('Native Chat open confirmation: observerTransition=true, result=confirmed');
+            clearNativeChatOpenAttempt();
+        }
         if (transition.cleanupRequired) cleanupOverlay();
         updateManagementBar();
-        if (transition.requestNativeChatOpen) tryOpenNativeChat();
+        if (transition.requestNativeChatOpen) {
+            logInfo(`Native Chat open linkage: triggered=true, visible=${nativeChatVisible}`);
+            tryOpenNativeChat();
+        }
         return transition;
     }
 
@@ -242,9 +250,15 @@
         if (!nativeChatKnown || nativeChatVisible || nativeChatOpenAttempt) return false;
         const watchRoot = document.querySelector(PLAYER_SELECTORS.watchRoot);
         const frame = watchRoot?.querySelector(PLAYER_SELECTORS.nativeChat) || null;
-        if (!watchRoot || !frame || !watchRoot.contains(frame)) return false;
-        if (readNativeChatVisibility(watchRoot) !== false) return false;
-        const chatContainer = frame.closest(PLAYER_SELECTORS.nativeChatContainer);
+        if (!watchRoot) {
+            logInfo('Native Chat open attempt: started=false, result=no-watch-root');
+            return false;
+        }
+        if (readNativeChatVisibility(watchRoot) !== false) {
+            logInfo('Native Chat open attempt: started=false, result=visibility-not-closed');
+            return false;
+        }
+        const chatContainer = watchRoot.querySelector(PLAYER_SELECTORS.nativeChatContainer);
         const elements = [];
         PLAYER_SELECTORS.nativeChatOpenButtons.forEach((selector) => {
             watchRoot.querySelectorAll(selector).forEach((element) => {
@@ -260,12 +274,15 @@
             } catch (error) {
                 return { element: null };
             }
-            const associatedWithChat = frame.contains(element) || Boolean(
-                chatContainer && chatContainer.contains(frame) && chatContainer.contains(element)
+            const strategy = frame?.contains(element) ? 'frame-control' : 'chat-container-control';
+            const associatedWithNativeChat = Boolean(
+                frame?.contains(element) || chatContainer?.contains(element)
             );
-            return {
+            const candidate = {
                 element,
-                belongsToCurrentWatchRoot: watchRoot.contains(element) && associatedWithChat,
+                strategy,
+                associatedWithNativeChat,
+                belongsToCurrentWatchRoot: watchRoot.contains(element),
                 disabled: element.disabled === true,
                 ariaDisabled: element.getAttribute('aria-disabled'),
                 display: style.display,
@@ -273,10 +290,13 @@
                 width: rect.width,
                 height: rect.height
             };
+            candidate.rejectionReason = overlayCore.getNativeChatOpenCandidateRejectionReason(candidate);
+            logInfo(`Native Chat open candidate: strategy=${strategy}, accepted=${candidate.rejectionReason === 'none'}, reason=${candidate.rejectionReason}`);
+            return candidate;
         });
         const button = overlayCore.selectFirstUsableNativeChatButton(candidates);
         if (!button) {
-            logInfo(`Native Chat open attempt: candidates=${elements.length}, clicked=false`);
+            logInfo(`Native Chat open attempt: started=true, candidates=${elements.length}, clickIssued=false, result=no-candidate`);
             return false;
         }
         const attemptGeneration = pageGeneration;
@@ -284,10 +304,10 @@
         const timerId = window.setTimeout(() => {
             if (nativeChatOpenAttempt?.generation !== attemptGeneration) return;
             nativeChatOpenAttempt = null;
-            logInfo(`Native Chat open confirmation: visible=${nativeChatVisible}`);
+            logInfo(`Native Chat open confirmation: visible=${nativeChatVisible}, result=${nativeChatVisible ? 'confirmed' : 'not-confirmed'}`);
         }, 1500);
         nativeChatOpenAttempt = { generation: attemptGeneration, timerId };
-        logInfo(`Native Chat open attempt: candidates=${elements.length}, clicked=true`);
+        logInfo(`Native Chat open attempt: started=true, candidates=${elements.length}, clickIssued=true, result=pending`);
         return true;
     }
 
@@ -648,7 +668,7 @@
                 scheduledVideo: entry.video,
                 currentVideo: currentMedia?.video || null,
                 currentPlayerOwnsVideo: Boolean(currentMedia)
-            })) {
+            }) || entry.pageLifecycleGeneration !== currentPageLifecycleGeneration) {
                 rendererQueue.shift();
                 continue;
             }
@@ -686,6 +706,7 @@
             message,
             notBeforeMs: batchStartMs + delayMs,
             generation: scheduledGeneration,
+            pageLifecycleGeneration: currentPageLifecycleGeneration,
             video: scheduledVideo
         }));
         drainRendererQueue();
@@ -694,7 +715,14 @@
     function handleInitialContinuation(event) {
         if (event.source !== window || event.origin !== window.location.origin) return;
         if (event.data?.source !== 'liveflow-page-state' || event.data.type !== RESPONSE_TYPE) return;
-        if (!Number.isInteger(event.data.pageRevision) || event.data.pageRevision < minimumAcceptedPageRevision) return;
+        if (!Number.isInteger(event.data.pageRevision) || event.data.pageRevision < minimumAcceptedPageRevision) {
+            logInfo('Bridge page-state rejected: reason=stale-revision');
+            return;
+        }
+        if (!Number.isInteger(event.data.pageLifecycleGeneration) || event.data.pageLifecycleGeneration < currentPageLifecycleGeneration) {
+            logInfo('Bridge page-state rejected: reason=stale-generation');
+            return;
+        }
 
         const previousRevision = currentPageRevision;
         const nextPageKey = `${window.location.origin}${window.location.pathname}${window.location.search}`;
@@ -705,7 +733,9 @@
             ? event.data.context
             : null;
         currentPageRevision = Number.isInteger(event.data.pageRevision) ? event.data.pageRevision : currentPageRevision;
+        currentPageLifecycleGeneration = event.data.pageLifecycleGeneration;
         acceptingReadResults = true;
+        logInfo(`New page established: revision=${currentPageRevision}, generation=${currentPageLifecycleGeneration}`);
         if (pageChanged) {
             readRequestedRevision = -1;
             currentMessages = [];
@@ -742,7 +772,8 @@
         readRequestedRevision = currentPageRevision;
         window.postMessage({
             source: 'liveflow-content-script',
-            type: READ_REQUEST_TYPE
+            type: READ_REQUEST_TYPE,
+            pageLifecycleGeneration: currentPageLifecycleGeneration
         }, window.location.origin);
         setReadIndicatorState('active');
     }
@@ -750,8 +781,18 @@
     function handleReadResult(event) {
         if (event.source !== window || event.origin !== window.location.origin) return;
         if (event.data?.source !== 'liveflow-page-state' || event.data.type !== READ_RESPONSE_TYPE) return;
-        if (!acceptingReadResults) return;
-        if (event.data.pageRevision !== currentPageRevision) return;
+        if (!acceptingReadResults) {
+            logInfo('Bridge READ batch rejected: reason=lifecycle-inactive');
+            return;
+        }
+        if (event.data.pageRevision !== currentPageRevision) {
+            logInfo('Bridge READ batch rejected: reason=stale-revision');
+            return;
+        }
+        if (event.data.pageLifecycleGeneration !== currentPageLifecycleGeneration) {
+            logInfo('Bridge READ batch rejected: reason=stale-generation');
+            return;
+        }
 
         if (!event.data.ok) {
             setReadIndicatorState('stopped');
@@ -807,6 +848,7 @@
     }
 
     function handleNavigationStart() {
+        logInfo(`Navigation invalidate: rendererGeneration=${rendererGeneration}, queue=${rendererQueue.length}, active=${activeDanmaku.size}, timer=${rendererQueueTimer !== null}`);
         pageGeneration += 1;
         acceptingReadResults = false;
         minimumAcceptedPageRevision = currentPageRevision + 1;
@@ -826,6 +868,22 @@
         cleanupOverlay();
     }
 
+    function handlePageLifecycleInvalidated(event) {
+        if (event.source !== window || event.origin !== window.location.origin) return;
+        if (event.data?.source !== 'liveflow-page-state' || event.data.type !== NAVIGATION_INVALIDATED_TYPE) return;
+        if (!Number.isInteger(event.data.pageRevision) || !Number.isInteger(event.data.pageLifecycleGeneration)) return;
+        acceptingReadResults = false;
+        minimumAcceptedPageRevision = Math.max(minimumAcceptedPageRevision, event.data.pageRevision);
+        currentPageLifecycleGeneration = Math.max(currentPageLifecycleGeneration, event.data.pageLifecycleGeneration);
+        initialContinuation = '';
+        internalApiContext = null;
+        chatAvailable = false;
+        readRequestedRevision = -1;
+        currentMessages = [];
+        cleanupOverlay();
+        logInfo(`Page lifecycle invalidated: revision=${event.data.pageRevision}, generation=${event.data.pageLifecycleGeneration}`);
+    }
+
     function handleGeometryChange() {
         if (geometryChangeQueued) return;
         geometryChangeQueued = true;
@@ -838,6 +896,7 @@
 
     window.addEventListener('message', handleInitialContinuation);
     window.addEventListener('message', handleReadResult);
+    window.addEventListener('message', handlePageLifecycleInvalidated);
     window.addEventListener('yt-navigate-start', handleNavigationStart);
     window.addEventListener('yt-navigate-finish', detectPage);
     window.addEventListener('yt-page-data-updated', handleNavigation);
