@@ -22,7 +22,8 @@
         viewportHeight,
         viewportOffsetTop = 0,
         chatTop,
-        managementReservedHeight = 0
+        managementReservedHeight = 0,
+        managementAlreadyIncludedInChatTop = false
     } = {}) {
         const values = [viewportWidth, viewportHeight, viewportOffsetTop, chatTop, managementReservedHeight];
         if (!values.every((value) => typeof value === 'number' && Number.isFinite(value))) {
@@ -36,15 +37,21 @@
         }
 
         const visibleViewportBottom = viewportOffsetTop + viewportHeight;
-        const availableHeight = visibleViewportBottom - chatTop - managementReservedHeight - VIEWPORT_BOTTOM_GAP_PX;
+        const managementDeduction = managementAlreadyIncludedInChatTop ? 0 : managementReservedHeight;
+        const availableHeight = visibleViewportBottom - chatTop - managementDeduction - VIEWPORT_BOTTOM_GAP_PX;
         if (!Number.isFinite(availableHeight) || availableHeight < MIN_NATIVE_CHAT_HEIGHT_PX) {
+            return { active: false, reason: 'insufficient-height' };
+        }
+
+        const boundedHeight = Math.min(availableHeight, viewportHeight - VIEWPORT_BOTTOM_GAP_PX);
+        if (!Number.isFinite(boundedHeight) || boundedHeight < MIN_NATIVE_CHAT_HEIGHT_PX) {
             return { active: false, reason: 'insufficient-height' };
         }
 
         return {
             active: true,
             reason: 'narrow-viewport',
-            maxChatHeightPx: Math.floor(availableHeight)
+            maxChatHeightPx: Math.floor(boundedHeight)
         };
     }
 

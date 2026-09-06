@@ -5,7 +5,8 @@
 
     const SELECTORS = Object.freeze({
         watchRoot: 'ytd-watch-flexy',
-        nativeChat: 'ytd-live-chat-frame#chat, ytd-live-chat-frame'
+        nativeChat: 'ytd-live-chat-frame#chat, ytd-live-chat-frame',
+        managementBar: '#liveflow-management-bar'
     });
     const STYLE_ID = 'liveflow-native-chat-layout-style';
     const ACTIVE_ATTRIBUTE = 'data-liveflow-native-chat-layout';
@@ -61,6 +62,27 @@
         });
     }
 
+    function nodeAffectsLayout(node) {
+        return node?.nodeType === 1 && (
+            node.matches?.(`${SELECTORS.nativeChat}, ${SELECTORS.managementBar}`) ||
+            Boolean(node.querySelector?.(`${SELECTORS.nativeChat}, ${SELECTORS.managementBar}`))
+        );
+    }
+
+    function ensureWatchObserver(root) {
+        if (observer?.__liveflowRoot === root) return;
+        if (observer) observer.disconnect();
+        observer = null;
+        if (!root) return;
+        observer = new MutationObserver((mutations) => {
+            if (mutations.some((mutation) =>
+                [...mutation.addedNodes, ...mutation.removedNodes].some(nodeAffectsLayout)
+            )) scheduleLayout();
+        });
+        observer.__liveflowRoot = root;
+        observer.observe(root, { childList: true, subtree: true });
+    }
+
     function applyLayout() {
         animationFrame = null;
         if (destroyed || !core || !isPcWatchPage()) {
@@ -68,15 +90,12 @@
             return;
         }
 
-        const chat = document.querySelector(SELECTORS.nativeChat);
+        const root = document.querySelector(SELECTORS.watchRoot);
+        ensureWatchObserver(root);
+        const chat = root?.querySelector(SELECTORS.nativeChat) || null;
         if (!chat) {
             clearActiveLayout();
-            observeUntilChatExists();
             return;
-        }
-        if (observer) {
-            observer.disconnect();
-            observer = null;
         }
 
         const viewport = getViewportMetrics();
@@ -85,7 +104,8 @@
             viewportHeight: viewport.height,
             viewportOffsetTop: viewport.offsetTop,
             chatTop: chat.getBoundingClientRect().top,
-            managementReservedHeight: readManagementReservedHeight()
+            managementReservedHeight: readManagementReservedHeight(),
+            managementAlreadyIncludedInChatTop: Boolean(root.querySelector(SELECTORS.managementBar))
         });
         if (!layout.active) {
             clearActiveLayout();
@@ -102,14 +122,6 @@
     function scheduleLayout() {
         if (destroyed || animationFrame !== null) return;
         animationFrame = window.requestAnimationFrame(applyLayout);
-    }
-
-    function observeUntilChatExists() {
-        if (observer || destroyed || !isPcWatchPage()) return;
-        const root = document.querySelector(SELECTORS.watchRoot);
-        if (!root) return;
-        observer = new MutationObserver(scheduleLayout);
-        observer.observe(root, { childList: true, subtree: true });
     }
 
     function handleNavigationStart() {

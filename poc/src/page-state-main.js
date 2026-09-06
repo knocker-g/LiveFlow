@@ -5,6 +5,7 @@
     const READ_RESPONSE_TYPE = 'LIVEFLOW_CHAT_READ_ONCE_RESULT';
     const STOP_READ_LOOP_TYPE = 'LIVEFLOW_STOP_CHAT_READ_LOOP';
     const NAVIGATION_INVALIDATED_TYPE = 'LIVEFLOW_PAGE_LIFECYCLE_INVALIDATED';
+    const LIFECYCLE_DIAGNOSTIC_TYPE = 'LIVEFLOW_READ_LIFECYCLE_DIAGNOSTIC';
     let pageRevision = 0;
     let pageKey = '';
     let pageState = { continuation: '', context: null };
@@ -18,6 +19,8 @@
     let pageLifecycleGeneration = 0;
     let navigationPending = false;
     let deferredReadStartGeneration = null;
+    let lastEstablishedWatchRoot = null;
+    let lastEstablishedVideo = null;
 
     function getYtcfgValue(key) {
         try {
@@ -83,7 +86,22 @@
         }, window.location.origin);
     }
 
-    function invalidatePageLifecycle() {
+    function postLifecycleDiagnostic(eventName, details = {}) {
+        window.postMessage({
+            source: 'liveflow-page-state',
+            type: LIFECYCLE_DIAGNOSTIC_TYPE,
+            eventName,
+            pageRevision,
+            pageLifecycleGeneration,
+            readGeneration: currentLoopGeneration,
+            readActive: activeLoopGeneration !== 0,
+            requestInFlight: readRequestInFlight,
+            ...details
+        }, window.location.origin);
+    }
+
+    function invalidatePageLifecycle(eventSource = 'yt-navigate-start') {
+        const abortIssued = Boolean(activeAbortController);
         stopReadLoop();
         pageRevision += 1;
         pageLifecycleGeneration += 1;
@@ -92,6 +110,7 @@
         readCount = 0;
         pageState = { continuation: '', context: null };
         postLifecycleInvalidated();
+        postLifecycleDiagnostic('NAV_INVALIDATE', { eventSource, abortIssued });
     }
 
     function respond({ pageDataUpdated = false } = {}) {
@@ -105,6 +124,10 @@
                 pageLifecycleGeneration += 1;
                 navigationPending = !pageDataUpdated;
                 postLifecycleInvalidated();
+                postLifecycleDiagnostic('NAV_INVALIDATE', {
+                    eventSource: pageDataUpdated ? 'yt-page-data-updated' : 'yt-navigate-finish',
+                    abortIssued: false
+                });
             }
             pageKey = revisionState?.key || nextPageKey;
             readAttemptedRevision = -1;
@@ -115,10 +138,21 @@
         if (pageDataUpdated) navigationPending = false;
         const continuation = readContinuation();
         const context = readInternalApiContext();
+        const watchRoot = document.querySelector('ytd-watch-flexy');
+        const currentVideo = watchRoot?.querySelector('#movie_player video.html5-main-video, #movie_player video') || null;
+        const watchRootChanged = lastEstablishedWatchRoot !== null && watchRoot !== lastEstablishedWatchRoot;
+        const videoElementChanged = lastEstablishedVideo !== null && currentVideo !== lastEstablishedVideo;
+        lastEstablishedWatchRoot = watchRoot;
+        lastEstablishedVideo = currentVideo;
         pageState = {
             continuation: typeof continuation === 'string' ? continuation : '',
             context
         };
+        postLifecycleDiagnostic('NEW_PAGE_STATE', {
+            eventSource: pageDataUpdated ? 'yt-page-data-updated' : 'request',
+            watchRootChanged,
+            videoElementChanged
+        });
         window.postMessage({
             source: 'liveflow-page-state',
             type: RESPONSE_TYPE,
@@ -254,6 +288,7 @@
         const lifecycleGeneration = pageLifecycleGeneration;
         const context = pageState.context;
         let continuation = pageState.continuation;
+        postLifecycleDiagnostic('READ_START', { readGeneration: generation });
 
         while (generation === currentLoopGeneration && revision === pageRevision &&
             lifecycleGeneration === pageLifecycleGeneration && !navigationPending && continuation) {
@@ -261,6 +296,10 @@
             const abortController = new AbortController();
             activeAbortController = abortController;
             readRequestInFlight = true;
+            postLifecycleDiagnostic('READ_REQUEST_BEGIN', {
+                readGeneration: generation,
+                requestAfterInvalidation: lifecycleGeneration !== pageLifecycleGeneration || navigationPending
+            });
             let result;
             try {
                 result = await performRead(continuation, context, readCount, revision, generation, abortController);
@@ -268,14 +307,26 @@
                 readRequestInFlight = false;
             }
             if (activeAbortController === abortController) activeAbortController = null;
-            if (!core.canScheduleNextRead({
+            postLifecycleDiagnostic('READ_RESPONSE_RECEIVED', {
+                readGeneration: generation,
+                responseAfterInvalidation: lifecycleGeneration !== pageLifecycleGeneration
+            });
+            const canContinue = core.canScheduleNextRead({
                 generation,
                 currentGeneration: currentLoopGeneration,
                 revision,
                 currentRevision: pageRevision,
                 aborted: abortController.signal.aborted,
                 validationOk: Boolean(result?.ok)
-            })) break;
+            });
+            if (!canContinue) {
+                postLifecycleDiagnostic('READ_STOP', {
+                    readGeneration: generation,
+                    aborted: abortController.signal.aborted,
+                    responseAfterInvalidation: lifecycleGeneration !== pageLifecycleGeneration
+                });
+                break;
+            }
 
             postReadResult(result, lifecycleGeneration);
             const continuationInfo = result.continuationInfo;
@@ -311,7 +362,7 @@
     });
 
     window.addEventListener('yt-navigate-finish', () => respond());
-    window.addEventListener('yt-navigate-start', invalidatePageLifecycle);
+    window.addEventListener('yt-navigate-start', () => invalidatePageLifecycle('yt-navigate-start'));
     window.addEventListener('yt-page-data-updated', () => respond({ pageDataUpdated: true }));
     window.addEventListener('pagehide', stopReadLoop);
     window.addEventListener('visibilitychange', () => {

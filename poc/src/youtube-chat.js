@@ -6,6 +6,7 @@
     const READ_RESPONSE_TYPE = 'LIVEFLOW_CHAT_READ_ONCE_RESULT';
     const STOP_READ_LOOP_TYPE = 'LIVEFLOW_STOP_CHAT_READ_LOOP';
     const NAVIGATION_INVALIDATED_TYPE = 'LIVEFLOW_PAGE_LIFECYCLE_INVALIDATED';
+    const LIFECYCLE_DIAGNOSTIC_TYPE = 'LIVEFLOW_READ_LIFECYCLE_DIAGNOSTIC';
     const MAX_MESSAGES = 500;
     const MANAGEMENT_BAR_ID = 'liveflow-management-bar';
     const MANAGEMENT_STYLE_ID = 'liveflow-management-bar-style';
@@ -884,6 +885,14 @@
         logInfo(`Page lifecycle invalidated: revision=${event.data.pageRevision}, generation=${event.data.pageLifecycleGeneration}`);
     }
 
+    function handleReadLifecycleDiagnostic(event) {
+        if (event.source !== window || event.origin !== window.location.origin) return;
+        if (event.data?.source !== 'liveflow-page-state' || event.data.type !== LIFECYCLE_DIAGNOSTIC_TYPE) return;
+        const allowedEvents = new Set(['NAV_INVALIDATE', 'NEW_PAGE_STATE', 'READ_START', 'READ_REQUEST_BEGIN', 'READ_RESPONSE_RECEIVED', 'READ_STOP']);
+        if (!allowedEvents.has(event.data.eventName)) return;
+        logInfo(`READ lifecycle: event=${event.data.eventName}, pageRevision=${event.data.pageRevision}, pageGeneration=${event.data.pageLifecycleGeneration}, readGeneration=${event.data.readGeneration}, active=${event.data.readActive}, inFlight=${event.data.requestInFlight}, abortIssued=${event.data.abortIssued === true}, aborted=${event.data.aborted === true}, requestAfterInvalidation=${event.data.requestAfterInvalidation === true}, responseAfterInvalidation=${event.data.responseAfterInvalidation === true}, watchRootChanged=${event.data.watchRootChanged === true}, videoElementChanged=${event.data.videoElementChanged === true}`);
+    }
+
     function handleGeometryChange() {
         if (geometryChangeQueued) return;
         geometryChangeQueued = true;
@@ -897,6 +906,7 @@
     window.addEventListener('message', handleInitialContinuation);
     window.addEventListener('message', handleReadResult);
     window.addEventListener('message', handlePageLifecycleInvalidated);
+    window.addEventListener('message', handleReadLifecycleDiagnostic);
     window.addEventListener('yt-navigate-start', handleNavigationStart);
     window.addEventListener('yt-navigate-finish', detectPage);
     window.addEventListener('yt-page-data-updated', handleNavigation);

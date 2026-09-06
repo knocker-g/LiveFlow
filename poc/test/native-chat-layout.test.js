@@ -69,10 +69,68 @@ test('management-area reservation reduces only the available Chat height', () =>
     assert.equal(layout.maxChatHeightPx, 440);
 });
 
+test('management height is reserved exactly once when Chat top already includes the in-flow bar', () => {
+    const layout = calculateNativeChatLayout({
+        viewportWidth: 400,
+        viewportHeight: 900,
+        chatTop: 448,
+        managementReservedHeight: 48,
+        managementAlreadyIncludedInChatTop: true
+    });
+    assert.equal(layout.active, true);
+    assert.equal(layout.maxChatHeightPx, 440);
+});
+
+test('transient visual viewport offsets cannot produce an extreme Chat height', () => {
+    const layout = calculateNativeChatLayout({
+        viewportWidth: 400,
+        viewportHeight: 480,
+        viewportOffsetTop: 500,
+        chatTop: 400
+    });
+    assert.equal(layout.active, true);
+    assert.equal(layout.maxChatHeightPx, 468);
+});
+
+test('keyboard shrink and close restore derive fresh heights from each visual viewport', () => {
+    const keyboardOpen = calculateNativeChatLayout({
+        viewportWidth: 412,
+        viewportHeight: 480,
+        viewportOffsetTop: 120,
+        chatTop: 300,
+        managementReservedHeight: 52,
+        managementAlreadyIncludedInChatTop: true
+    });
+    const keyboardClosed = calculateNativeChatLayout({
+        viewportWidth: 412,
+        viewportHeight: 900,
+        viewportOffsetTop: 0,
+        chatTop: 420,
+        managementReservedHeight: 52,
+        managementAlreadyIncludedInChatTop: true
+    });
+    assert.equal(keyboardOpen.maxChatHeightPx, 288);
+    assert.equal(keyboardClosed.maxChatHeightPx, 468);
+});
+
+test('portrait and landscape calculations never reuse prior geometry', () => {
+    const portrait = calculateNativeChatLayout({ viewportWidth: 412, viewportHeight: 900, chatTop: 420 });
+    const landscape = calculateNativeChatLayout({ viewportWidth: 780, viewportHeight: 412, chatTop: 190 });
+    const portraitAgain = calculateNativeChatLayout({ viewportWidth: 412, viewportHeight: 900, chatTop: 420 });
+    assert.equal(portrait.maxChatHeightPx, 468);
+    assert.equal(landscape.maxChatHeightPx, 210);
+    assert.deepEqual(portraitAgain, portrait);
+});
+
 test('runtime prevents duplicate installation and observer creation and cleans up SPA state', () => {
     const source = fs.readFileSync(path.join(__dirname, '../src/native-chat-layout.js'), 'utf8');
     assert.match(source, /if \(window\[INSTALLATION_KEY\]\) return;/);
-    assert.match(source, /if \(observer \|\| destroyed \|\| !isPcWatchPage\(\)\) return;/);
+    assert.match(source, /if \(observer\?\.__liveflowRoot === root\) return;/);
+    assert.match(source, /nodeAffectsLayout/);
+    assert.match(source, /addedNodes, \.\.\.mutation\.removedNodes/);
+    assert.match(source, /managementAlreadyIncludedInChatTop: Boolean/);
+    assert.match(source, /if \(activeChat && activeChat !== chat\) clearActiveLayout\(\)/);
+    assert.doesNotMatch(source, /if \(observer\) \{\s*observer\.disconnect\(\);\s*observer = null;\s*\}/);
     assert.match(source, /observer\.disconnect\(\)/);
     assert.match(source, /addEventListener\('yt-navigate-start', handleNavigationStart\)/);
     assert.match(source, /addEventListener\('yt-navigate-finish', handleNavigationFinish\)/);

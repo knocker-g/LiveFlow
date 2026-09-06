@@ -59,8 +59,8 @@ test('READ loop does not use an interval or permit a duplicate active loop', () 
 test('navigation and pagehide invalidate or abort stale READ work', () => {
     assert.match(pageStateSource, /if \(revisionState\?\.changed[^]*?stopReadLoop\(\)/);
     assert.match(pageStateSource, /activeAbortController\.abort\(\)/);
-    assert.match(pageStateSource, /function invalidatePageLifecycle\(\)[^]*?stopReadLoop\(\)/);
-    assert.match(pageStateSource, /addEventListener\('yt-navigate-start', invalidatePageLifecycle\)/);
+    assert.match(pageStateSource, /function invalidatePageLifecycle\(eventSource = 'yt-navigate-start'\)[^]*?stopReadLoop\(\)/);
+    assert.match(pageStateSource, /addEventListener\('yt-navigate-start', \(\) => invalidatePageLifecycle\('yt-navigate-start'\)\)/);
     assert.match(pageStateSource, /addEventListener\('pagehide', stopReadLoop\)/);
     assert.match(pageStateSource, /addEventListener\('visibilitychange'/);
     assert.match(pageStateSource, /if \(document\.hidden\) stopReadLoop\(\)/);
@@ -74,6 +74,17 @@ test('SPA lifecycle prevents delayed old-page requests and responses from restar
     assert.match(pageStateSource, /lifecycleGeneration === pageLifecycleGeneration && !navigationPending/);
     assert.match(pageStateSource, /postReadResult\(result, lifecycleGeneration\)/);
     assert.match(contentSource, /event\.data\.pageLifecycleGeneration !== currentPageLifecycleGeneration/);
+});
+
+test('safe lifecycle diagnostics distinguish abort, stale response, and new generation without page values', () => {
+    assert.match(pageStateSource, /'NAV_INVALIDATE'/);
+    assert.match(pageStateSource, /'NEW_PAGE_STATE'/);
+    assert.match(pageStateSource, /'READ_START'/);
+    assert.match(pageStateSource, /'READ_REQUEST_BEGIN'/);
+    assert.match(pageStateSource, /'READ_RESPONSE_RECEIVED'/);
+    assert.match(pageStateSource, /'READ_STOP'/);
+    assert.match(contentSource, /responseAfterInvalidation=\$\{event\.data\.responseAfterInvalidation === true\}/);
+    assert.doesNotMatch(contentSource, /READ lifecycle:[^\r\n]*(?:continuation|visitorData|message|videoId)/i);
 });
 
 test('new page bootstrap is not established before YouTube page data is updated', () => {
@@ -128,9 +139,10 @@ test('formal runtime has no proxy, restriction-bypass, or external telemetry pat
     assert.doesNotMatch(runtimeSource, /https?:\/\/(?!www\.youtube\.com)/i);
 });
 
-test('Native Chat layout implementation remains unchanged by the renderer feature', () => {
+test('Native Chat layout remains DOM-only and does not affect READ or browser privileges', () => {
     const source = ['native-chat-layout-core.js', 'native-chat-layout.js']
         .map((name) => fs.readFileSync(path.join(sourceRoot, name), 'utf8').replace(/\r\n/g, '\n'))
         .join('\n---\n');
-    assert.equal(crypto.createHash('sha256').update(source).digest('hex'), '09256c9778c194bb0dc2fe6b47b1306c5ff9171a120ac4859a510470c565b9cf');
+    assert.doesNotMatch(source, /fetch\s*\(|XMLHttpRequest|chrome\.|credentials|Authorization|Cookie/i);
+    assert.doesNotMatch(source, /contentDocument|contentWindow|setInterval\s*\(/);
 });
