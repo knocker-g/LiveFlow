@@ -10,7 +10,6 @@
     const MAX_MESSAGES = 500;
     const MANAGEMENT_BAR_ID = 'liveflow-management-bar';
     const MANAGEMENT_STYLE_ID = 'liveflow-management-bar-style';
-    const MANAGEMENT_HEIGHT_PROPERTY = '--liveflow-management-height';
     const DISPLAY_LINK_SETTINGS = Object.freeze({
         autoEnableLiveFlowWhenNativeChatClosed: true,
         autoOpenNativeChatWhenLiveFlowDisabled: true
@@ -396,12 +395,6 @@
         (document.head || document.documentElement).appendChild(style);
     }
 
-    function updateManagementHeight() {
-        const height = managementBar?.isConnected ? managementBar.getBoundingClientRect().height : 0;
-        const safeHeight = Number.isFinite(height) && height > 0 ? Math.ceil(height) : 0;
-        document.documentElement.style.setProperty(MANAGEMENT_HEIGHT_PROPERTY, `${safeHeight}px`);
-    }
-
     function updateManagementBar() {
         if (!managementBar) return;
         const view = overlayCore.getManagementBarViewModel({ userEnabled, readState: readIndicatorState });
@@ -418,7 +411,6 @@
         managementToggleButton = null;
         managementToggleLabel = null;
         managementReadIndicator = null;
-        document.documentElement.style.setProperty(MANAGEMENT_HEIGHT_PROPERTY, '0px');
     }
 
     function getManagementBarPlacement(watchRoot, media) {
@@ -454,7 +446,6 @@
         if (managementBar?.isConnected && watchRoot.contains(managementBar) &&
             managementBar.parentElement === placement.parent && managementBar.nextSibling === placement.before) {
             updateManagementBar();
-            updateManagementHeight();
             return true;
         }
         cleanupManagementBar();
@@ -497,7 +488,6 @@
         managementToggleLabel = toggleLabel;
         managementReadIndicator = indicator;
         updateManagementBar();
-        updateManagementHeight();
         return true;
     }
 

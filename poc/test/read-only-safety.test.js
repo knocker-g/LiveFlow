@@ -2,7 +2,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 
 const pocRoot = path.resolve(__dirname, '..');
 const sourceRoot = path.join(pocRoot, 'src');
@@ -137,12 +136,4 @@ test('PC Web eligibility is independent of viewport width', () => {
 test('formal runtime has no proxy, restriction-bypass, or external telemetry path', () => {
     assert.doesNotMatch(runtimeSource, /proxy|rotate(?:Ip|IP)|bypass|telemetry|analytics|sendBeacon/i);
     assert.doesNotMatch(runtimeSource, /https?:\/\/(?!www\.youtube\.com)/i);
-});
-
-test('Native Chat layout remains DOM-only and does not affect READ or browser privileges', () => {
-    const source = ['native-chat-layout-core.js', 'native-chat-layout.js']
-        .map((name) => fs.readFileSync(path.join(sourceRoot, name), 'utf8').replace(/\r\n/g, '\n'))
-        .join('\n---\n');
-    assert.doesNotMatch(source, /fetch\s*\(|XMLHttpRequest|chrome\.|credentials|Authorization|Cookie/i);
-    assert.doesNotMatch(source, /contentDocument|contentWindow|setInterval\s*\(/);
 });

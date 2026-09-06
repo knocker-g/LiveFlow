@@ -610,7 +610,6 @@ test('management controls toggle future rendering, omit close, and keep gear as 
 test('management bar cleanup and reattach follow SPA lifecycle and exclude MiniPlayer', () => {
     assert.match(runtimeSource, /function handleNavigationStart\(\)[^]*?cleanupManagementBar\(\)/);
     assert.match(runtimeSource, /function detectPage\(\)[^]*?attachManagementBar\(\)/);
-    assert.match(runtimeSource, /function cleanupManagementBar\(\)[^]*?MANAGEMENT_HEIGHT_PROPERTY, '0px'/);
     assert.match(runtimeSource, /player\.closest\(PLAYER_SELECTORS\.miniPlayerAncestor\)/);
 });
 
