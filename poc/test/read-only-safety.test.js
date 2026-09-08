@@ -60,7 +60,7 @@ test('navigation and pagehide invalidate or abort stale READ work', () => {
     assert.match(pageStateSource, /activeAbortController\.abort\(\)/);
     assert.match(pageStateSource, /function invalidatePageLifecycle\(eventSource = 'yt-navigate-start'\)[^]*?stopReadLoop\(\)/);
     assert.match(pageStateSource, /addEventListener\('yt-navigate-start', \(\) => invalidatePageLifecycle\('yt-navigate-start'\)\)/);
-    assert.match(pageStateSource, /addEventListener\('pagehide', stopReadLoop\)/);
+    assert.match(pageStateSource, /addEventListener\('pagehide', \(\) => \{[^]*?disconnectWatchRootObserver\(\);[^]*?stopReadLoop\(\);/);
     assert.match(pageStateSource, /addEventListener\('visibilitychange'/);
     assert.match(pageStateSource, /if \(document\.hidden\) stopReadLoop\(\)/);
     assert.match(contentSource, /addEventListener\('yt-navigate-finish', detectPage\)/);
@@ -87,7 +87,8 @@ test('safe lifecycle diagnostics distinguish abort, stale response, and new gene
     assert.match(contentSource, /pageTargetChanged=\$\{event\.data\.pageTargetChanged === true\}/);
     assert.match(contentSource, /bootstrapTargetMatched=\$\{event\.data\.bootstrapTargetMatched === true\}/);
     assert.match(contentSource, /responseAfterInvalidation=\$\{event\.data\.responseAfterInvalidation === true\}/);
-    assert.doesNotMatch(contentSource, /READ lifecycle:[^\r\n]*(?:continuation|visitorData|message|videoId|targetIdentity)/i);
+    assert.doesNotMatch(contentSource, /READ lifecycle:[^\r\n]*(?:visitorData|message|videoId|targetIdentity)=/i);
+    assert.doesNotMatch(contentSource, /READ lifecycle:[^\r\n]*continuation=\$\{/i);
 });
 
 test('new page bootstrap is not established before YouTube page data is updated', () => {
@@ -98,6 +99,7 @@ test('new page bootstrap is not established before YouTube page data is updated'
     assert.match(pageStateSource, /canEstablishPageLifecycle/);
     assert.match(pageStateSource, /pageTargetChanged/);
     assert.match(pageStateSource, /bootstrapTargetMatched: bootstrapTarget\.matched/);
+    assert.match(pageStateSource, /navigationTargetMatched/);
     assert.match(pageStateSource, /if \(!establishment\.ok\)[^]*?return;/);
     assert.match(pageStateSource, /navigationPending = false;/);
     assert.match(pageStateSource, /addEventListener\('yt-page-data-updated', \(\) => respond\(\{ pageDataUpdated: true, eventSource: 'yt-page-data-updated' \}\)\)/);
@@ -106,8 +108,9 @@ test('new page bootstrap is not established before YouTube page data is updated'
 test('completed SPA state reevaluates once through existing lifecycle events without polling', () => {
     assert.match(pageStateSource, /let navigationPageDataUpdated = false;/);
     assert.match(pageStateSource, /if \(pageDataUpdated\) navigationPageDataUpdated = true;/);
-    assert.match(pageStateSource, /navigationFinished && navigationPageDataUpdated/);
-    assert.match(pageStateSource, /addEventListener\('yt-navigate-finish', \(\) => respond\(\{ navigationFinished: true, eventSource: 'yt-navigate-finish' \}\)\)/);
+    assert.match(pageStateSource, /navigationCompletionTargetIdentity === targetIdentity/);
+    assert.match(runtimeSource, /ownershipMutation === true && pageDataUpdatedSeen === true/);
+    assert.match(pageStateSource, /addEventListener\('yt-navigate-finish', \(event\) => respond\(\{ navigationFinished: true, eventSource: 'yt-navigate-finish', event \}\)\)/);
     assert.match(contentSource, /pageDataSeen=\$\{event\.data\.navigationPageDataUpdated === true\}/);
     assert.match(contentSource, /canReevaluate=\$\{event\.data\.canReevaluate === true\}/);
     assert.doesNotMatch(pageStateSource, /setInterval\s*\(|requestAnimationFrame\s*\(/);
@@ -121,10 +124,10 @@ test('duplicate lifecycle signals cannot bypass single-loop start protection', (
 });
 
 test('reused watch DOM cannot establish or start READ with a stale bootstrap target', () => {
-    assert.match(pageStateSource, /const initialData = window\.ytInitialData;/);
-    assert.match(pageStateSource, /readContinuation\(initialData\)/);
-    assert.match(pageStateSource, /readBootstrapTargetEvidence\(initialData, watchRoot\)/);
-    assert.match(pageStateSource, /initialData\?\.currentVideoEndpoint\?\.watchEndpoint\?\.videoId/);
+    assert.match(pageStateSource, /const watchSnapshot = watchRoot\?\.data;/);
+    assert.match(pageStateSource, /readContinuation\(watchSnapshot\)/);
+    assert.match(pageStateSource, /readBootstrapTargetEvidence\(watchSnapshot, watchRoot\)/);
+    assert.match(pageStateSource, /watchSnapshot\?\.currentVideoEndpoint\?\.watchEndpoint\?\.videoId/);
     assert.match(pageStateSource, /window\.ytInitialPlayerResponse\?\.videoDetails\?\.videoId/);
     assert.match(pageStateSource, /watchRoot\?\.getAttribute\?\.\('video-id'\)/);
     assert.match(pageStateSource, /bootstrapTargetEvidence\.authoritative/);
@@ -135,11 +138,37 @@ test('reused watch DOM cannot establish or start READ with a stale bootstrap tar
 });
 
 test('fresh authoritative bootstrap can establish B while supporting SPA candidates remain stale', () => {
-    assert.match(pageStateSource, /authoritative:\s*initialData/);
+    assert.match(pageStateSource, /authoritative:\s*watchSnapshot/);
     assert.match(pageStateSource, /supporting:\s*\[/);
     assert.match(contentSource, /supportingCandidates=\$\{Number\.isInteger/);
     assert.match(contentSource, /supportingMatches=\$\{Number\.isInteger/);
     assert.doesNotMatch(pageStateSource, /candidates\.every/);
+});
+
+test('watch-root mutation is a scoped reevaluation signal, never bootstrap authority', () => {
+    assert.match(pageStateSource, /new MutationObserver/);
+    assert.match(pageStateSource, /watchRootObserver\.observe\(watchRoot, \{/);
+    assert.match(pageStateSource, /subtree:\s*true/);
+    assert.match(pageStateSource, /childList:\s*true/);
+    assert.match(pageStateSource, /attributeFilter:\s*\['video-id', 'hidden'\]/);
+    assert.match(pageStateSource, /eventSource:\s*'watch-root-mutation'/);
+    assert.match(pageStateSource, /ownershipSource:\s*'WATCH_ROOT_SNAPSHOT'/);
+    assert.doesNotMatch(pageStateSource, /document\.documentElement[^]*?MutationObserver/);
+});
+
+test('observer lifecycle is generation-bound, deduplicated, rebound, and cleaned up', () => {
+    assert.match(pageStateSource, /observedGeneration !== pageLifecycleGeneration/);
+    assert.match(pageStateSource, /ownershipReevaluationQueued/);
+    assert.match(pageStateSource, /bindWatchRootObserver\(watchRoot\)/);
+    assert.match(pageStateSource, /disconnectWatchRootObserver\(\)/);
+    assert.match(pageStateSource, /addEventListener\('pagehide', \(\) => \{[^]*?disconnectWatchRootObserver\(\)/);
+});
+
+test('SPA ownership requires completion target, page data, and one watch-root snapshot', () => {
+    assert.match(pageStateSource, /event\?\.detail\?\.response\?\.playerResponse\?\.videoDetails\?\.videoId/);
+    assert.match(pageStateSource, /navigationCompletionTargetIdentity === targetIdentity/);
+    assert.match(pageStateSource, /pageDataUpdated:\s*!navigationPending \|\| navigationPageDataUpdated/);
+    assert.match(pageStateSource, /ownershipSameSnapshot:\s*bootstrapTarget\.matched && Boolean\(continuation\)/);
 });
 
 test('page target values remain internal and are not sent through the bridge', () => {

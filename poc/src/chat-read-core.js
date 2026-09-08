@@ -275,18 +275,20 @@
         };
     }
 
-    function canEstablishPageLifecycle({ navigationPending, pageDataUpdated, pageTargetChanged, bootstrapTargetMatched, pageStateUsable }) {
+    function canEstablishPageLifecycle({ navigationPending, pageDataUpdated, navigationTargetMatched, pageTargetChanged, bootstrapTargetMatched, pageStateUsable }) {
         if (navigationPending === true && pageDataUpdated !== true) return { ok: false, reason: 'NAVIGATION_PENDING' };
+        if (navigationPending === true && navigationTargetMatched !== true) return { ok: false, reason: 'NAVIGATION_TARGET_MISMATCH' };
         if (navigationPending === true && pageTargetChanged !== true) return { ok: false, reason: 'TARGET_UNCHANGED' };
         if (bootstrapTargetMatched !== true) return { ok: false, reason: 'BOOTSTRAP_TARGET_MISMATCH' };
         if (pageStateUsable !== true) return { ok: false, reason: 'PAGE_STATE_STALE' };
         return { ok: true, reason: 'NONE' };
     }
 
-    function canReevaluatePageLifecycle({ navigationPending, pageDataUpdatedSeen, pageDataUpdated, navigationFinished }) {
+    function canReevaluatePageLifecycle({ navigationPending, pageDataUpdatedSeen, pageDataUpdated, navigationFinished, ownershipMutation }) {
         if (navigationPending !== true) return true;
         if (pageDataUpdated === true) return true;
-        return navigationFinished === true && pageDataUpdatedSeen === true;
+        if (navigationFinished === true && pageDataUpdatedSeen === true) return true;
+        return ownershipMutation === true && pageDataUpdatedSeen === true;
     }
 
     const api = {

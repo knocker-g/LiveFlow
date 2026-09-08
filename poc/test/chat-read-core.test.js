@@ -213,7 +213,7 @@ test('watch target identity distinguishes watch and live targets without exposin
     assert.equal(extractWatchTargetIdentity('not a target'), '');
 });
 
-test('bootstrap ownership requires the authoritative ytInitialData target to match', () => {
+test('bootstrap ownership requires the authoritative snapshot target to match', () => {
     assert.deepEqual(evaluateBootstrapTarget('target-b', 'target-b', ['target-a', 'target-b']), {
         available: true,
         matched: true,
@@ -254,12 +254,14 @@ test('SPA lifecycle fails closed until target change, fresh page data, and match
     const valid = {
         navigationPending: true,
         pageDataUpdated: true,
+        navigationTargetMatched: true,
         pageTargetChanged: true,
         bootstrapTargetMatched: true,
         pageStateUsable: true
     };
     assert.deepEqual(canEstablishPageLifecycle(valid), { ok: true, reason: 'NONE' });
     assert.equal(canEstablishPageLifecycle({ ...valid, pageDataUpdated: false }).reason, 'NAVIGATION_PENDING');
+    assert.equal(canEstablishPageLifecycle({ ...valid, navigationTargetMatched: false }).reason, 'NAVIGATION_TARGET_MISMATCH');
     assert.equal(canEstablishPageLifecycle({ ...valid, pageTargetChanged: false }).reason, 'TARGET_UNCHANGED');
     assert.equal(canEstablishPageLifecycle({ ...valid, bootstrapTargetMatched: false }).reason, 'BOOTSTRAP_TARGET_MISMATCH');
     assert.equal(canEstablishPageLifecycle({ ...valid, pageStateUsable: false }).reason, 'PAGE_STATE_STALE');
@@ -271,7 +273,29 @@ test('pending SPA lifecycle reevaluates only on page-data or a later navigation-
     assert.equal(canReevaluatePageLifecycle({ ...pending, navigationFinished: true }), false);
     assert.equal(canReevaluatePageLifecycle({ ...pending, pageDataUpdated: true }), true);
     assert.equal(canReevaluatePageLifecycle({ ...pending, pageDataUpdatedSeen: true, navigationFinished: true }), true);
+    assert.equal(canReevaluatePageLifecycle({ ...pending, pageDataUpdatedSeen: true, ownershipMutation: true }), true);
+    assert.equal(canReevaluatePageLifecycle({ ...pending, ownershipMutation: true }), false);
     assert.equal(canReevaluatePageLifecycle({ ...pending, navigationPending: false }), true);
+});
+
+test('same-snapshot ownership accepts only matching target with a continuation', () => {
+    const lifecycle = {
+        navigationPending: true,
+        pageDataUpdated: true,
+        navigationTargetMatched: true,
+        pageTargetChanged: true,
+        bootstrapTargetMatched: true,
+        pageStateUsable: true
+    };
+    assert.equal(canEstablishPageLifecycle(lifecycle).ok, true);
+    assert.equal(canEstablishPageLifecycle({ ...lifecycle, bootstrapTargetMatched: false }).reason, 'BOOTSTRAP_TARGET_MISMATCH');
+    assert.equal(canEstablishPageLifecycle({ ...lifecycle, pageStateUsable: false }).reason, 'PAGE_STATE_STALE');
+    assert.equal(canEstablishPageLifecycle({
+        ...lifecycle,
+        navigationPending: false,
+        pageDataUpdated: false,
+        navigationTargetMatched: false
+    }).ok, true);
 });
 
 test('page-data and navigation-finish ordering both provide an event-driven second evaluation', () => {

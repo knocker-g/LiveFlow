@@ -19,11 +19,15 @@
     let pageLifecycleGeneration = 0;
     let navigationPending = false;
     let navigationPageDataUpdated = false;
+    let navigationCompletionTargetIdentity = '';
     let deferredReadStartGeneration = null;
     let lastEstablishedWatchRoot = null;
     let lastEstablishedVideo = null;
     let establishedTargetIdentity = '';
     let invalidatedTargetIdentity = '';
+    let observedWatchRoot = null;
+    let watchRootObserver = null;
+    let ownershipReevaluationQueued = false;
 
     function getYtcfgValue(key) {
         try {
@@ -89,14 +93,56 @@
         }, window.location.origin);
     }
 
-    function readBootstrapTargetEvidence(initialData, watchRoot) {
+    function readBootstrapTargetEvidence(watchSnapshot, watchRoot) {
         return {
-            authoritative: initialData?.currentVideoEndpoint?.watchEndpoint?.videoId,
+            authoritative: watchSnapshot?.currentVideoEndpoint?.watchEndpoint?.videoId,
             supporting: [
                 window.ytInitialPlayerResponse?.videoDetails?.videoId,
                 watchRoot?.getAttribute?.('video-id')
             ]
         };
+    }
+
+    function readNavigationCompletionTarget(event) {
+        const value = event?.detail?.response?.playerResponse?.videoDetails?.videoId;
+        return typeof value === 'string' ? value : '';
+    }
+
+    function disconnectWatchRootObserver() {
+        watchRootObserver?.disconnect();
+        watchRootObserver = null;
+        observedWatchRoot = null;
+        ownershipReevaluationQueued = false;
+    }
+
+    function bindWatchRootObserver(watchRoot) {
+        if (watchRoot === observedWatchRoot && watchRootObserver) return false;
+        disconnectWatchRootObserver();
+        if (!watchRoot) return false;
+
+        const observedGeneration = pageLifecycleGeneration;
+        observedWatchRoot = watchRoot;
+        watchRootObserver = new MutationObserver(() => {
+            if (!navigationPending || ownershipReevaluationQueued ||
+                observedGeneration !== pageLifecycleGeneration || observedWatchRoot !== watchRoot) return;
+            ownershipReevaluationQueued = true;
+            window.queueMicrotask(() => {
+                ownershipReevaluationQueued = false;
+                if (observedGeneration !== pageLifecycleGeneration || observedWatchRoot !== watchRoot) return;
+                respond({
+                    ownershipMutation: true,
+                    eventSource: 'watch-root-mutation',
+                    expectedLifecycleGeneration: observedGeneration
+                });
+            });
+        });
+        watchRootObserver.observe(watchRoot, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: ['video-id', 'hidden']
+        });
+        return true;
     }
 
     function isCurrentPageStateTarget() {
@@ -127,6 +173,8 @@
         pageLifecycleGeneration += 1;
         navigationPending = true;
         navigationPageDataUpdated = false;
+        navigationCompletionTargetIdentity = '';
+        disconnectWatchRootObserver();
         invalidatedTargetIdentity = establishedTargetIdentity;
         readAttemptedRevision = -1;
         readCount = 0;
@@ -135,7 +183,8 @@
         postLifecycleDiagnostic('NAV_INVALIDATE', { eventSource, abortIssued });
     }
 
-    function respond({ pageDataUpdated = false, navigationFinished = false, eventSource = 'request' } = {}) {
+    function respond({ pageDataUpdated = false, navigationFinished = false, ownershipMutation = false, eventSource = 'request', event = null, expectedLifecycleGeneration = null } = {}) {
+        if (expectedLifecycleGeneration !== null && expectedLifecycleGeneration !== pageLifecycleGeneration) return;
         const nextPageKey = `${location.origin}${location.pathname}${location.search}`;
         const hadEstablishedPage = pageKey !== '';
         const revisionState = window.LiveFlowChatReadCore?.getPageRevisionState?.(pageKey, pageRevision, nextPageKey);
@@ -146,6 +195,8 @@
                 pageLifecycleGeneration += 1;
                 navigationPending = true;
                 navigationPageDataUpdated = false;
+                navigationCompletionTargetIdentity = '';
+                disconnectWatchRootObserver();
                 invalidatedTargetIdentity = establishedTargetIdentity;
                 postLifecycleInvalidated();
                 postLifecycleDiagnostic('NAV_INVALIDATE', {
@@ -159,32 +210,40 @@
             pageState = { continuation: '', context: null, targetIdentity: '', bootstrapTargetMatched: false };
         }
         if (pageDataUpdated) navigationPageDataUpdated = true;
+        if (navigationFinished) navigationCompletionTargetIdentity = readNavigationCompletionTarget(event);
+        const watchRoot = document.querySelector('ytd-watch-flexy');
+        const watchRootRebound = bindWatchRootObserver(watchRoot);
         const canReevaluate = window.LiveFlowChatReadCore?.canReevaluatePageLifecycle?.({
             navigationPending,
             pageDataUpdatedSeen: navigationPageDataUpdated,
             pageDataUpdated,
-            navigationFinished
+            navigationFinished,
+            ownershipMutation
         }) === true;
         if (!canReevaluate) return;
-        const initialData = window.ytInitialData;
-        const continuation = readContinuation(initialData);
+        const watchSnapshot = watchRoot?.data;
+        const continuation = readContinuation(watchSnapshot);
         const context = readInternalApiContext();
-        const watchRoot = document.querySelector('ytd-watch-flexy');
         const currentVideo = watchRoot?.querySelector('#movie_player video.html5-main-video, #movie_player video') || null;
         const watchRootChanged = lastEstablishedWatchRoot !== null && watchRoot !== lastEstablishedWatchRoot;
         const videoElementChanged = lastEstablishedVideo !== null && currentVideo !== lastEstablishedVideo;
         const core = window.LiveFlowChatReadCore;
         const targetIdentity = core?.extractWatchTargetIdentity?.(window.location.href) || '';
-        const bootstrapTargetEvidence = readBootstrapTargetEvidence(initialData, watchRoot);
+        const bootstrapTargetEvidence = readBootstrapTargetEvidence(watchSnapshot, watchRoot);
         const bootstrapTarget = core?.evaluateBootstrapTarget?.(
             targetIdentity,
             bootstrapTargetEvidence.authoritative,
             bootstrapTargetEvidence.supporting
         ) || { available: false, matched: false, supportingCandidateCount: 0, supportingMatchCount: 0 };
         const pageTargetChanged = invalidatedTargetIdentity.length === 0 || targetIdentity !== invalidatedTargetIdentity;
+        const navigationTargetMatched = !navigationPending || (
+            navigationCompletionTargetIdentity.length > 0 &&
+            navigationCompletionTargetIdentity === targetIdentity
+        );
         const establishment = core?.canEstablishPageLifecycle?.({
             navigationPending,
-            pageDataUpdated: pageDataUpdated || (navigationFinished && navigationPageDataUpdated),
+            pageDataUpdated: !navigationPending || navigationPageDataUpdated,
+            navigationTargetMatched,
             pageTargetChanged,
             bootstrapTargetMatched: bootstrapTarget.matched,
             pageStateUsable: Boolean(continuation && context && watchRoot && currentVideo)
@@ -195,8 +254,14 @@
                 lifecycleSignal: eventSource,
                 navigationPageDataUpdated,
                 canReevaluate,
+                navigationTargetMatched,
                 targetKnown: targetIdentity.length > 0,
                 bootstrapKnown: bootstrapTarget.available,
+                ownershipSource: 'WATCH_ROOT_SNAPSHOT',
+                ownershipContinuationAvailable: Boolean(continuation),
+                ownershipSameSnapshot: bootstrapTarget.matched && Boolean(continuation),
+                watchRootObserved: Boolean(watchRootObserver),
+                watchRootRebound,
                 pageTargetChanged,
                 bootstrapTargetMatched: bootstrapTarget.matched,
                 supportingCandidateCount: bootstrapTarget.supportingCandidateCount,
@@ -208,6 +273,7 @@
         }
         navigationPending = false;
         navigationPageDataUpdated = false;
+        navigationCompletionTargetIdentity = '';
         establishedTargetIdentity = targetIdentity;
         invalidatedTargetIdentity = '';
         lastEstablishedWatchRoot = watchRoot;
@@ -220,10 +286,16 @@
         };
         postLifecycleDiagnostic('NEW_PAGE_STATE', {
             eventSource,
-            navigationPageDataUpdated: pageDataUpdated || navigationFinished,
+            navigationPageDataUpdated: true,
             canReevaluate,
+            navigationTargetMatched,
             targetKnown: true,
             bootstrapKnown: true,
+            ownershipSource: 'WATCH_ROOT_SNAPSHOT',
+            ownershipContinuationAvailable: true,
+            ownershipSameSnapshot: true,
+            watchRootObserved: Boolean(watchRootObserver),
+            watchRootRebound,
             pageTargetChanged,
             bootstrapTargetMatched: true,
             supportingCandidateCount: bootstrapTarget.supportingCandidateCount,
@@ -457,10 +529,13 @@
         }
     });
 
-    window.addEventListener('yt-navigate-finish', () => respond({ navigationFinished: true, eventSource: 'yt-navigate-finish' }));
+    window.addEventListener('yt-navigate-finish', (event) => respond({ navigationFinished: true, eventSource: 'yt-navigate-finish', event }));
     window.addEventListener('yt-navigate-start', () => invalidatePageLifecycle('yt-navigate-start'));
     window.addEventListener('yt-page-data-updated', () => respond({ pageDataUpdated: true, eventSource: 'yt-page-data-updated' }));
-    window.addEventListener('pagehide', stopReadLoop);
+    window.addEventListener('pagehide', () => {
+        disconnectWatchRootObserver();
+        stopReadLoop();
+    });
     window.addEventListener('visibilitychange', () => {
         if (document.hidden) stopReadLoop();
     });
