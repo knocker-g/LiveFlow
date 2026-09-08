@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { MAX_VISIBLE_MESSAGES, mergeMessagesById, getVisibleMessages, formatMessageText } = require('../src/overlay-core.js');
 
-const { ChatMessage, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs, validateLiveChatReadResponse, isSuccessfulHttpStatus, canStartReadLoop, canScheduleNextRead, LIVEFLOW_MIN_READ_DELAY_MS, LIVEFLOW_MAX_TIMER_DELAY_MS } = require('../src/chat-read-core.js');
+const { ChatMessage, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs, validateLiveChatReadResponse, isSuccessfulHttpStatus, canStartReadLoop, canScheduleNextRead, extractWatchTargetIdentity, evaluateBootstrapTarget, canEstablishPageLifecycle, canReevaluatePageLifecycle, canSignalOwnershipReevaluation, LIVEFLOW_MIN_READ_DELAY_MS, LIVEFLOW_MAX_TIMER_DELAY_MS } = require('../src/chat-read-core.js');
 
 const sampleResponse = {
     continuationContents: {
@@ -204,6 +204,135 @@ test('getPageRevisionState does not change revision for duplicate same-URL event
     assert.deepEqual(getPageRevisionState('watch-a', 3, 'watch-b'), {
         key: 'watch-b', revision: 4, changed: true
     });
+});
+
+test('watch target identity distinguishes watch and live targets without exposing it to diagnostics', () => {
+    assert.equal(extractWatchTargetIdentity('https://www.youtube.com/watch?v=target-a'), 'target-a');
+    assert.equal(extractWatchTargetIdentity('https://www.youtube.com/live/target-b?feature=share'), 'target-b');
+    assert.equal(extractWatchTargetIdentity('https://example.com/watch?v=target-a'), '');
+    assert.equal(extractWatchTargetIdentity('not a target'), '');
+});
+
+test('bootstrap ownership requires the authoritative snapshot target to match', () => {
+    assert.deepEqual(evaluateBootstrapTarget('target-b', 'target-b', ['target-a', 'target-b']), {
+        available: true,
+        matched: true,
+        supportingCandidateCount: 2,
+        supportingMatchCount: 1
+    });
+    assert.deepEqual(evaluateBootstrapTarget('target-b', 'target-a', ['target-b']), {
+        available: true,
+        matched: false,
+        supportingCandidateCount: 1,
+        supportingMatchCount: 1
+    });
+    assert.deepEqual(evaluateBootstrapTarget('target-b', '', ['target-b']), {
+        available: false,
+        matched: false,
+        supportingCandidateCount: 1,
+        supportingMatchCount: 1
+    });
+    assert.deepEqual(evaluateBootstrapTarget('', 'target-b', []), {
+        available: false,
+        matched: false,
+        supportingCandidateCount: 0,
+        supportingMatchCount: 0
+    });
+});
+
+test('stale supporting candidates cannot permanently block an authoritative new-page bootstrap', () => {
+    const transitional = evaluateBootstrapTarget('target-b', 'target-a', ['target-a', 'target-b']);
+    assert.equal(transitional.matched, false);
+
+    const established = evaluateBootstrapTarget('target-b', 'target-b', ['target-a', 'target-b']);
+    assert.equal(established.matched, true);
+    assert.equal(established.supportingCandidateCount, 2);
+    assert.equal(established.supportingMatchCount, 1);
+});
+
+test('SPA lifecycle fails closed until target change, fresh page data, and matching bootstrap are established', () => {
+    const valid = {
+        navigationPending: true,
+        pageDataUpdated: true,
+        navigationTargetMatched: true,
+        pageTargetChanged: true,
+        bootstrapTargetMatched: true,
+        pageStateUsable: true
+    };
+    assert.deepEqual(canEstablishPageLifecycle(valid), { ok: true, reason: 'NONE' });
+    assert.equal(canEstablishPageLifecycle({ ...valid, pageDataUpdated: false }).reason, 'NAVIGATION_PENDING');
+    assert.equal(canEstablishPageLifecycle({ ...valid, navigationTargetMatched: false }).reason, 'NAVIGATION_TARGET_MISMATCH');
+    assert.equal(canEstablishPageLifecycle({ ...valid, pageTargetChanged: false }).reason, 'TARGET_UNCHANGED');
+    assert.equal(canEstablishPageLifecycle({ ...valid, bootstrapTargetMatched: false }).reason, 'BOOTSTRAP_TARGET_MISMATCH');
+    assert.equal(canEstablishPageLifecycle({ ...valid, pageStateUsable: false }).reason, 'PAGE_STATE_STALE');
+});
+
+test('pending SPA lifecycle reevaluates only on page-data or a later navigation-finish signal', () => {
+    const pending = { navigationPending: true, pageDataUpdatedSeen: false, pageDataUpdated: false, navigationFinished: false };
+    assert.equal(canReevaluatePageLifecycle(pending), false);
+    assert.equal(canReevaluatePageLifecycle({ ...pending, navigationFinished: true }), false);
+    assert.equal(canReevaluatePageLifecycle({ ...pending, pageDataUpdated: true }), true);
+    assert.equal(canReevaluatePageLifecycle({ ...pending, pageDataUpdatedSeen: true, navigationFinished: true }), true);
+    assert.equal(canReevaluatePageLifecycle({ ...pending, pageDataUpdatedSeen: true, ownershipMutation: true }), true);
+    assert.equal(canReevaluatePageLifecycle({ ...pending, ownershipMutation: true }), false);
+    assert.equal(canReevaluatePageLifecycle({ ...pending, navigationPending: false }), true);
+});
+
+test('same-snapshot ownership accepts only matching target with a continuation', () => {
+    const lifecycle = {
+        navigationPending: true,
+        pageDataUpdated: true,
+        navigationTargetMatched: true,
+        pageTargetChanged: true,
+        bootstrapTargetMatched: true,
+        pageStateUsable: true
+    };
+    assert.equal(canEstablishPageLifecycle(lifecycle).ok, true);
+    assert.equal(canEstablishPageLifecycle({ ...lifecycle, bootstrapTargetMatched: false }).reason, 'BOOTSTRAP_TARGET_MISMATCH');
+    assert.equal(canEstablishPageLifecycle({ ...lifecycle, pageStateUsable: false }).reason, 'PAGE_STATE_STALE');
+    assert.equal(canEstablishPageLifecycle({
+        ...lifecycle,
+        navigationPending: false,
+        pageDataUpdated: false,
+        navigationTargetMatched: false
+    }).ok, true);
+});
+
+test('page-data and navigation-finish ordering both provide an event-driven second evaluation', () => {
+    const pending = { navigationPending: true, pageDataUpdatedSeen: false, pageDataUpdated: false, navigationFinished: false };
+
+    const pageDataFirst = canReevaluatePageLifecycle({ ...pending, pageDataUpdated: true });
+    const finishSecond = canReevaluatePageLifecycle({ ...pending, pageDataUpdatedSeen: true, navigationFinished: true });
+    assert.equal(pageDataFirst, true);
+    assert.equal(finishSecond, true);
+
+    const finishFirst = canReevaluatePageLifecycle({ ...pending, navigationFinished: true });
+    const pageDataSecond = canReevaluatePageLifecycle({ ...pending, pageDataUpdated: true });
+    assert.equal(finishFirst, false);
+    assert.equal(pageDataSecond, true);
+});
+
+test('ownership mutation reevaluates an unestablished direct load without reopening an established lifecycle', () => {
+    assert.equal(canSignalOwnershipReevaluation({
+        navigationPending: false,
+        pageEstablished: false,
+        pageDataUpdatedSeen: false
+    }), true);
+    assert.equal(canSignalOwnershipReevaluation({
+        navigationPending: false,
+        pageEstablished: true,
+        pageDataUpdatedSeen: false
+    }), false);
+    assert.equal(canSignalOwnershipReevaluation({
+        navigationPending: true,
+        pageEstablished: false,
+        pageDataUpdatedSeen: false
+    }), false);
+    assert.equal(canSignalOwnershipReevaluation({
+        navigationPending: true,
+        pageEstablished: false,
+        pageDataUpdatedSeen: true
+    }), true);
 });
 
 test('canIssueSecondRead requires a successful parsed first response with next continuation', () => {

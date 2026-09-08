@@ -247,6 +247,55 @@
             validationOk === true;
     }
 
+    function extractWatchTargetIdentity(urlValue) {
+        try {
+            const url = new URL(urlValue, 'https://www.youtube.com');
+            if (!/(^|\.)youtube\.com$/i.test(url.hostname)) return '';
+            if (url.pathname === '/watch') return url.searchParams.get('v') || '';
+            const liveMatch = url.pathname.match(/^\/live\/([^/?#]+)/);
+            return liveMatch?.[1] || '';
+        } catch (error) {
+            return '';
+        }
+    }
+
+    function evaluateBootstrapTarget(targetIdentity, authoritativeIdentity, supportingIdentities = []) {
+        const targetKnown = typeof targetIdentity === 'string' && targetIdentity.length > 0;
+        const authoritativeKnown = typeof authoritativeIdentity === 'string' && authoritativeIdentity.length > 0;
+        const supporting = Array.isArray(supportingIdentities)
+            ? supportingIdentities.filter((value) => typeof value === 'string' && value.length > 0)
+            : [];
+        return {
+            available: targetKnown && authoritativeKnown,
+            matched: targetKnown && authoritativeKnown && authoritativeIdentity === targetIdentity,
+            supportingCandidateCount: supporting.length,
+            supportingMatchCount: targetKnown
+                ? supporting.filter((candidate) => candidate === targetIdentity).length
+                : 0
+        };
+    }
+
+    function canEstablishPageLifecycle({ navigationPending, pageDataUpdated, navigationTargetMatched, pageTargetChanged, bootstrapTargetMatched, pageStateUsable }) {
+        if (navigationPending === true && pageDataUpdated !== true) return { ok: false, reason: 'NAVIGATION_PENDING' };
+        if (navigationPending === true && navigationTargetMatched !== true) return { ok: false, reason: 'NAVIGATION_TARGET_MISMATCH' };
+        if (navigationPending === true && pageTargetChanged !== true) return { ok: false, reason: 'TARGET_UNCHANGED' };
+        if (bootstrapTargetMatched !== true) return { ok: false, reason: 'BOOTSTRAP_TARGET_MISMATCH' };
+        if (pageStateUsable !== true) return { ok: false, reason: 'PAGE_STATE_STALE' };
+        return { ok: true, reason: 'NONE' };
+    }
+
+    function canReevaluatePageLifecycle({ navigationPending, pageDataUpdatedSeen, pageDataUpdated, navigationFinished, ownershipMutation }) {
+        if (navigationPending !== true) return true;
+        if (pageDataUpdated === true) return true;
+        if (navigationFinished === true && pageDataUpdatedSeen === true) return true;
+        return ownershipMutation === true && pageDataUpdatedSeen === true;
+    }
+
+    function canSignalOwnershipReevaluation({ navigationPending, pageEstablished, pageDataUpdatedSeen } = {}) {
+        if (navigationPending === true) return pageDataUpdatedSeen === true;
+        return pageEstablished !== true;
+    }
+
     const api = {
         LIVEFLOW_MIN_READ_DELAY_MS,
         LIVEFLOW_MAX_TIMER_DELAY_MS,
@@ -266,7 +315,12 @@
         validateLiveChatReadResponse,
         isSuccessfulHttpStatus,
         canStartReadLoop,
-        canScheduleNextRead
+        canScheduleNextRead,
+        extractWatchTargetIdentity,
+        evaluateBootstrapTarget,
+        canEstablishPageLifecycle,
+        canReevaluatePageLifecycle,
+        canSignalOwnershipReevaluation
     };
 
     if (typeof module !== 'undefined' && module.exports) {

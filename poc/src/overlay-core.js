@@ -15,6 +15,8 @@
     const DANMAKU_MAX_BATCH_SPREAD_MS = 800;
     const DANMAKU_BATCH_STAGGER_MS = 50;
     const DANMAKU_MAX_PENDING_COMMENTS = 40;
+    const DANMAKU_MAX_RENDER_QUEUE = 150;
+    const DANMAKU_ENTRY_CLEAR_FRACTION = 0.25;
 
     function mergeMessagesById(currentMessages, incomingMessages, maxMessages = 500) {
         const messages = Array.isArray(currentMessages) ? currentMessages.slice() : [];
@@ -158,7 +160,43 @@
     }
 
     function isEffectiveDisplayActive({ userEnabled, nativeChatVisible } = {}) {
-        return userEnabled === true && nativeChatVisible === false;
+        return userEnabled === true;
+    }
+
+    function calculateLaneSafeAtMs(previous, next, overlayWidth, nowMs, horizontalGap = DANMAKU_HORIZONTAL_GAP_PX, clearFraction = DANMAKU_ENTRY_CLEAR_FRACTION) {
+        if (!previous) return nowMs;
+        const values = [
+            previous.startTimeMs, previous.startX, previous.commentWidth, previous.speed, previous.endTimeMs,
+            next?.startX, next?.speed, overlayWidth, nowMs, horizontalGap, clearFraction
+        ];
+        if (!values.every((value) => typeof value === 'number' && Number.isFinite(value))) return null;
+        if (previous.commentWidth <= 0 || previous.speed <= 0 || next.speed <= 0 || overlayWidth <= 0 || horizontalGap < 0 || clearFraction <= 0 || clearFraction >= 1) return null;
+        if (nowMs >= previous.endTimeMs) return nowMs;
+
+        const quarterClearRight = overlayWidth * (1 - clearFraction);
+        const entryGapRight = next.startX - horizontalGap;
+        const futureCollisionRight = next.speed > previous.speed
+            ? (next.startX - horizontalGap) * previous.speed / next.speed
+            : Infinity;
+        const requiredPreviousRight = Math.min(quarterClearRight, entryGapRight, futureCollisionRight);
+        const travelPx = Math.max(0, previous.startX + previous.commentWidth - requiredPreviousRight);
+        const safeAtMs = previous.startTimeMs + Math.ceil(travelPx / previous.speed * 1000);
+        return Math.min(previous.endTimeMs, Math.max(nowMs, safeAtMs));
+    }
+
+    function findNextLaneAvailability(laneStates, laneCount, next, overlayWidth, nowMs, horizontalGap = DANMAKU_HORIZONTAL_GAP_PX) {
+        if (!Array.isArray(laneStates) || !Number.isInteger(laneCount) || laneCount <= 0) return { lane: -1, nextSafeAtMs: null };
+        let nextSafeAtMs = null;
+        const limit = Math.min(laneCount, laneStates.length);
+        for (let index = 0; index < limit; index += 1) {
+            const safeAtMs = calculateLaneSafeAtMs(laneStates[index], next, overlayWidth, nowMs, horizontalGap);
+            if (safeAtMs === null) continue;
+            if (safeAtMs <= nowMs && isLaneCollisionSafe(laneStates[index], next, nowMs, horizontalGap)) {
+                return { lane: index, nextSafeAtMs: nowMs };
+            }
+            if (nextSafeAtMs === null || safeAtMs < nextSafeAtMs) nextSafeAtMs = safeAtMs;
+        }
+        return { lane: -1, nextSafeAtMs };
     }
 
     function getDisplayStateTransition(currentState = {}, nextState = {}) {
@@ -169,6 +207,125 @@
         const wasActive = isEffectiveDisplayActive(currentState);
         const effectiveActive = isEffectiveDisplayActive(resolved);
         return { ...resolved, effectiveActive, cleanupRequired: wasActive && !effectiveActive };
+    }
+
+    function reduceDisplayState(currentState = {}, action = {}, settings = {}) {
+        const state = {
+            userEnabled: currentState.userEnabled === true,
+            nativeChatVisible: currentState.nativeChatVisible === true,
+            nativeChatKnown: currentState.nativeChatKnown === true
+        };
+        const result = {
+            ...state,
+            effectiveActive: isEffectiveDisplayActive(state),
+            changed: false,
+            cleanupRequired: false,
+            requestNativeChatOpen: false
+        };
+
+        if (action.type === 'native-chat-visibility' && typeof action.value === 'boolean') {
+            const closedTransition = state.nativeChatKnown && state.nativeChatVisible && !action.value;
+            result.nativeChatVisible = action.value;
+            result.nativeChatKnown = true;
+            if (closedTransition && settings.autoEnableLiveFlowWhenNativeChatClosed === true && !state.userEnabled) {
+                result.userEnabled = true;
+            }
+        } else if (action.type === 'set-user-enabled' && typeof action.value === 'boolean') {
+            result.userEnabled = action.value;
+            result.requestNativeChatOpen = state.userEnabled && !action.value &&
+                state.nativeChatKnown && !state.nativeChatVisible &&
+                settings.autoOpenNativeChatWhenLiveFlowDisabled === true;
+        } else if (action.type === 'reset-native-chat') {
+            result.nativeChatVisible = true;
+            result.nativeChatKnown = false;
+        } else {
+            return result;
+        }
+
+        result.effectiveActive = isEffectiveDisplayActive(result);
+        result.changed = result.userEnabled !== state.userEnabled ||
+            result.nativeChatVisible !== state.nativeChatVisible ||
+            result.nativeChatKnown !== state.nativeChatKnown;
+        result.cleanupRequired = isEffectiveDisplayActive(state) && !result.effectiveActive;
+        return result;
+    }
+
+    function getManagementBarViewModel({ userEnabled, readState } = {}) {
+        const enabled = userEnabled === true;
+        const normalizedReadState = ['idle', 'active', 'stopped'].includes(readState) ? readState : 'idle';
+        return {
+            enabled,
+            statusShape: enabled ? 'playing' : 'stopped',
+            toggleLabel: enabled ? 'LiveFlow ON' : 'LiveFlow OFF',
+            togglePressed: enabled,
+            readState: normalizedReadState
+        };
+    }
+
+    function selectFirstUsableNativeChatButton(candidates) {
+        if (!Array.isArray(candidates)) return null;
+        for (const candidate of candidates) {
+            if (candidate?.element && hasPositiveNativeChatCandidateGeometry(candidate) &&
+                getNativeChatOpenCandidateRejectionReason(candidate) === 'none') return candidate.element;
+        }
+        const zeroGeometryExceptions = candidates.filter((candidate) =>
+            candidate?.element && !hasPositiveNativeChatCandidateGeometry(candidate) &&
+            isChatOwnedZeroGeometryReopenCandidate(candidate) &&
+            getNativeChatOpenCandidateRejectionReason(candidate) === 'none'
+        );
+        return zeroGeometryExceptions.length === 1 ? zeroGeometryExceptions[0].element : null;
+    }
+
+    function hasPositiveNativeChatCandidateGeometry(candidate = {}) {
+        return typeof candidate.width === 'number' && Number.isFinite(candidate.width) && candidate.width > 0 &&
+            typeof candidate.height === 'number' && Number.isFinite(candidate.height) && candidate.height > 0;
+    }
+
+    function isChatOwnedZeroGeometryReopenCandidate(candidate = {}) {
+        return candidate.nativeChatClosed === true &&
+            candidate.belongsToCurrentWatchRoot === true &&
+            candidate.insideChatContainer === true &&
+            candidate.insideLiveChatFrame === true &&
+            candidate.descendantOfShowHideButton === true &&
+            candidate.actualButton === true &&
+            candidate.hiddenAttribute !== true;
+    }
+
+    function getNativeChatOpenCandidateRejectionReason(candidate = {}) {
+        if (candidate.belongsToCurrentWatchRoot !== true) return 'wrong-watch-ownership';
+        if (candidate.associatedWithNativeChat !== true) return 'not-chat-associated';
+        if (candidate.hiddenAttribute === true) return 'hidden';
+        if (candidate.disabled === true || candidate.ariaDisabled === 'true') return 'disabled';
+        if (candidate.display === 'none') return 'display-none';
+        if (candidate.visibility === 'hidden' || candidate.visibility === 'collapse') return 'visibility-hidden';
+        if (!hasPositiveNativeChatCandidateGeometry(candidate) && !isChatOwnedZeroGeometryReopenCandidate(candidate)) {
+            return 'zero-or-invalid-geometry';
+        }
+        return 'none';
+    }
+
+    function isChatStackedBelowPlayer(playerRect, chatRect) {
+        if (!playerRect || !chatRect) return false;
+        const values = [
+            playerRect.left, playerRect.top, playerRect.width, playerRect.height,
+            chatRect.left, chatRect.top, chatRect.width, chatRect.height
+        ];
+        if (!values.every((value) => typeof value === 'number' && Number.isFinite(value))) return false;
+        if (playerRect.width <= 0 || playerRect.height <= 0 || chatRect.width <= 0 || chatRect.height <= 0) return false;
+        const horizontalOverlap = Math.min(playerRect.left + playerRect.width, chatRect.left + chatRect.width) -
+            Math.max(playerRect.left, chatRect.left);
+        return horizontalOverlap > 0 && chatRect.top >= playerRect.top + playerRect.height - 1;
+    }
+
+    function isNativeChatOpenButtonUsable({ belongsToCurrentWatchRoot, disabled, ariaDisabled, display, visibility, width, height } = {}) {
+        return belongsToCurrentWatchRoot === true &&
+            disabled !== true &&
+            ariaDisabled !== 'true' &&
+            display !== 'none' &&
+            visibility !== 'hidden' &&
+            visibility !== 'collapse' &&
+            typeof width === 'number' && Number.isFinite(width) && width > 0 &&
+            typeof height === 'number' && Number.isFinite(height) && height > 0;
     }
 
     function isNativeChatFrameVisible({
@@ -237,6 +394,8 @@
         DANMAKU_MAX_BATCH_SPREAD_MS,
         DANMAKU_BATCH_STAGGER_MS,
         DANMAKU_MAX_PENDING_COMMENTS,
+        DANMAKU_MAX_RENDER_QUEUE,
+        DANMAKU_ENTRY_CLEAR_FRACTION,
         mergeMessagesById,
         getVisibleMessages,
         formatMessageText,
@@ -247,10 +406,20 @@
         calculateDanmakuSpeed,
         isLaneCollisionSafe,
         selectCollisionSafeLane,
+        calculateLaneSafeAtMs,
+        findNextLaneAvailability,
         planDanmakuBatch,
         isRendererTargetCurrent,
         isEffectiveDisplayActive,
         getDisplayStateTransition,
+        reduceDisplayState,
+        getManagementBarViewModel,
+        isChatStackedBelowPlayer,
+        isNativeChatOpenButtonUsable,
+        selectFirstUsableNativeChatButton,
+        hasPositiveNativeChatCandidateGeometry,
+        isChatOwnedZeroGeometryReopenCandidate,
+        getNativeChatOpenCandidateRejectionReason,
         isNativeChatFrameVisible,
         canRenderDanmaku,
         isPlaybackEligible,

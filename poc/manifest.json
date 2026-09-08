@@ -24,8 +24,6 @@
             "js": [
                 "src/chat-read-core.js",
                 "src/overlay-core.js",
-                "src/native-chat-layout-core.js",
-                "src/native-chat-layout.js",
                 "src/youtube-chat.js"
             ],
             "world": "ISOLATED",
