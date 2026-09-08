@@ -32,6 +32,7 @@ const {
     isChatStackedBelowPlayer,
     isNativeChatOpenButtonUsable,
     selectFirstUsableNativeChatButton,
+    isChatOwnedZeroGeometryReopenCandidate,
     getNativeChatOpenCandidateRejectionReason,
     isNativeChatFrameVisible
 } = require('../src/overlay-core.js');
@@ -518,6 +519,61 @@ test('Native Chat open button is usable only when visible, enabled, and owned by
     assert.equal(getNativeChatOpenCandidateRejectionReason({ ...usable, width: 0 }), 'zero-or-invalid-geometry');
 });
 
+test('unique Chat-owned zero-geometry reopen button is accepted without weakening general geometry safety', () => {
+    const element = {};
+    const qualified = {
+        element,
+        belongsToCurrentWatchRoot: true,
+        associatedWithNativeChat: true,
+        nativeChatClosed: true,
+        insideChatContainer: true,
+        insideLiveChatFrame: true,
+        descendantOfShowHideButton: true,
+        actualButton: true,
+        hiddenAttribute: false,
+        disabled: false,
+        ariaDisabled: 'false',
+        display: 'block',
+        visibility: 'visible',
+        width: 0,
+        height: 0
+    };
+    assert.equal(isChatOwnedZeroGeometryReopenCandidate(qualified), true);
+    assert.equal(getNativeChatOpenCandidateRejectionReason(qualified), 'none');
+    assert.equal(selectFirstUsableNativeChatButton([qualified]), element);
+    assert.equal(selectFirstUsableNativeChatButton([qualified, { ...qualified, element: {} }]), null);
+    assert.equal(getNativeChatOpenCandidateRejectionReason({ ...qualified, hiddenAttribute: true }), 'hidden');
+    assert.equal(getNativeChatOpenCandidateRejectionReason({ ...qualified, disabled: true }), 'disabled');
+    assert.equal(getNativeChatOpenCandidateRejectionReason({ ...qualified, ariaDisabled: 'true' }), 'disabled');
+    for (const field of ['nativeChatClosed', 'insideChatContainer', 'insideLiveChatFrame', 'descendantOfShowHideButton', 'actualButton']) {
+        assert.equal(getNativeChatOpenCandidateRejectionReason({ ...qualified, [field]: false }), 'zero-or-invalid-geometry');
+    }
+});
+
+test('positive-geometry Native Chat candidate remains preferred over zero-geometry exception', () => {
+    const zeroElement = {};
+    const positiveElement = {};
+    const zero = {
+        element: zeroElement,
+        belongsToCurrentWatchRoot: true,
+        associatedWithNativeChat: true,
+        nativeChatClosed: true,
+        insideChatContainer: true,
+        insideLiveChatFrame: true,
+        descendantOfShowHideButton: true,
+        actualButton: true,
+        hiddenAttribute: false,
+        disabled: false,
+        ariaDisabled: 'false',
+        display: 'block',
+        visibility: 'visible',
+        width: 0,
+        height: 0
+    };
+    const positive = { ...zero, element: positiveElement, width: 100, height: 32 };
+    assert.equal(selectFirstUsableNativeChatButton([zero, positive]), positiveElement);
+});
+
 test('Native Chat open uses an outer structural button and fails safe for open or unknown state', () => {
     assert.match(runtimeSource, /if \(!nativeChatKnown \|\| nativeChatVisible \|\| nativeChatOpenAttempt\) return false;/);
     assert.match(runtimeSource, /PLAYER_SELECTORS\.nativeChatOpenButtons\.forEach/);
@@ -526,6 +582,8 @@ test('Native Chat open uses an outer structural button and fails safe for open o
     assert.match(runtimeSource, /chatContainer = watchRoot\.querySelector/);
     assert.match(runtimeSource, /if \(!button\) \{\s*logInfo\(`Native Chat open attempt: started=true, candidates=\$\{elements\.length\}, clickIssued=false, result=no-candidate`\);\s*return false;\s*\}/);
     assert.match(runtimeSource, /button\.click\(\)/);
+    assert.match(runtimeSource, /document\.querySelector\(PLAYER_SELECTORS\.watchRoot\) !== watchRoot/);
+    assert.match(runtimeSource, /!watchRoot\.contains\(button\) \|\| readNativeChatVisibility\(watchRoot\) !== false/);
     assert.match(runtimeSource, /nativeChatOpenAttempt = \{ generation: attemptGeneration, timerId \}/);
     assert.match(runtimeSource, /if \(nativeChatVisible && nativeChatOpenAttempt\) \{/);
     assert.match(runtimeSource, /clearNativeChatOpenAttempt\(\);[^]*?disconnectNativeChatObserver\(\)/);

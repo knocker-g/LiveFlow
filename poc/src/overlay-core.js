@@ -265,19 +265,40 @@
     function selectFirstUsableNativeChatButton(candidates) {
         if (!Array.isArray(candidates)) return null;
         for (const candidate of candidates) {
-            if (candidate?.element && getNativeChatOpenCandidateRejectionReason(candidate) === 'none') return candidate.element;
+            if (candidate?.element && hasPositiveNativeChatCandidateGeometry(candidate) &&
+                getNativeChatOpenCandidateRejectionReason(candidate) === 'none') return candidate.element;
         }
-        return null;
+        const zeroGeometryExceptions = candidates.filter((candidate) =>
+            candidate?.element && !hasPositiveNativeChatCandidateGeometry(candidate) &&
+            isChatOwnedZeroGeometryReopenCandidate(candidate) &&
+            getNativeChatOpenCandidateRejectionReason(candidate) === 'none'
+        );
+        return zeroGeometryExceptions.length === 1 ? zeroGeometryExceptions[0].element : null;
+    }
+
+    function hasPositiveNativeChatCandidateGeometry(candidate = {}) {
+        return typeof candidate.width === 'number' && Number.isFinite(candidate.width) && candidate.width > 0 &&
+            typeof candidate.height === 'number' && Number.isFinite(candidate.height) && candidate.height > 0;
+    }
+
+    function isChatOwnedZeroGeometryReopenCandidate(candidate = {}) {
+        return candidate.nativeChatClosed === true &&
+            candidate.belongsToCurrentWatchRoot === true &&
+            candidate.insideChatContainer === true &&
+            candidate.insideLiveChatFrame === true &&
+            candidate.descendantOfShowHideButton === true &&
+            candidate.actualButton === true &&
+            candidate.hiddenAttribute !== true;
     }
 
     function getNativeChatOpenCandidateRejectionReason(candidate = {}) {
         if (candidate.belongsToCurrentWatchRoot !== true) return 'wrong-watch-ownership';
         if (candidate.associatedWithNativeChat !== true) return 'not-chat-associated';
+        if (candidate.hiddenAttribute === true) return 'hidden';
         if (candidate.disabled === true || candidate.ariaDisabled === 'true') return 'disabled';
         if (candidate.display === 'none') return 'display-none';
         if (candidate.visibility === 'hidden' || candidate.visibility === 'collapse') return 'visibility-hidden';
-        if (typeof candidate.width !== 'number' || !Number.isFinite(candidate.width) || candidate.width <= 0 ||
-            typeof candidate.height !== 'number' || !Number.isFinite(candidate.height) || candidate.height <= 0) {
+        if (!hasPositiveNativeChatCandidateGeometry(candidate) && !isChatOwnedZeroGeometryReopenCandidate(candidate)) {
             return 'zero-or-invalid-geometry';
         }
         return 'none';
@@ -396,6 +417,8 @@
         isChatStackedBelowPlayer,
         isNativeChatOpenButtonUsable,
         selectFirstUsableNativeChatButton,
+        hasPositiveNativeChatCandidateGeometry,
+        isChatOwnedZeroGeometryReopenCandidate,
         getNativeChatOpenCandidateRejectionReason,
         isNativeChatFrameVisible,
         canRenderDanmaku,

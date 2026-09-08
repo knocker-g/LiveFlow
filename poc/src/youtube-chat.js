@@ -276,6 +276,7 @@
             return false;
         }
         const chatContainer = watchRoot.querySelector(PLAYER_SELECTORS.nativeChatContainer);
+        const ownedChatContainer = watchRoot.querySelector('#chat-container');
         const elements = [];
         PLAYER_SELECTORS.nativeChatOpenButtons.forEach((selector) => {
             watchRoot.querySelectorAll(selector).forEach((element) => {
@@ -292,6 +293,7 @@
                 return { element: null };
             }
             const strategy = frame?.contains(element) ? 'frame-control' : 'chat-container-control';
+            const showHideButton = element.closest('#show-hide-button');
             const associatedWithNativeChat = Boolean(
                 frame?.contains(element) || chatContainer?.contains(element)
             );
@@ -300,6 +302,12 @@
                 strategy,
                 associatedWithNativeChat,
                 belongsToCurrentWatchRoot: watchRoot.contains(element),
+                nativeChatClosed: true,
+                insideChatContainer: Boolean(ownedChatContainer?.contains(element)),
+                insideLiveChatFrame: Boolean(frame?.contains(element)),
+                descendantOfShowHideButton: Boolean(showHideButton && frame?.contains(showHideButton)),
+                actualButton: element.tagName === 'BUTTON',
+                hiddenAttribute: element.hidden === true || element.hasAttribute('hidden'),
                 disabled: element.disabled === true,
                 ariaDisabled: element.getAttribute('aria-disabled'),
                 display: style.display,
@@ -317,6 +325,11 @@
             return false;
         }
         const attemptGeneration = pageGeneration;
+        if (attemptGeneration !== pageGeneration || document.querySelector(PLAYER_SELECTORS.watchRoot) !== watchRoot ||
+            !watchRoot.contains(button) || readNativeChatVisibility(watchRoot) !== false) {
+            logInfo('Native Chat open attempt: started=true, clickIssued=false, result=stale-or-open');
+            return false;
+        }
         button.click();
         const timerId = window.setTimeout(() => {
             if (nativeChatOpenAttempt?.generation !== attemptGeneration) return;
