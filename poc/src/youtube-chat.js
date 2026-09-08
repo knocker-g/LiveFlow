@@ -56,6 +56,7 @@
     let nativeChatObserver = null;
     let observedWatchRoot = null;
     let visibilityEvaluationQueued = false;
+    let managementAttachmentTask = null;
     let managementBar = null;
     let managementToggleButton = null;
     let managementToggleLabel = null;
@@ -216,6 +217,17 @@
         return [...mutation.addedNodes, ...mutation.removedNodes].some(nodeContainsNativeChat);
     }
 
+    function nodeAffectsManagementPlacement(node) {
+        if (node?.nodeType !== 1) return false;
+        const selector = `${PLAYER_SELECTORS.player}, ${PLAYER_SELECTORS.video}, ${PLAYER_SELECTORS.nativeChat}, ${PLAYER_SELECTORS.belowPlayer}`;
+        return node.matches?.(selector) === true || Boolean(node.querySelector?.(selector));
+    }
+
+    function mutationAffectsManagementPlacement(mutation) {
+        return mutation.type === 'childList' &&
+            [...mutation.addedNodes, ...mutation.removedNodes].some(nodeAffectsManagementPlacement);
+    }
+
     function observeNativeChat(watchRoot) {
         if (watchRoot === observedWatchRoot && nativeChatObserver) return;
         nativeChatObserver?.disconnect();
@@ -223,7 +235,11 @@
         observedWatchRoot = watchRoot || null;
         if (!watchRoot) return;
         nativeChatObserver = new MutationObserver((mutations) => {
-            if (mutations.some(mutationAffectsNativeChat)) scheduleNativeChatVisibilityEvaluation();
+            const nativeChatChanged = mutations.some(mutationAffectsNativeChat);
+            if (nativeChatChanged) scheduleNativeChatVisibilityEvaluation();
+            if (nativeChatChanged || (!managementBar?.isConnected && mutations.some(mutationAffectsManagementPlacement))) {
+                scheduleManagementBarAttachment(watchRoot);
+            }
         });
         nativeChatObserver.observe(watchRoot, {
             childList: true,
@@ -231,6 +247,7 @@
             attributes: true,
             attributeFilter: ['hidden', 'style', 'class', 'collapsed', 'aria-hidden']
         });
+        scheduleManagementBarAttachment(watchRoot);
     }
 
     function disconnectNativeChatObserver() {
@@ -238,6 +255,7 @@
         nativeChatObserver = null;
         observedWatchRoot = null;
         visibilityEvaluationQueued = false;
+        managementAttachmentTask = null;
     }
 
     function clearNativeChatOpenAttempt() {
@@ -498,6 +516,19 @@
 
     function refreshManagementBarPlacement() {
         attachManagementBar();
+    }
+
+    function scheduleManagementBarAttachment(watchRoot) {
+        if (!watchRoot || managementAttachmentTask) return;
+        const task = { watchRoot, pageGeneration };
+        managementAttachmentTask = task;
+        window.queueMicrotask(() => {
+            if (managementAttachmentTask !== task) return;
+            managementAttachmentTask = null;
+            if (task.pageGeneration !== pageGeneration || !isYouTubeWatchPage() ||
+                !task.watchRoot.isConnected || document.querySelector(PLAYER_SELECTORS.watchRoot) !== task.watchRoot) return;
+            attachManagementBar();
+        });
     }
 
     function attachOverlay(player) {

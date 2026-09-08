@@ -613,6 +613,38 @@ test('management bar cleanup and reattach follow SPA lifecycle and exclude MiniP
     assert.match(runtimeSource, /player\.closest\(PLAYER_SELECTORS\.miniPlayerAncestor\)/);
 });
 
+test('management bar attachment follows current watch DOM readiness independently of READ bootstrap', () => {
+    const schedulerStart = runtimeSource.indexOf('function scheduleManagementBarAttachment');
+    const schedulerEnd = runtimeSource.indexOf('function attachOverlay', schedulerStart);
+    const schedulerSource = runtimeSource.slice(schedulerStart, schedulerEnd);
+    assert.match(runtimeSource, /function observeNativeChat\(watchRoot\)[^]*?scheduleManagementBarAttachment\(watchRoot\)/);
+    assert.match(runtimeSource, /nativeChatChanged \|\| \(!managementBar\?\.isConnected && mutations\.some\(mutationAffectsManagementPlacement\)\)/);
+    assert.match(runtimeSource, /function mutationAffectsManagementPlacement\(mutation\)[^]*?mutation\.type === 'childList'/);
+    assert.match(runtimeSource, /function scheduleManagementBarAttachment\(watchRoot\)[^]*?window\.queueMicrotask/);
+    assert.match(runtimeSource, /task\.pageGeneration !== pageGeneration/);
+    assert.match(runtimeSource, /document\.querySelector\(PLAYER_SELECTORS\.watchRoot\) !== task\.watchRoot/);
+    assert.doesNotMatch(schedulerSource, /requestInitialContinuation|requestReadOnce|fetch\s*\(/);
+});
+
+test('management bar DOM readiness scheduling is deduplicated and navigation cleanup invalidates stale work', () => {
+    assert.match(runtimeSource, /if \(!watchRoot \|\| managementAttachmentTask\) return;/);
+    assert.match(runtimeSource, /managementAttachmentTask = task/);
+    assert.match(runtimeSource, /if \(managementAttachmentTask !== task\) return;/);
+    assert.match(runtimeSource, /function disconnectNativeChatObserver\(\)[^]*?managementAttachmentTask = null/);
+    assert.match(runtimeSource, /function handleNavigationStart\(\)[^]*?pageGeneration \+= 1[^]*?disconnectNativeChatObserver\(\)[^]*?cleanupManagementBar\(\)/);
+});
+
+test('management bar lifecycle remains independent of READ acceptance and Native Chat display state', () => {
+    const diagnosticStart = runtimeSource.indexOf('function handleReadLifecycleDiagnostic');
+    const diagnosticEnd = runtimeSource.indexOf('function handleGeometryChange', diagnosticStart);
+    const diagnosticSource = runtimeSource.slice(diagnosticStart, diagnosticEnd);
+    assert.match(runtimeSource, /function detectPage\(\)[^]*?attachManagementBar\(\)/);
+    assert.match(runtimeSource, /function handleNavigation\(\)[^]*?attachManagementBar\(\)/);
+    assert.match(runtimeSource, /function handleInitialContinuation\(event\)[^]*?attachManagementBar\(\)/);
+    assert.doesNotMatch(diagnosticSource, /cleanupManagementBar\(\)/);
+    assert.doesNotMatch(runtimeSource, /--liveflow-management-height|native-chat-layout/);
+});
+
 test('management bar stays outside the player while danmaku remains player-owned for fullscreen', () => {
     assert.match(runtimeSource, /placement\.parent\.insertBefore\(bar, placement\.before\)/);
     assert.match(runtimeSource, /player\.appendChild\(overlayRoot\)/);
