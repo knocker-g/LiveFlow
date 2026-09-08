@@ -8,7 +8,7 @@
     const LIFECYCLE_DIAGNOSTIC_TYPE = 'LIVEFLOW_READ_LIFECYCLE_DIAGNOSTIC';
     let pageRevision = 0;
     let pageKey = '';
-    let pageState = { continuation: '', context: null };
+    let pageState = { continuation: '', context: null, targetIdentity: '', bootstrapTargetMatched: false };
     let readAttemptedRevision = -1;
     let readCount = 0;
     let currentLoopGeneration = 0;
@@ -21,6 +21,8 @@
     let deferredReadStartGeneration = null;
     let lastEstablishedWatchRoot = null;
     let lastEstablishedVideo = null;
+    let establishedTargetIdentity = '';
+    let invalidatedTargetIdentity = '';
 
     function getYtcfgValue(key) {
         try {
@@ -86,6 +88,21 @@
         }, window.location.origin);
     }
 
+    function readBootstrapTargetCandidates(watchRoot) {
+        return [
+            window.ytInitialPlayerResponse?.videoDetails?.videoId,
+            window.ytInitialData?.videoDetails?.videoId,
+            watchRoot?.getAttribute?.('video-id')
+        ];
+    }
+
+    function isCurrentPageStateTarget() {
+        const targetIdentity = window.LiveFlowChatReadCore?.extractWatchTargetIdentity?.(window.location.href) || '';
+        return targetIdentity.length > 0 &&
+            pageState.bootstrapTargetMatched === true &&
+            pageState.targetIdentity === targetIdentity;
+    }
+
     function postLifecycleDiagnostic(eventName, details = {}) {
         window.postMessage({
             source: 'liveflow-page-state',
@@ -106,9 +123,10 @@
         pageRevision += 1;
         pageLifecycleGeneration += 1;
         navigationPending = true;
+        invalidatedTargetIdentity = establishedTargetIdentity;
         readAttemptedRevision = -1;
         readCount = 0;
-        pageState = { continuation: '', context: null };
+        pageState = { continuation: '', context: null, targetIdentity: '', bootstrapTargetMatched: false };
         postLifecycleInvalidated();
         postLifecycleDiagnostic('NAV_INVALIDATE', { eventSource, abortIssued });
     }
@@ -122,7 +140,8 @@
                 stopReadLoop();
                 pageRevision = revisionState?.revision || pageRevision + 1;
                 pageLifecycleGeneration += 1;
-                navigationPending = !pageDataUpdated;
+                navigationPending = true;
+                invalidatedTargetIdentity = establishedTargetIdentity;
                 postLifecycleInvalidated();
                 postLifecycleDiagnostic('NAV_INVALIDATE', {
                     eventSource: pageDataUpdated ? 'yt-page-data-updated' : 'yt-navigate-finish',
@@ -132,24 +151,58 @@
             pageKey = revisionState?.key || nextPageKey;
             readAttemptedRevision = -1;
             readCount = 0;
-            pageState = { continuation: '', context: null };
+            pageState = { continuation: '', context: null, targetIdentity: '', bootstrapTargetMatched: false };
         }
         if (navigationPending && !pageDataUpdated) return;
-        if (pageDataUpdated) navigationPending = false;
         const continuation = readContinuation();
         const context = readInternalApiContext();
         const watchRoot = document.querySelector('ytd-watch-flexy');
         const currentVideo = watchRoot?.querySelector('#movie_player video.html5-main-video, #movie_player video') || null;
         const watchRootChanged = lastEstablishedWatchRoot !== null && watchRoot !== lastEstablishedWatchRoot;
         const videoElementChanged = lastEstablishedVideo !== null && currentVideo !== lastEstablishedVideo;
+        const core = window.LiveFlowChatReadCore;
+        const targetIdentity = core?.extractWatchTargetIdentity?.(window.location.href) || '';
+        const bootstrapTarget = core?.evaluateBootstrapTarget?.(
+            targetIdentity,
+            readBootstrapTargetCandidates(watchRoot)
+        ) || { available: false, matched: false };
+        const pageTargetChanged = invalidatedTargetIdentity.length === 0 || targetIdentity !== invalidatedTargetIdentity;
+        const establishment = core?.canEstablishPageLifecycle?.({
+            navigationPending,
+            pageDataUpdated,
+            pageTargetChanged,
+            bootstrapTargetMatched: bootstrapTarget.matched,
+            pageStateUsable: Boolean(continuation && context && watchRoot && currentVideo)
+        }) || { ok: false, reason: 'PAGE_STATE_STALE' };
+        if (!establishment.ok) {
+            postLifecycleDiagnostic('PAGE_STATE_REJECTED', {
+                rejectionReason: establishment.reason,
+                targetKnown: targetIdentity.length > 0,
+                bootstrapKnown: bootstrapTarget.available,
+                pageTargetChanged,
+                bootstrapTargetMatched: bootstrapTarget.matched,
+                watchRootChanged,
+                videoElementChanged
+            });
+            return;
+        }
+        navigationPending = false;
+        establishedTargetIdentity = targetIdentity;
+        invalidatedTargetIdentity = '';
         lastEstablishedWatchRoot = watchRoot;
         lastEstablishedVideo = currentVideo;
         pageState = {
             continuation: typeof continuation === 'string' ? continuation : '',
-            context
+            context,
+            targetIdentity,
+            bootstrapTargetMatched: true
         };
         postLifecycleDiagnostic('NEW_PAGE_STATE', {
             eventSource: pageDataUpdated ? 'yt-page-data-updated' : 'request',
+            targetKnown: true,
+            bootstrapKnown: true,
+            pageTargetChanged,
+            bootstrapTargetMatched: true,
             watchRootChanged,
             videoElementChanged
         });
@@ -270,6 +323,15 @@
     async function startReadLoop(requestedLifecycleGeneration) {
         const core = window.LiveFlowChatReadCore;
         if (requestedLifecycleGeneration !== pageLifecycleGeneration || navigationPending) return;
+        if (!isCurrentPageStateTarget()) {
+            postLifecycleDiagnostic('READ_START_REJECTED', {
+                rejectionReason: 'BOOTSTRAP_TARGET_MISMATCH',
+                targetKnown: Boolean(core?.extractWatchTargetIdentity?.(window.location.href)),
+                bootstrapKnown: Boolean(pageState.targetIdentity),
+                bootstrapTargetMatched: false
+            });
+            return;
+        }
         if (readRequestInFlight || activeLoopGeneration !== 0) {
             deferredReadStartGeneration = requestedLifecycleGeneration;
             return;
@@ -292,6 +354,15 @@
 
         while (generation === currentLoopGeneration && revision === pageRevision &&
             lifecycleGeneration === pageLifecycleGeneration && !navigationPending && continuation) {
+            if (!isCurrentPageStateTarget()) {
+                postLifecycleDiagnostic('READ_STOP', {
+                    readGeneration: generation,
+                    aborted: false,
+                    responseAfterInvalidation: false,
+                    rejectionReason: 'BOOTSTRAP_TARGET_MISMATCH'
+                });
+                break;
+            }
             readCount += 1;
             const abortController = new AbortController();
             activeAbortController = abortController;

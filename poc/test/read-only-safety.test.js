@@ -82,16 +82,45 @@ test('safe lifecycle diagnostics distinguish abort, stale response, and new gene
     assert.match(pageStateSource, /'READ_REQUEST_BEGIN'/);
     assert.match(pageStateSource, /'READ_RESPONSE_RECEIVED'/);
     assert.match(pageStateSource, /'READ_STOP'/);
+    assert.match(pageStateSource, /'PAGE_STATE_REJECTED'/);
+    assert.match(pageStateSource, /'READ_START_REJECTED'/);
+    assert.match(contentSource, /pageTargetChanged=\$\{event\.data\.pageTargetChanged === true\}/);
+    assert.match(contentSource, /bootstrapTargetMatched=\$\{event\.data\.bootstrapTargetMatched === true\}/);
     assert.match(contentSource, /responseAfterInvalidation=\$\{event\.data\.responseAfterInvalidation === true\}/);
-    assert.doesNotMatch(contentSource, /READ lifecycle:[^\r\n]*(?:continuation|visitorData|message|videoId)/i);
+    assert.doesNotMatch(contentSource, /READ lifecycle:[^\r\n]*(?:continuation|visitorData|message|videoId|targetIdentity)/i);
 });
 
 test('new page bootstrap is not established before YouTube page data is updated', () => {
     assert.match(pageStateSource, /const hadEstablishedPage = pageKey !== '';/);
     assert.match(pageStateSource, /if \(hadEstablishedPage && !navigationPending\)/);
     assert.match(pageStateSource, /if \(navigationPending && !pageDataUpdated\) return;/);
-    assert.match(pageStateSource, /if \(pageDataUpdated\) navigationPending = false;/);
+    assert.match(pageStateSource, /canEstablishPageLifecycle/);
+    assert.match(pageStateSource, /pageTargetChanged/);
+    assert.match(pageStateSource, /bootstrapTargetMatched: bootstrapTarget\.matched/);
+    assert.match(pageStateSource, /if \(!establishment\.ok\)[^]*?return;/);
+    assert.match(pageStateSource, /navigationPending = false;/);
     assert.match(pageStateSource, /addEventListener\('yt-page-data-updated', \(\) => respond\(\{ pageDataUpdated: true \}\)\)/);
+});
+
+test('reused watch DOM cannot establish or start READ with a stale bootstrap target', () => {
+    assert.match(pageStateSource, /readBootstrapTargetCandidates\(watchRoot\)/);
+    assert.match(pageStateSource, /window\.ytInitialPlayerResponse\?\.videoDetails\?\.videoId/);
+    assert.match(pageStateSource, /window\.ytInitialData\?\.videoDetails\?\.videoId/);
+    assert.match(pageStateSource, /watchRoot\?\.getAttribute\?\.\('video-id'\)/);
+    assert.match(pageStateSource, /targetIdentity !== invalidatedTargetIdentity/);
+    assert.match(pageStateSource, /pageState\.targetIdentity === targetIdentity/);
+    assert.match(pageStateSource, /if \(!isCurrentPageStateTarget\(\)\)[^]*?break;/);
+});
+
+test('page target values remain internal and are not sent through the bridge', () => {
+    const responsePayloadStart = pageStateSource.indexOf('type: RESPONSE_TYPE');
+    const responsePayloadEnd = pageStateSource.indexOf('}, window.location.origin);', responsePayloadStart);
+    const responsePayload = pageStateSource.slice(responsePayloadStart, responsePayloadEnd);
+    const diagnosticPayloadStart = pageStateSource.indexOf('type: LIFECYCLE_DIAGNOSTIC_TYPE');
+    const diagnosticPayloadEnd = pageStateSource.indexOf('}, window.location.origin);', diagnosticPayloadStart);
+    const diagnosticPayload = pageStateSource.slice(diagnosticPayloadStart, diagnosticPayloadEnd);
+    assert.doesNotMatch(responsePayload, /targetIdentity/);
+    assert.doesNotMatch(diagnosticPayload, /targetIdentity/);
 });
 
 test('a new lifecycle start signal waits for an aborted old request to settle without parallel READ', () => {

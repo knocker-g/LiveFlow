@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { MAX_VISIBLE_MESSAGES, mergeMessagesById, getVisibleMessages, formatMessageText } = require('../src/overlay-core.js');
 
-const { ChatMessage, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs, validateLiveChatReadResponse, isSuccessfulHttpStatus, canStartReadLoop, canScheduleNextRead, LIVEFLOW_MIN_READ_DELAY_MS, LIVEFLOW_MAX_TIMER_DELAY_MS } = require('../src/chat-read-core.js');
+const { ChatMessage, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs, validateLiveChatReadResponse, isSuccessfulHttpStatus, canStartReadLoop, canScheduleNextRead, extractWatchTargetIdentity, evaluateBootstrapTarget, canEstablishPageLifecycle, LIVEFLOW_MIN_READ_DELAY_MS, LIVEFLOW_MAX_TIMER_DELAY_MS } = require('../src/chat-read-core.js');
 
 const sampleResponse = {
     continuationContents: {
@@ -204,6 +204,35 @@ test('getPageRevisionState does not change revision for duplicate same-URL event
     assert.deepEqual(getPageRevisionState('watch-a', 3, 'watch-b'), {
         key: 'watch-b', revision: 4, changed: true
     });
+});
+
+test('watch target identity distinguishes watch and live targets without exposing it to diagnostics', () => {
+    assert.equal(extractWatchTargetIdentity('https://www.youtube.com/watch?v=target-a'), 'target-a');
+    assert.equal(extractWatchTargetIdentity('https://www.youtube.com/live/target-b?feature=share'), 'target-b');
+    assert.equal(extractWatchTargetIdentity('https://example.com/watch?v=target-a'), '');
+    assert.equal(extractWatchTargetIdentity('not a target'), '');
+});
+
+test('bootstrap ownership requires a known target and every available candidate to match', () => {
+    assert.deepEqual(evaluateBootstrapTarget('target-b', ['target-b', '', null]), { available: true, matched: true });
+    assert.deepEqual(evaluateBootstrapTarget('target-b', ['target-a', 'target-b']), { available: true, matched: false });
+    assert.deepEqual(evaluateBootstrapTarget('target-b', []), { available: false, matched: false });
+    assert.deepEqual(evaluateBootstrapTarget('', ['target-b']), { available: false, matched: false });
+});
+
+test('SPA lifecycle fails closed until target change, fresh page data, and matching bootstrap are established', () => {
+    const valid = {
+        navigationPending: true,
+        pageDataUpdated: true,
+        pageTargetChanged: true,
+        bootstrapTargetMatched: true,
+        pageStateUsable: true
+    };
+    assert.deepEqual(canEstablishPageLifecycle(valid), { ok: true, reason: 'NONE' });
+    assert.equal(canEstablishPageLifecycle({ ...valid, pageDataUpdated: false }).reason, 'NAVIGATION_PENDING');
+    assert.equal(canEstablishPageLifecycle({ ...valid, pageTargetChanged: false }).reason, 'TARGET_UNCHANGED');
+    assert.equal(canEstablishPageLifecycle({ ...valid, bootstrapTargetMatched: false }).reason, 'BOOTSTRAP_TARGET_MISMATCH');
+    assert.equal(canEstablishPageLifecycle({ ...valid, pageStateUsable: false }).reason, 'PAGE_STATE_STALE');
 });
 
 test('canIssueSecondRead requires a successful parsed first response with next continuation', () => {

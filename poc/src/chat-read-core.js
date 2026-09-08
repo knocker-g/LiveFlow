@@ -247,6 +247,37 @@
             validationOk === true;
     }
 
+    function extractWatchTargetIdentity(urlValue) {
+        try {
+            const url = new URL(urlValue, 'https://www.youtube.com');
+            if (!/(^|\.)youtube\.com$/i.test(url.hostname)) return '';
+            if (url.pathname === '/watch') return url.searchParams.get('v') || '';
+            const liveMatch = url.pathname.match(/^\/live\/([^/?#]+)/);
+            return liveMatch?.[1] || '';
+        } catch (error) {
+            return '';
+        }
+    }
+
+    function evaluateBootstrapTarget(targetIdentity, candidateIdentities) {
+        const candidates = Array.isArray(candidateIdentities)
+            ? candidateIdentities.filter((value) => typeof value === 'string' && value.length > 0)
+            : [];
+        const available = typeof targetIdentity === 'string' && targetIdentity.length > 0 && candidates.length > 0;
+        return {
+            available,
+            matched: available && candidates.every((candidate) => candidate === targetIdentity)
+        };
+    }
+
+    function canEstablishPageLifecycle({ navigationPending, pageDataUpdated, pageTargetChanged, bootstrapTargetMatched, pageStateUsable }) {
+        if (navigationPending === true && pageDataUpdated !== true) return { ok: false, reason: 'NAVIGATION_PENDING' };
+        if (navigationPending === true && pageTargetChanged !== true) return { ok: false, reason: 'TARGET_UNCHANGED' };
+        if (bootstrapTargetMatched !== true) return { ok: false, reason: 'BOOTSTRAP_TARGET_MISMATCH' };
+        if (pageStateUsable !== true) return { ok: false, reason: 'PAGE_STATE_STALE' };
+        return { ok: true, reason: 'NONE' };
+    }
+
     const api = {
         LIVEFLOW_MIN_READ_DELAY_MS,
         LIVEFLOW_MAX_TIMER_DELAY_MS,
@@ -266,7 +297,10 @@
         validateLiveChatReadResponse,
         isSuccessfulHttpStatus,
         canStartReadLoop,
-        canScheduleNextRead
+        canScheduleNextRead,
+        extractWatchTargetIdentity,
+        evaluateBootstrapTarget,
+        canEstablishPageLifecycle
     };
 
     if (typeof module !== 'undefined' && module.exports) {
