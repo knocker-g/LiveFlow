@@ -152,6 +152,9 @@ test('watch-root mutation is a scoped reevaluation signal, never bootstrap autho
     assert.match(pageStateSource, /childList:\s*true/);
     assert.match(pageStateSource, /attributeFilter:\s*\['video-id', 'hidden'\]/);
     assert.match(pageStateSource, /eventSource:\s*'watch-root-mutation'/);
+    assert.match(pageStateSource, /pageEstablished:\s*establishedTargetIdentity\.length > 0/);
+    assert.match(runtimeSource, /return pageEstablished !== true/);
+    assert.match(pageStateSource, /const stillCanSignalReevaluation = [^]*?if \(!stillCanSignalReevaluation \|\| observedGeneration !== pageLifecycleGeneration/);
     assert.match(pageStateSource, /ownershipSource:\s*'WATCH_ROOT_SNAPSHOT'/);
     assert.doesNotMatch(pageStateSource, /document\.documentElement[^]*?MutationObserver/);
 });

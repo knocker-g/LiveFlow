@@ -291,6 +291,11 @@
         return ownershipMutation === true && pageDataUpdatedSeen === true;
     }
 
+    function canSignalOwnershipReevaluation({ navigationPending, pageEstablished, pageDataUpdatedSeen } = {}) {
+        if (navigationPending === true) return pageDataUpdatedSeen === true;
+        return pageEstablished !== true;
+    }
+
     const api = {
         LIVEFLOW_MIN_READ_DELAY_MS,
         LIVEFLOW_MAX_TIMER_DELAY_MS,
@@ -314,7 +319,8 @@
         extractWatchTargetIdentity,
         evaluateBootstrapTarget,
         canEstablishPageLifecycle,
-        canReevaluatePageLifecycle
+        canReevaluatePageLifecycle,
+        canSignalOwnershipReevaluation
     };
 
     if (typeof module !== 'undefined' && module.exports) {

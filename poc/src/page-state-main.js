@@ -123,12 +123,22 @@
         const observedGeneration = pageLifecycleGeneration;
         observedWatchRoot = watchRoot;
         watchRootObserver = new MutationObserver(() => {
-            if (!navigationPending || ownershipReevaluationQueued ||
+            const canSignalReevaluation = window.LiveFlowChatReadCore?.canSignalOwnershipReevaluation?.({
+                navigationPending,
+                pageEstablished: establishedTargetIdentity.length > 0,
+                pageDataUpdatedSeen: navigationPageDataUpdated
+            }) === true;
+            if (!canSignalReevaluation || ownershipReevaluationQueued ||
                 observedGeneration !== pageLifecycleGeneration || observedWatchRoot !== watchRoot) return;
             ownershipReevaluationQueued = true;
             window.queueMicrotask(() => {
                 ownershipReevaluationQueued = false;
-                if (observedGeneration !== pageLifecycleGeneration || observedWatchRoot !== watchRoot) return;
+                const stillCanSignalReevaluation = window.LiveFlowChatReadCore?.canSignalOwnershipReevaluation?.({
+                    navigationPending,
+                    pageEstablished: establishedTargetIdentity.length > 0,
+                    pageDataUpdatedSeen: navigationPageDataUpdated
+                }) === true;
+                if (!stillCanSignalReevaluation || observedGeneration !== pageLifecycleGeneration || observedWatchRoot !== watchRoot) return;
                 respond({
                     ownershipMutation: true,
                     eventSource: 'watch-root-mutation',

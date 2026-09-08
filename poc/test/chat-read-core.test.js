@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { MAX_VISIBLE_MESSAGES, mergeMessagesById, getVisibleMessages, formatMessageText } = require('../src/overlay-core.js');
 
-const { ChatMessage, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs, validateLiveChatReadResponse, isSuccessfulHttpStatus, canStartReadLoop, canScheduleNextRead, extractWatchTargetIdentity, evaluateBootstrapTarget, canEstablishPageLifecycle, canReevaluatePageLifecycle, LIVEFLOW_MIN_READ_DELAY_MS, LIVEFLOW_MAX_TIMER_DELAY_MS } = require('../src/chat-read-core.js');
+const { ChatMessage, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs, validateLiveChatReadResponse, isSuccessfulHttpStatus, canStartReadLoop, canScheduleNextRead, extractWatchTargetIdentity, evaluateBootstrapTarget, canEstablishPageLifecycle, canReevaluatePageLifecycle, canSignalOwnershipReevaluation, LIVEFLOW_MIN_READ_DELAY_MS, LIVEFLOW_MAX_TIMER_DELAY_MS } = require('../src/chat-read-core.js');
 
 const sampleResponse = {
     continuationContents: {
@@ -310,6 +310,29 @@ test('page-data and navigation-finish ordering both provide an event-driven seco
     const pageDataSecond = canReevaluatePageLifecycle({ ...pending, pageDataUpdated: true });
     assert.equal(finishFirst, false);
     assert.equal(pageDataSecond, true);
+});
+
+test('ownership mutation reevaluates an unestablished direct load without reopening an established lifecycle', () => {
+    assert.equal(canSignalOwnershipReevaluation({
+        navigationPending: false,
+        pageEstablished: false,
+        pageDataUpdatedSeen: false
+    }), true);
+    assert.equal(canSignalOwnershipReevaluation({
+        navigationPending: false,
+        pageEstablished: true,
+        pageDataUpdatedSeen: false
+    }), false);
+    assert.equal(canSignalOwnershipReevaluation({
+        navigationPending: true,
+        pageEstablished: false,
+        pageDataUpdatedSeen: false
+    }), false);
+    assert.equal(canSignalOwnershipReevaluation({
+        navigationPending: true,
+        pageEstablished: false,
+        pageDataUpdatedSeen: true
+    }), true);
 });
 
 test('canIssueSecondRead requires a successful parsed first response with next continuation', () => {
