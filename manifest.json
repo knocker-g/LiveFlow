@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
-    "name": "LiveFlow PoC",
+    "name": "LiveFlow",
     "version": "0.1.0",
-    "description": "Read-only Proof of Concept for YouTube Live Chat on PC Web.",
+    "description": "Read-only YouTube Live Chat danmaku for PC Web.",
     "content_scripts": [
         {
             "matches": [
