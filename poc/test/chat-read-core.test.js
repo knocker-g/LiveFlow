@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { MAX_VISIBLE_MESSAGES, mergeMessagesById, getVisibleMessages, formatMessageText } = require('../src/overlay-core.js');
 
-const { ChatMessage, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs, validateLiveChatReadResponse, isSuccessfulHttpStatus, canStartReadLoop, canScheduleNextRead, extractWatchTargetIdentity, evaluateBootstrapTarget, canEstablishPageLifecycle, LIVEFLOW_MIN_READ_DELAY_MS, LIVEFLOW_MAX_TIMER_DELAY_MS } = require('../src/chat-read-core.js');
+const { ChatMessage, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs, validateLiveChatReadResponse, isSuccessfulHttpStatus, canStartReadLoop, canScheduleNextRead, extractWatchTargetIdentity, evaluateBootstrapTarget, canEstablishPageLifecycle, canReevaluatePageLifecycle, LIVEFLOW_MIN_READ_DELAY_MS, LIVEFLOW_MAX_TIMER_DELAY_MS } = require('../src/chat-read-core.js');
 
 const sampleResponse = {
     continuationContents: {
@@ -263,6 +263,29 @@ test('SPA lifecycle fails closed until target change, fresh page data, and match
     assert.equal(canEstablishPageLifecycle({ ...valid, pageTargetChanged: false }).reason, 'TARGET_UNCHANGED');
     assert.equal(canEstablishPageLifecycle({ ...valid, bootstrapTargetMatched: false }).reason, 'BOOTSTRAP_TARGET_MISMATCH');
     assert.equal(canEstablishPageLifecycle({ ...valid, pageStateUsable: false }).reason, 'PAGE_STATE_STALE');
+});
+
+test('pending SPA lifecycle reevaluates only on page-data or a later navigation-finish signal', () => {
+    const pending = { navigationPending: true, pageDataUpdatedSeen: false, pageDataUpdated: false, navigationFinished: false };
+    assert.equal(canReevaluatePageLifecycle(pending), false);
+    assert.equal(canReevaluatePageLifecycle({ ...pending, navigationFinished: true }), false);
+    assert.equal(canReevaluatePageLifecycle({ ...pending, pageDataUpdated: true }), true);
+    assert.equal(canReevaluatePageLifecycle({ ...pending, pageDataUpdatedSeen: true, navigationFinished: true }), true);
+    assert.equal(canReevaluatePageLifecycle({ ...pending, navigationPending: false }), true);
+});
+
+test('page-data and navigation-finish ordering both provide an event-driven second evaluation', () => {
+    const pending = { navigationPending: true, pageDataUpdatedSeen: false, pageDataUpdated: false, navigationFinished: false };
+
+    const pageDataFirst = canReevaluatePageLifecycle({ ...pending, pageDataUpdated: true });
+    const finishSecond = canReevaluatePageLifecycle({ ...pending, pageDataUpdatedSeen: true, navigationFinished: true });
+    assert.equal(pageDataFirst, true);
+    assert.equal(finishSecond, true);
+
+    const finishFirst = canReevaluatePageLifecycle({ ...pending, navigationFinished: true });
+    const pageDataSecond = canReevaluatePageLifecycle({ ...pending, pageDataUpdated: true });
+    assert.equal(finishFirst, false);
+    assert.equal(pageDataSecond, true);
 });
 
 test('canIssueSecondRead requires a successful parsed first response with next continuation', () => {

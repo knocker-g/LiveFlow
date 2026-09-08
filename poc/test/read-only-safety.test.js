@@ -93,13 +93,31 @@ test('safe lifecycle diagnostics distinguish abort, stale response, and new gene
 test('new page bootstrap is not established before YouTube page data is updated', () => {
     assert.match(pageStateSource, /const hadEstablishedPage = pageKey !== '';/);
     assert.match(pageStateSource, /if \(hadEstablishedPage && !navigationPending\)/);
-    assert.match(pageStateSource, /if \(navigationPending && !pageDataUpdated\) return;/);
+    assert.match(pageStateSource, /canReevaluatePageLifecycle/);
+    assert.match(pageStateSource, /if \(!canReevaluate\) return;/);
     assert.match(pageStateSource, /canEstablishPageLifecycle/);
     assert.match(pageStateSource, /pageTargetChanged/);
     assert.match(pageStateSource, /bootstrapTargetMatched: bootstrapTarget\.matched/);
     assert.match(pageStateSource, /if \(!establishment\.ok\)[^]*?return;/);
     assert.match(pageStateSource, /navigationPending = false;/);
-    assert.match(pageStateSource, /addEventListener\('yt-page-data-updated', \(\) => respond\(\{ pageDataUpdated: true \}\)\)/);
+    assert.match(pageStateSource, /addEventListener\('yt-page-data-updated', \(\) => respond\(\{ pageDataUpdated: true, eventSource: 'yt-page-data-updated' \}\)\)/);
+});
+
+test('completed SPA state reevaluates once through existing lifecycle events without polling', () => {
+    assert.match(pageStateSource, /let navigationPageDataUpdated = false;/);
+    assert.match(pageStateSource, /if \(pageDataUpdated\) navigationPageDataUpdated = true;/);
+    assert.match(pageStateSource, /navigationFinished && navigationPageDataUpdated/);
+    assert.match(pageStateSource, /addEventListener\('yt-navigate-finish', \(\) => respond\(\{ navigationFinished: true, eventSource: 'yt-navigate-finish' \}\)\)/);
+    assert.match(contentSource, /pageDataSeen=\$\{event\.data\.navigationPageDataUpdated === true\}/);
+    assert.match(contentSource, /canReevaluate=\$\{event\.data\.canReevaluate === true\}/);
+    assert.doesNotMatch(pageStateSource, /setInterval\s*\(|requestAnimationFrame\s*\(/);
+});
+
+test('duplicate lifecycle signals cannot bypass single-loop start protection', () => {
+    assert.match(pageStateSource, /if \(readRequestInFlight \|\| activeLoopGeneration !== 0\)/);
+    assert.match(contentSource, /readRequestedRevision === currentPageRevision/);
+    assert.equal((pageStateSource.match(/addEventListener\('yt-navigate-finish'/g) || []).length, 1);
+    assert.equal((pageStateSource.match(/addEventListener\('yt-page-data-updated'/g) || []).length, 1);
 });
 
 test('reused watch DOM cannot establish or start READ with a stale bootstrap target', () => {

@@ -283,6 +283,12 @@
         return { ok: true, reason: 'NONE' };
     }
 
+    function canReevaluatePageLifecycle({ navigationPending, pageDataUpdatedSeen, pageDataUpdated, navigationFinished }) {
+        if (navigationPending !== true) return true;
+        if (pageDataUpdated === true) return true;
+        return navigationFinished === true && pageDataUpdatedSeen === true;
+    }
+
     const api = {
         LIVEFLOW_MIN_READ_DELAY_MS,
         LIVEFLOW_MAX_TIMER_DELAY_MS,
@@ -305,7 +311,8 @@
         canScheduleNextRead,
         extractWatchTargetIdentity,
         evaluateBootstrapTarget,
-        canEstablishPageLifecycle
+        canEstablishPageLifecycle,
+        canReevaluatePageLifecycle
     };
 
     if (typeof module !== 'undefined' && module.exports) {

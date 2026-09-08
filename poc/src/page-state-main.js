@@ -18,6 +18,7 @@
     let readRequestInFlight = false;
     let pageLifecycleGeneration = 0;
     let navigationPending = false;
+    let navigationPageDataUpdated = false;
     let deferredReadStartGeneration = null;
     let lastEstablishedWatchRoot = null;
     let lastEstablishedVideo = null;
@@ -125,6 +126,7 @@
         pageRevision += 1;
         pageLifecycleGeneration += 1;
         navigationPending = true;
+        navigationPageDataUpdated = false;
         invalidatedTargetIdentity = establishedTargetIdentity;
         readAttemptedRevision = -1;
         readCount = 0;
@@ -133,7 +135,7 @@
         postLifecycleDiagnostic('NAV_INVALIDATE', { eventSource, abortIssued });
     }
 
-    function respond({ pageDataUpdated = false } = {}) {
+    function respond({ pageDataUpdated = false, navigationFinished = false, eventSource = 'request' } = {}) {
         const nextPageKey = `${location.origin}${location.pathname}${location.search}`;
         const hadEstablishedPage = pageKey !== '';
         const revisionState = window.LiveFlowChatReadCore?.getPageRevisionState?.(pageKey, pageRevision, nextPageKey);
@@ -143,10 +145,11 @@
                 pageRevision = revisionState?.revision || pageRevision + 1;
                 pageLifecycleGeneration += 1;
                 navigationPending = true;
+                navigationPageDataUpdated = false;
                 invalidatedTargetIdentity = establishedTargetIdentity;
                 postLifecycleInvalidated();
                 postLifecycleDiagnostic('NAV_INVALIDATE', {
-                    eventSource: pageDataUpdated ? 'yt-page-data-updated' : 'yt-navigate-finish',
+                    eventSource,
                     abortIssued: false
                 });
             }
@@ -155,7 +158,14 @@
             readCount = 0;
             pageState = { continuation: '', context: null, targetIdentity: '', bootstrapTargetMatched: false };
         }
-        if (navigationPending && !pageDataUpdated) return;
+        if (pageDataUpdated) navigationPageDataUpdated = true;
+        const canReevaluate = window.LiveFlowChatReadCore?.canReevaluatePageLifecycle?.({
+            navigationPending,
+            pageDataUpdatedSeen: navigationPageDataUpdated,
+            pageDataUpdated,
+            navigationFinished
+        }) === true;
+        if (!canReevaluate) return;
         const initialData = window.ytInitialData;
         const continuation = readContinuation(initialData);
         const context = readInternalApiContext();
@@ -174,7 +184,7 @@
         const pageTargetChanged = invalidatedTargetIdentity.length === 0 || targetIdentity !== invalidatedTargetIdentity;
         const establishment = core?.canEstablishPageLifecycle?.({
             navigationPending,
-            pageDataUpdated,
+            pageDataUpdated: pageDataUpdated || (navigationFinished && navigationPageDataUpdated),
             pageTargetChanged,
             bootstrapTargetMatched: bootstrapTarget.matched,
             pageStateUsable: Boolean(continuation && context && watchRoot && currentVideo)
@@ -182,6 +192,9 @@
         if (!establishment.ok) {
             postLifecycleDiagnostic('PAGE_STATE_REJECTED', {
                 rejectionReason: establishment.reason,
+                lifecycleSignal: eventSource,
+                navigationPageDataUpdated,
+                canReevaluate,
                 targetKnown: targetIdentity.length > 0,
                 bootstrapKnown: bootstrapTarget.available,
                 pageTargetChanged,
@@ -194,6 +207,7 @@
             return;
         }
         navigationPending = false;
+        navigationPageDataUpdated = false;
         establishedTargetIdentity = targetIdentity;
         invalidatedTargetIdentity = '';
         lastEstablishedWatchRoot = watchRoot;
@@ -205,7 +219,9 @@
             bootstrapTargetMatched: true
         };
         postLifecycleDiagnostic('NEW_PAGE_STATE', {
-            eventSource: pageDataUpdated ? 'yt-page-data-updated' : 'request',
+            eventSource,
+            navigationPageDataUpdated: pageDataUpdated || navigationFinished,
+            canReevaluate,
             targetKnown: true,
             bootstrapKnown: true,
             pageTargetChanged,
@@ -441,9 +457,9 @@
         }
     });
 
-    window.addEventListener('yt-navigate-finish', () => respond());
+    window.addEventListener('yt-navigate-finish', () => respond({ navigationFinished: true, eventSource: 'yt-navigate-finish' }));
     window.addEventListener('yt-navigate-start', () => invalidatePageLifecycle('yt-navigate-start'));
-    window.addEventListener('yt-page-data-updated', () => respond({ pageDataUpdated: true }));
+    window.addEventListener('yt-page-data-updated', () => respond({ pageDataUpdated: true, eventSource: 'yt-page-data-updated' }));
     window.addEventListener('pagehide', stopReadLoop);
     window.addEventListener('visibilitychange', () => {
         if (document.hidden) stopReadLoop();
