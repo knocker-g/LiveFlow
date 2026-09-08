@@ -236,10 +236,9 @@
         if (!watchRoot) return;
         nativeChatObserver = new MutationObserver((mutations) => {
             const nativeChatChanged = mutations.some(mutationAffectsNativeChat);
+            const managementPlacementChanged = mutations.some(mutationAffectsManagementPlacement);
             if (nativeChatChanged) scheduleNativeChatVisibilityEvaluation();
-            if (nativeChatChanged || (!managementBar?.isConnected && mutations.some(mutationAffectsManagementPlacement))) {
-                scheduleManagementBarAttachment(watchRoot);
-            }
+            if (managementPlacementChanged) scheduleManagementBarAttachment(watchRoot);
         });
         nativeChatObserver.observe(watchRoot, {
             childList: true,

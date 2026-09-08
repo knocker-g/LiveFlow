@@ -618,12 +618,30 @@ test('management bar attachment follows current watch DOM readiness independentl
     const schedulerEnd = runtimeSource.indexOf('function attachOverlay', schedulerStart);
     const schedulerSource = runtimeSource.slice(schedulerStart, schedulerEnd);
     assert.match(runtimeSource, /function observeNativeChat\(watchRoot\)[^]*?scheduleManagementBarAttachment\(watchRoot\)/);
-    assert.match(runtimeSource, /nativeChatChanged \|\| \(!managementBar\?\.isConnected && mutations\.some\(mutationAffectsManagementPlacement\)\)/);
+    assert.match(runtimeSource, /const managementPlacementChanged = mutations\.some\(mutationAffectsManagementPlacement\)/);
+    assert.match(runtimeSource, /if \(managementPlacementChanged\) scheduleManagementBarAttachment\(watchRoot\)/);
     assert.match(runtimeSource, /function mutationAffectsManagementPlacement\(mutation\)[^]*?mutation\.type === 'childList'/);
     assert.match(runtimeSource, /function scheduleManagementBarAttachment\(watchRoot\)[^]*?window\.queueMicrotask/);
     assert.match(runtimeSource, /task\.pageGeneration !== pageGeneration/);
     assert.match(runtimeSource, /document\.querySelector\(PLAYER_SELECTORS\.watchRoot\) !== task\.watchRoot/);
     assert.doesNotMatch(schedulerSource, /requestInitialContinuation|requestReadOnce|fetch\s*\(/);
+    assert.doesNotMatch(schedulerSource, /cleanupOverlay|rendererGeneration|pageGeneration\s*[+]=|acceptingReadResults/);
+});
+
+test('LiveFlow-owned bar and danmaku mutations are not management placement signals', () => {
+    const classifierStart = runtimeSource.indexOf('function nodeAffectsManagementPlacement');
+    const classifierEnd = runtimeSource.indexOf('function observeNativeChat', classifierStart);
+    const classifierSource = runtimeSource.slice(classifierStart, classifierEnd);
+    const observerStart = runtimeSource.indexOf('function observeNativeChat');
+    const observerEnd = runtimeSource.indexOf('function disconnectNativeChatObserver', observerStart);
+    const observerSource = runtimeSource.slice(observerStart, observerEnd);
+    assert.match(classifierSource, /PLAYER_SELECTORS\.player/);
+    assert.match(classifierSource, /PLAYER_SELECTORS\.video/);
+    assert.match(classifierSource, /PLAYER_SELECTORS\.nativeChat/);
+    assert.match(classifierSource, /PLAYER_SELECTORS\.belowPlayer/);
+    assert.doesNotMatch(classifierSource, /MANAGEMENT_BAR_ID|liveflow-overlay-root|liveflow-danmaku/);
+    assert.doesNotMatch(observerSource, /if \(nativeChatChanged\) scheduleManagementBarAttachment/);
+    assert.doesNotMatch(observerSource, /cleanupOverlay|rendererGeneration|requestReadOnce/);
 });
 
 test('management bar DOM readiness scheduling is deduplicated and navigation cleanup invalidates stale work', () => {
