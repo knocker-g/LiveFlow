@@ -213,11 +213,41 @@ test('watch target identity distinguishes watch and live targets without exposin
     assert.equal(extractWatchTargetIdentity('not a target'), '');
 });
 
-test('bootstrap ownership requires a known target and every available candidate to match', () => {
-    assert.deepEqual(evaluateBootstrapTarget('target-b', ['target-b', '', null]), { available: true, matched: true });
-    assert.deepEqual(evaluateBootstrapTarget('target-b', ['target-a', 'target-b']), { available: true, matched: false });
-    assert.deepEqual(evaluateBootstrapTarget('target-b', []), { available: false, matched: false });
-    assert.deepEqual(evaluateBootstrapTarget('', ['target-b']), { available: false, matched: false });
+test('bootstrap ownership requires the authoritative ytInitialData target to match', () => {
+    assert.deepEqual(evaluateBootstrapTarget('target-b', 'target-b', ['target-a', 'target-b']), {
+        available: true,
+        matched: true,
+        supportingCandidateCount: 2,
+        supportingMatchCount: 1
+    });
+    assert.deepEqual(evaluateBootstrapTarget('target-b', 'target-a', ['target-b']), {
+        available: true,
+        matched: false,
+        supportingCandidateCount: 1,
+        supportingMatchCount: 1
+    });
+    assert.deepEqual(evaluateBootstrapTarget('target-b', '', ['target-b']), {
+        available: false,
+        matched: false,
+        supportingCandidateCount: 1,
+        supportingMatchCount: 1
+    });
+    assert.deepEqual(evaluateBootstrapTarget('', 'target-b', []), {
+        available: false,
+        matched: false,
+        supportingCandidateCount: 0,
+        supportingMatchCount: 0
+    });
+});
+
+test('stale supporting candidates cannot permanently block an authoritative new-page bootstrap', () => {
+    const transitional = evaluateBootstrapTarget('target-b', 'target-a', ['target-a', 'target-b']);
+    assert.equal(transitional.matched, false);
+
+    const established = evaluateBootstrapTarget('target-b', 'target-b', ['target-a', 'target-b']);
+    assert.equal(established.matched, true);
+    assert.equal(established.supportingCandidateCount, 2);
+    assert.equal(established.supportingMatchCount, 1);
 });
 
 test('SPA lifecycle fails closed until target change, fresh page data, and matching bootstrap are established', () => {

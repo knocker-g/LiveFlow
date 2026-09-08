@@ -103,13 +103,25 @@ test('new page bootstrap is not established before YouTube page data is updated'
 });
 
 test('reused watch DOM cannot establish or start READ with a stale bootstrap target', () => {
-    assert.match(pageStateSource, /readBootstrapTargetCandidates\(watchRoot\)/);
+    assert.match(pageStateSource, /const initialData = window\.ytInitialData;/);
+    assert.match(pageStateSource, /readContinuation\(initialData\)/);
+    assert.match(pageStateSource, /readBootstrapTargetEvidence\(initialData, watchRoot\)/);
+    assert.match(pageStateSource, /initialData\?\.currentVideoEndpoint\?\.watchEndpoint\?\.videoId/);
     assert.match(pageStateSource, /window\.ytInitialPlayerResponse\?\.videoDetails\?\.videoId/);
-    assert.match(pageStateSource, /window\.ytInitialData\?\.videoDetails\?\.videoId/);
     assert.match(pageStateSource, /watchRoot\?\.getAttribute\?\.\('video-id'\)/);
+    assert.match(pageStateSource, /bootstrapTargetEvidence\.authoritative/);
+    assert.match(pageStateSource, /bootstrapTargetEvidence\.supporting/);
     assert.match(pageStateSource, /targetIdentity !== invalidatedTargetIdentity/);
     assert.match(pageStateSource, /pageState\.targetIdentity === targetIdentity/);
     assert.match(pageStateSource, /if \(!isCurrentPageStateTarget\(\)\)[^]*?break;/);
+});
+
+test('fresh authoritative bootstrap can establish B while supporting SPA candidates remain stale', () => {
+    assert.match(pageStateSource, /authoritative:\s*initialData/);
+    assert.match(pageStateSource, /supporting:\s*\[/);
+    assert.match(contentSource, /supportingCandidates=\$\{Number\.isInteger/);
+    assert.match(contentSource, /supportingMatches=\$\{Number\.isInteger/);
+    assert.doesNotMatch(pageStateSource, /candidates\.every/);
 });
 
 test('page target values remain internal and are not sent through the bridge', () => {

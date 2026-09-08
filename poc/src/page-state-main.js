@@ -36,8 +36,8 @@
         return window.ytcfg?.data_?.[key];
     }
 
-    function readContinuation() {
-        return window.ytInitialData
+    function readContinuation(initialData = window.ytInitialData) {
+        return initialData
             ?.contents
             ?.twoColumnWatchNextResults
             ?.conversationBar
@@ -88,12 +88,14 @@
         }, window.location.origin);
     }
 
-    function readBootstrapTargetCandidates(watchRoot) {
-        return [
-            window.ytInitialPlayerResponse?.videoDetails?.videoId,
-            window.ytInitialData?.videoDetails?.videoId,
-            watchRoot?.getAttribute?.('video-id')
-        ];
+    function readBootstrapTargetEvidence(initialData, watchRoot) {
+        return {
+            authoritative: initialData?.currentVideoEndpoint?.watchEndpoint?.videoId,
+            supporting: [
+                window.ytInitialPlayerResponse?.videoDetails?.videoId,
+                watchRoot?.getAttribute?.('video-id')
+            ]
+        };
     }
 
     function isCurrentPageStateTarget() {
@@ -154,7 +156,8 @@
             pageState = { continuation: '', context: null, targetIdentity: '', bootstrapTargetMatched: false };
         }
         if (navigationPending && !pageDataUpdated) return;
-        const continuation = readContinuation();
+        const initialData = window.ytInitialData;
+        const continuation = readContinuation(initialData);
         const context = readInternalApiContext();
         const watchRoot = document.querySelector('ytd-watch-flexy');
         const currentVideo = watchRoot?.querySelector('#movie_player video.html5-main-video, #movie_player video') || null;
@@ -162,10 +165,12 @@
         const videoElementChanged = lastEstablishedVideo !== null && currentVideo !== lastEstablishedVideo;
         const core = window.LiveFlowChatReadCore;
         const targetIdentity = core?.extractWatchTargetIdentity?.(window.location.href) || '';
+        const bootstrapTargetEvidence = readBootstrapTargetEvidence(initialData, watchRoot);
         const bootstrapTarget = core?.evaluateBootstrapTarget?.(
             targetIdentity,
-            readBootstrapTargetCandidates(watchRoot)
-        ) || { available: false, matched: false };
+            bootstrapTargetEvidence.authoritative,
+            bootstrapTargetEvidence.supporting
+        ) || { available: false, matched: false, supportingCandidateCount: 0, supportingMatchCount: 0 };
         const pageTargetChanged = invalidatedTargetIdentity.length === 0 || targetIdentity !== invalidatedTargetIdentity;
         const establishment = core?.canEstablishPageLifecycle?.({
             navigationPending,
@@ -181,6 +186,8 @@
                 bootstrapKnown: bootstrapTarget.available,
                 pageTargetChanged,
                 bootstrapTargetMatched: bootstrapTarget.matched,
+                supportingCandidateCount: bootstrapTarget.supportingCandidateCount,
+                supportingMatchCount: bootstrapTarget.supportingMatchCount,
                 watchRootChanged,
                 videoElementChanged
             });
@@ -203,6 +210,8 @@
             bootstrapKnown: true,
             pageTargetChanged,
             bootstrapTargetMatched: true,
+            supportingCandidateCount: bootstrapTarget.supportingCandidateCount,
+            supportingMatchCount: bootstrapTarget.supportingMatchCount,
             watchRootChanged,
             videoElementChanged
         });

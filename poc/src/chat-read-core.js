@@ -259,14 +259,19 @@
         }
     }
 
-    function evaluateBootstrapTarget(targetIdentity, candidateIdentities) {
-        const candidates = Array.isArray(candidateIdentities)
-            ? candidateIdentities.filter((value) => typeof value === 'string' && value.length > 0)
+    function evaluateBootstrapTarget(targetIdentity, authoritativeIdentity, supportingIdentities = []) {
+        const targetKnown = typeof targetIdentity === 'string' && targetIdentity.length > 0;
+        const authoritativeKnown = typeof authoritativeIdentity === 'string' && authoritativeIdentity.length > 0;
+        const supporting = Array.isArray(supportingIdentities)
+            ? supportingIdentities.filter((value) => typeof value === 'string' && value.length > 0)
             : [];
-        const available = typeof targetIdentity === 'string' && targetIdentity.length > 0 && candidates.length > 0;
         return {
-            available,
-            matched: available && candidates.every((candidate) => candidate === targetIdentity)
+            available: targetKnown && authoritativeKnown,
+            matched: targetKnown && authoritativeKnown && authoritativeIdentity === targetIdentity,
+            supportingCandidateCount: supporting.length,
+            supportingMatchCount: targetKnown
+                ? supporting.filter((candidate) => candidate === targetIdentity).length
+                : 0
         };
     }
 
