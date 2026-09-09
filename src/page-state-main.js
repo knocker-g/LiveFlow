@@ -387,6 +387,11 @@
             }
 
             const parser = window.LiveFlowChatReadCore;
+            try {
+                window.LiveFlowSchemaDiagnostics?.collect?.(payload);
+            } catch {
+                // Development diagnostics must never affect READ or parsing.
+            }
             let validation;
             let messages;
             let summary;

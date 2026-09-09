@@ -17,6 +17,7 @@
                 "https://youtube.com/*"
             ],
             "js": [
+                "src/schema-diagnostics-core.js",
                 "src/chat-read-core.js",
                 "src/page-state-main.js"
             ],
