@@ -1,0 +1,46 @@
+{
+    "extensionName": {
+        "message": "LiveFlow"
+    },
+    "extensionDescription": {
+        "message": "YouTubeライブチャットをコメントオーバーレイで表示する読み取り専用拡張機能"
+    },
+    "managementBarLabel": {
+        "message": "LiveFlow コントロール"
+    },
+    "liveFlowOn": {
+        "message": "LiveFlow ON"
+    },
+    "liveFlowOff": {
+        "message": "LiveFlow OFF"
+    },
+    "globalSettingsNote": { "message": "YouTube全体に適用されます" },
+    "commentsSection": { "message": "コメント表示" },
+    "appearanceSection": { "message": "表示" },
+    "adaptiveSection": { "message": "自動調整" },
+    "nativeChatSection": { "message": "Native Chat" },
+    "otherSection": { "message": "その他" },
+    "guestComments": { "message": "一般" },
+    "memberComments": { "message": "メンバー" },
+    "moderatorComments": { "message": "モデレーター" },
+    "ownerComments": { "message": "配信者" },
+    "yourComments": { "message": "自分" },
+    "superChatComments": { "message": "Super Chat" },
+    "superStickerComments": { "message": "Super Sticker" },
+    "membershipComments": { "message": "メンバーシップ" },
+    "showAvatars": { "message": "アバターを表示" },
+    "showPinnedComments": { "message": "固定コメントを表示" },
+    "fontSize": { "message": "文字サイズ" },
+    "commentSpeed": { "message": "コメント速度" },
+    "opacity": { "message": "不透明度" },
+    "emojiImages": { "message": "絵文字画像" },
+    "adaptiveDensity": { "message": "コメント密度を自動調整" },
+    "avoidSubtitles": { "message": "字幕を避ける" },
+    "chatClosedEnablesLiveFlow": { "message": "Chatを閉じたらLiveFlowをON" },
+    "liveFlowOffOpensChat": { "message": "LiveFlowをOFFにしたらChatを開く" },
+    "automatic": { "message": "自動" },
+    "resetSettings": { "message": "設定を初期化" },
+    "resetConfirmation": { "message": "すべての設定を初期値に戻しますか？" },
+    "settingsSaved": { "message": "保存しました" },
+    "settingsReset": { "message": "設定を初期化しました" }
+}

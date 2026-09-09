@@ -1,8 +1,15 @@
 {
     "manifest_version": 3,
-    "name": "LiveFlow",
+    "name": "__MSG_extensionName__",
     "version": "0.1.0",
-    "description": "Read-only YouTube Live Chat danmaku for PC Web.",
+    "description": "__MSG_extensionDescription__",
+    "default_locale": "ja",
+    "permissions": [
+        "storage"
+    ],
+    "action": {
+        "default_popup": "popup/popup.html"
+    },
     "content_scripts": [
         {
             "matches": [
@@ -22,6 +29,7 @@
                 "https://youtube.com/*"
             ],
             "js": [
+                "src/settings-core.js",
                 "src/chat-read-core.js",
                 "src/overlay-core.js",
                 "src/youtube-chat.js"

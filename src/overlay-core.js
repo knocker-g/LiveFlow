@@ -250,13 +250,24 @@
         return result;
     }
 
-    function getManagementBarViewModel({ userEnabled, readState } = {}) {
+    function getLocalizedMessage(i18n, key, fallback = '') {
+        const safeFallback = typeof fallback === 'string' ? fallback : '';
+        if (!i18n || typeof i18n.getMessage !== 'function' || typeof key !== 'string' || !key) return safeFallback;
+        try {
+            const message = i18n.getMessage(key);
+            return typeof message === 'string' && message.trim() ? message : safeFallback;
+        } catch {
+            return safeFallback;
+        }
+    }
+
+    function getManagementBarViewModel({ userEnabled, readState, enabledLabel = 'LiveFlow ON', disabledLabel = 'LiveFlow OFF' } = {}) {
         const enabled = userEnabled === true;
         const normalizedReadState = ['idle', 'active', 'stopped'].includes(readState) ? readState : 'idle';
         return {
             enabled,
             statusShape: enabled ? 'playing' : 'stopped',
-            toggleLabel: enabled ? 'LiveFlow ON' : 'LiveFlow OFF',
+            toggleLabel: enabled ? enabledLabel : disabledLabel,
             togglePressed: enabled,
             readState: normalizedReadState
         };
@@ -413,6 +424,7 @@
         isEffectiveDisplayActive,
         getDisplayStateTransition,
         reduceDisplayState,
+        getLocalizedMessage,
         getManagementBarViewModel,
         isChatStackedBelowPlayer,
         isNativeChatOpenButtonUsable,

@@ -28,6 +28,7 @@ const {
     isEffectiveDisplayActive,
     getDisplayStateTransition,
     reduceDisplayState,
+    getLocalizedMessage,
     getManagementBarViewModel,
     isChatStackedBelowPlayer,
     isNativeChatOpenButtonUsable,
@@ -629,6 +630,18 @@ test('management bar view reflects enabled state without controlling READ timing
         togglePressed: false,
         readState: 'active'
     });
+    assert.equal(getManagementBarViewModel({ userEnabled: true, enabledLabel: '有効' }).toggleLabel, '有効');
+    assert.equal(getManagementBarViewModel({ userEnabled: false, disabledLabel: 'Disabled' }).toggleLabel, 'Disabled');
+});
+
+test('runtime localization uses Chrome i18n and falls back deterministically', () => {
+    assert.equal(getLocalizedMessage({ getMessage: (key) => key === 'liveFlowOn' ? 'Localized ON' : '' }, 'liveFlowOn', 'Fallback'), 'Localized ON');
+    assert.equal(getLocalizedMessage({ getMessage: () => '' }, 'liveFlowOn', 'Fallback'), 'Fallback');
+    assert.equal(getLocalizedMessage({ getMessage: () => { throw new Error('unavailable'); } }, 'liveFlowOn', 'Fallback'), 'Fallback');
+    assert.equal(getLocalizedMessage(undefined, 'liveFlowOn', 'Fallback'), 'Fallback');
+    assert.equal(getLocalizedMessage(undefined, 'liveFlowOn'), '');
+    assert.match(runtimeSource, /globalThis\.chrome\?\.i18n/);
+    assert.doesNotMatch(runtimeSource, /navigator\.language|fetch\s*\([^)]*(?:locale|translation)/i);
 });
 
 test('management placement identifies narrow stacked Chat without viewport classification', () => {
@@ -658,11 +671,12 @@ test('management bar uses touch-friendly sizing and CSS-only status shapes', () 
     assert.match(runtimeSource, /managementToggleLabel\.textContent = view\.toggleLabel/);
 });
 
-test('management controls toggle future rendering, omit close, and keep gear as a safe stub', () => {
+test('management controls retain runtime toggle and READ indicator without settings gear', () => {
     assert.match(runtimeSource, /toggle\.addEventListener\('click', \(\) => applyDisplayAction\(\{ type: 'set-user-enabled', value: !userEnabled \}\)\)/);
     assert.doesNotMatch(runtimeSource, /liveflow-close-button|Turn LiveFlow off|close\.addEventListener/);
-    assert.match(runtimeSource, /gear\.addEventListener\('click', \(\) => \{\}\)/);
-    assert.doesNotMatch(runtimeSource, /settings.*throw|gear.*console\.error/is);
+    assert.match(runtimeSource, /bar\.append\(toggle, indicator\)/);
+    assert.doesNotMatch(runtimeSource, /liveflow-settings-button|const gear|gear\.addEventListener/);
+    assert.match(runtimeSource, /liveflow-read-indicator/);
 });
 
 test('management bar cleanup and reattach follow SPA lifecycle and exclude MiniPlayer', () => {

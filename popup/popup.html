@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LiveFlow</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <main>
+        <h1>LiveFlow</h1>
+        <p class="scope-note" data-i18n="globalSettingsNote"></p>
+        <section><h2 data-i18n="commentsSection"></h2><div id="comments-controls"></div></section>
+        <section><h2 data-i18n="appearanceSection"></h2><div id="appearance-controls"></div></section>
+        <section><h2 data-i18n="adaptiveSection"></h2><div id="adaptive-controls"></div></section>
+        <section><h2 data-i18n="nativeChatSection"></h2><div id="native-chat-controls"></div></section>
+        <section><h2 data-i18n="otherSection"></h2><button id="reset-settings" type="button" data-i18n="resetSettings"></button></section>
+        <p id="save-status" role="status" aria-live="polite"></p>
+    </main>
+    <script src="../src/settings-core.js"></script>
+    <script src="popup.js"></script>
+</body>
+</html>

@@ -42,8 +42,8 @@ test('formal runtime contains no Mobile PC-watch bootstrap workaround', () => {
     assert.equal(Object.hasOwn(manifest, 'background'), false);
 });
 
-test('manifest requests no extension API or cross-origin host permissions', () => {
-    assert.equal(Object.hasOwn(manifest, 'permissions'), false);
+test('manifest requests only storage and no cross-origin host permissions', () => {
+    assert.deepEqual(manifest.permissions, ['storage']);
     assert.equal(Object.hasOwn(manifest, 'host_permissions'), false);
     assert.equal(Object.hasOwn(manifest, 'oauth2'), false);
 });

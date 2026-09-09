@@ -10,7 +10,12 @@
     const MAX_MESSAGES = 500;
     const MANAGEMENT_BAR_ID = 'liveflow-management-bar';
     const MANAGEMENT_STYLE_ID = 'liveflow-management-bar-style';
-    const DISPLAY_LINK_SETTINGS = Object.freeze({
+    const UI_FALLBACK_MESSAGES = Object.freeze({
+        managementBarLabel: 'LiveFlow controls',
+        liveFlowOn: 'LiveFlow ON',
+        liveFlowOff: 'LiveFlow OFF'
+    });
+    let displayLinkSettings = Object.freeze({
         autoEnableLiveFlowWhenNativeChatClosed: true,
         autoOpenNativeChatWhenLiveFlowDisabled: true
     });
@@ -66,6 +71,10 @@
 
     function logInfo(message) {
         console.log(`${LOG_PREFIX} ${message}`);
+    }
+
+    function getUiMessage(key) {
+        return overlayCore.getLocalizedMessage(globalThis.chrome?.i18n, key, UI_FALLBACK_MESSAGES[key]);
     }
 
     function requestInitialContinuation() {
@@ -127,7 +136,7 @@
         const transition = overlayCore.reduceDisplayState(
             { userEnabled, nativeChatVisible, nativeChatKnown },
             action,
-            DISPLAY_LINK_SETTINGS
+            displayLinkSettings
         );
         userEnabled = transition.userEnabled;
         nativeChatVisible = transition.nativeChatVisible;
@@ -427,7 +436,12 @@
 
     function updateManagementBar() {
         if (!managementBar) return;
-        const view = overlayCore.getManagementBarViewModel({ userEnabled, readState: readIndicatorState });
+        const view = overlayCore.getManagementBarViewModel({
+            userEnabled,
+            readState: readIndicatorState,
+            enabledLabel: getUiMessage('liveFlowOn'),
+            disabledLabel: getUiMessage('liveFlowOff')
+        });
         managementBar.dataset.enabled = String(view.enabled);
         managementBar.dataset.readState = view.readState;
         managementBar.dataset.statusShape = view.statusShape;
@@ -485,7 +499,7 @@
         const bar = document.createElement('div');
         bar.id = MANAGEMENT_BAR_ID;
         bar.setAttribute('role', 'toolbar');
-        bar.setAttribute('aria-label', 'LiveFlow controls');
+        bar.setAttribute('aria-label', getUiMessage('managementBarLabel'));
 
         const toggle = document.createElement('button');
         toggle.type = 'button';
@@ -503,15 +517,7 @@
         indicator.textContent = '›››››';
         indicator.setAttribute('aria-hidden', 'true');
 
-        const gear = document.createElement('button');
-        gear.type = 'button';
-        gear.className = 'liveflow-settings-button';
-        gear.textContent = '⚙';
-        gear.title = 'Settings (not yet available)';
-        gear.setAttribute('aria-label', 'LiveFlow settings (not yet available)');
-        gear.addEventListener('click', () => {});
-
-        bar.append(toggle, indicator, gear);
+        bar.append(toggle, indicator);
         placement.parent.insertBefore(bar, placement.before);
         managementBar = bar;
         managementToggleButton = toggle;
@@ -524,6 +530,26 @@
     function setReadIndicatorState(state) {
         readIndicatorState = state;
         updateManagementBar();
+    }
+
+    function applyPersistentSettings(settings) {
+        const normalized = window.LiveFlowSettingsCore?.normalizeSettings?.(settings);
+        if (!normalized) return;
+        displayLinkSettings = Object.freeze({
+            autoEnableLiveFlowWhenNativeChatClosed: normalized.autoEnableLiveFlowWhenNativeChatClosed,
+            autoOpenNativeChatWhenLiveFlowDisabled: normalized.autoOpenNativeChatWhenLiveFlowDisabled
+        });
+    }
+
+    function initializePersistentSettings() {
+        const settingsCore = window.LiveFlowSettingsCore;
+        const storageArea = globalThis.chrome?.storage?.local;
+        if (!settingsCore) return;
+        settingsCore.getStoredSettings(storageArea).then(applyPersistentSettings);
+        globalThis.chrome?.storage?.onChanged?.addListener((changes, areaName) => {
+            if (areaName !== 'local' || !changes?.[settingsCore.STORAGE_KEY]) return;
+            applyPersistentSettings(changes[settingsCore.STORAGE_KEY].newValue);
+        });
     }
 
     function refreshManagementBarPlacement() {
@@ -953,6 +979,7 @@
     window.visualViewport?.addEventListener('resize', handleGeometryChange);
     window.visualViewport?.addEventListener('scroll', handleGeometryChange);
 
+    initializePersistentSettings();
     if (isYouTubeWatchPage()) {
         detectPage();
     }

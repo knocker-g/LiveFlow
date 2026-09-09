@@ -1,0 +1,46 @@
+{
+    "extensionName": {
+        "message": "LiveFlow"
+    },
+    "extensionDescription": {
+        "message": "A read-only extension that displays YouTube Live Chat as a comment overlay"
+    },
+    "managementBarLabel": {
+        "message": "LiveFlow controls"
+    },
+    "liveFlowOn": {
+        "message": "LiveFlow ON"
+    },
+    "liveFlowOff": {
+        "message": "LiveFlow OFF"
+    },
+    "globalSettingsNote": { "message": "Applies across YouTube" },
+    "commentsSection": { "message": "Comments" },
+    "appearanceSection": { "message": "Appearance" },
+    "adaptiveSection": { "message": "Adaptive" },
+    "nativeChatSection": { "message": "Native Chat" },
+    "otherSection": { "message": "Other" },
+    "guestComments": { "message": "Guest" },
+    "memberComments": { "message": "Member" },
+    "moderatorComments": { "message": "Moderator" },
+    "ownerComments": { "message": "Owner" },
+    "yourComments": { "message": "You" },
+    "superChatComments": { "message": "Super Chat" },
+    "superStickerComments": { "message": "Super Sticker" },
+    "membershipComments": { "message": "Membership" },
+    "showAvatars": { "message": "Show avatars" },
+    "showPinnedComments": { "message": "Show pinned comments" },
+    "fontSize": { "message": "Font size" },
+    "commentSpeed": { "message": "Comment speed" },
+    "opacity": { "message": "Opacity" },
+    "emojiImages": { "message": "Emoji images" },
+    "adaptiveDensity": { "message": "Adaptive density" },
+    "avoidSubtitles": { "message": "Avoid subtitles" },
+    "chatClosedEnablesLiveFlow": { "message": "Turn LiveFlow on when Chat closes" },
+    "liveFlowOffOpensChat": { "message": "Open Chat when LiveFlow turns off" },
+    "automatic": { "message": "Auto" },
+    "resetSettings": { "message": "Reset settings" },
+    "resetConfirmation": { "message": "Reset all settings to their defaults?" },
+    "settingsSaved": { "message": "Saved" },
+    "settingsReset": { "message": "Settings reset" }
+}
