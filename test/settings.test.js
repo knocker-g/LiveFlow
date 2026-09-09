@@ -75,14 +75,16 @@ test('storage absence fails safely to defaults', async () => {
     assert.deepEqual(await persistSettings(undefined, { showGuest: false }), { ...DEFAULT_SETTINGS, showGuest: false });
 });
 
-test('only implemented linkage preferences are enabled capabilities', () => {
+test('only confirmed Guest, avatar, and linkage preferences are enabled capabilities', () => {
     assert.deepEqual(CAPABILITIES, {
+        showGuest: true,
+        showAvatars: true,
         autoEnableLiveFlowWhenNativeChatClosed: true,
         autoOpenNativeChatWhenLiveFlowDisabled: true
     });
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
         if (key === 'version') continue;
-        if (key.startsWith('auto')) assert.equal(CAPABILITIES[key], true);
+        if (['showGuest', 'showAvatars', 'autoEnableLiveFlowWhenNativeChatClosed', 'autoOpenNativeChatWhenLiveFlowDisabled'].includes(key)) assert.equal(CAPABILITIES[key], true);
         else assert.notEqual(CAPABILITIES[key], true);
     }
 });

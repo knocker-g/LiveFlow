@@ -406,8 +406,11 @@
                 message: message.message,
                 timestampUsec: message.timestampUsec,
                 authorPhoto: message.authorPhoto,
+                authorBadges: message.authorBadges,
                 badges: message.badges,
                 messageType: message.messageType,
+                authorRole: message.authorRole,
+                messageRuns: message.messageRuns,
                 authorExternalChannelId: message.authorExternalChannelId
             }));
 

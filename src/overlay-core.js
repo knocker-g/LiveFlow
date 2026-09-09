@@ -46,7 +46,40 @@
         if (!message || message.messageType !== 'text' || typeof message.message !== 'string') return null;
         const text = message.message.trim();
         if (!text || text.length > DANMAKU_MAX_MESSAGE_LENGTH) return null;
-        return { id: typeof message.id === 'string' ? message.id : '', text };
+        const role = ['guest', 'member', 'moderator', 'owner'].includes(message.authorRole) ? message.authorRole : 'guest';
+        const messageRuns = Array.isArray(message.messageRuns)
+            ? message.messageRuns.filter((run) => run?.type === 'text' && typeof run.text === 'string' && run.text)
+                .map((run) => ({ type: 'text', text: run.text }))
+            : [{ type: 'text', text }];
+        return {
+            id: typeof message.id === 'string' ? message.id : '',
+            text,
+            authorName: typeof message.authorName === 'string' ? message.authorName.trim() : '',
+            authorPhoto: normalizeImageUrl(message.authorPhoto),
+            authorRole: role,
+            messageRuns
+        };
+    }
+
+    function normalizeImageUrl(value) {
+        if (typeof value !== 'string' || !value) return '';
+        try {
+            const url = new URL(value);
+            return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : '';
+        } catch {
+            return '';
+        }
+    }
+
+    function isMessageVisibleForSettings(message, settings = {}) {
+        if (!message || message.messageType !== 'text') return false;
+        const role = ['guest', 'member', 'moderator', 'owner'].includes(message.authorRole) ? message.authorRole : 'guest';
+        const key = { guest: 'showGuest', member: 'showMember', moderator: 'showModerator', owner: 'showOwner' }[role];
+        return settings[key] !== false;
+    }
+
+    function shouldRenderAvatar(message, settings = {}) {
+        return settings.showAvatars !== false && Boolean(normalizeImageUrl(message?.authorPhoto));
     }
 
     function calculateLaneCount(overlayHeight, lineHeight = DANMAKU_LINE_HEIGHT_PX, laneGap = DANMAKU_LANE_GAP_PX, maxLanes = DANMAKU_MAX_LANES) {
@@ -411,6 +444,9 @@
         getVisibleMessages,
         formatMessageText,
         normalizeDanmakuMessage,
+        normalizeImageUrl,
+        isMessageVisibleForSettings,
+        shouldRenderAvatar,
         calculateLaneCount,
         selectAvailableLane,
         calculateDanmakuMotion,

@@ -10,6 +10,9 @@ const {
     calculateDanmakuMotion,
     canRenderDanmaku,
     normalizeDanmakuMessage,
+    normalizeImageUrl,
+    isMessageVisibleForSettings,
+    shouldRenderAvatar,
     isPlaybackEligible,
     calculateVideoSurfaceRect,
     MIN_PLAYABLE_READY_STATE,
@@ -175,7 +178,48 @@ test('empty, unknown, and excessively long messages are ignored safely', () => {
     assert.equal(normalizeDanmakuMessage({ messageType: 'text', message: '   ' }), null);
     assert.equal(normalizeDanmakuMessage({ messageType: 'unknown', message: 'hello' }), null);
     assert.equal(normalizeDanmakuMessage({ messageType: 'text', message: 'x'.repeat(DANMAKU_MAX_MESSAGE_LENGTH + 1) }), null);
-    assert.deepEqual(normalizeDanmakuMessage({ id: 'a', authorName: 'Alice', messageType: 'text', message: ' hello ' }), { id: 'a', text: 'hello' });
+    assert.deepEqual(normalizeDanmakuMessage({ id: 'a', authorName: 'Alice', messageType: 'text', message: ' hello ' }), {
+        id: 'a', text: 'hello', authorName: 'Alice', authorPhoto: '', authorRole: 'guest', messageRuns: [{ type: 'text', text: 'hello' }]
+    });
+});
+
+test('rich text normalization validates avatar URLs and role fallback', () => {
+    const normalized = normalizeDanmakuMessage({
+        id: 'rich', authorName: 'Alice', authorPhoto: 'https://example.com/avatar.png', authorRole: 'unknown',
+        messageType: 'text', message: 'hello', messageRuns: [{ type: 'text', text: 'he' }, { type: 'image', url: 'javascript:bad' }, { type: 'text', text: 'llo' }]
+    });
+    assert.equal(normalized.authorPhoto, 'https://example.com/avatar.png');
+    assert.equal(normalized.authorRole, 'guest');
+    assert.deepEqual(normalized.messageRuns, [{ type: 'text', text: 'he' }, { type: 'text', text: 'llo' }]);
+    assert.equal(normalizeImageUrl('javascript:alert(1)'), '');
+    assert.equal(normalizeImageUrl('not a url'), '');
+});
+
+test('implemented Guest visibility is settings-driven and unknown roles fail safe to Guest', () => {
+    assert.equal(isMessageVisibleForSettings({ messageType: 'text', authorRole: 'guest' }, { showGuest: true }), true);
+    assert.equal(isMessageVisibleForSettings({ messageType: 'text', authorRole: 'guest' }, { showGuest: false }), false);
+    assert.equal(isMessageVisibleForSettings({ messageType: 'text', authorRole: 'unknown' }, { showGuest: false }), false);
+    assert.equal(isMessageVisibleForSettings({ messageType: 'unknown' }, {}), false);
+});
+
+test('avatar preference controls validated avatar rendering', () => {
+    const message = { authorPhoto: 'https://example.com/avatar.png' };
+    assert.equal(shouldRenderAvatar(message, { showAvatars: true }), true);
+    assert.equal(shouldRenderAvatar(message, { showAvatars: false }), false);
+    assert.equal(shouldRenderAvatar({ authorPhoto: 'javascript:bad' }, { showAvatars: true }), false);
+    assert.equal(shouldRenderAvatar({}, { showAvatars: true }), false);
+});
+
+test('rich comment DOM uses safe construction, bounded avatar geometry, and measured total width', () => {
+    assert.match(runtimeSource, /document\.createElement\('img'\)/);
+    assert.match(runtimeSource, /avatar\.width = 22/);
+    assert.match(runtimeSource, /avatar\.height = 22/);
+    assert.match(runtimeSource, /document\.createTextNode\(run\.text\)/);
+    assert.match(runtimeSource, /const commentWidth = node\.getBoundingClientRect\(\)\.width/);
+    assert.doesNotMatch(runtimeSource, /innerHTML|insertAdjacentHTML|eval\s*\(|new Function/);
+    assert.match(runtimeSource, /data-author-role="member"/);
+    assert.match(runtimeSource, /data-author-role="moderator"/);
+    assert.match(runtimeSource, /data-author-role="owner"/);
 });
 
 test('active hard limit drops new comments without disturbing existing comments', () => {
@@ -304,7 +348,7 @@ test('main-player lookup is scoped to the current watch root and rejects MiniPla
 test('renderer queue is bounded with one timer and cancelled during teardown and SPA cleanup', () => {
     assert.equal(DANMAKU_MAX_RENDER_QUEUE, 150);
     assert.match(runtimeSource, /DANMAKU_MAX_RENDER_QUEUE - rendererQueue\.length/);
-    assert.match(runtimeSource, /messages\.slice\(0, availableSlots\)/);
+    assert.match(runtimeSource, /visibleMessages\.slice\(0, availableSlots\)/);
     assert.equal((runtimeSource.match(/let rendererQueueTimer = null/g) || []).length, 1);
     assert.match(runtimeSource, /if \(rendererQueueTimer !== null\) window\.clearTimeout\(rendererQueueTimer\)/);
     assert.match(runtimeSource, /rendererQueue\.length = 0/);
@@ -352,7 +396,7 @@ test('overlay root is reused and remains non-interactive', () => {
     assert.match(runtimeSource, /overlayRoot\?\.isConnected && overlayRoot\.parentElement === player/);
     assert.match(runtimeSource, /pointer-events:none/);
     assert.match(runtimeSource, /overflow:hidden/);
-    assert.match(runtimeSource, /node\.textContent = normalized\.text/);
+    assert.match(runtimeSource, /document\.createTextNode\(run\.text\)/);
 });
 
 test('display state permits every Native Chat combination and follows userEnabled only', () => {
@@ -783,7 +827,7 @@ test('A to B to C navigation repeatedly invalidates every asynchronous renderer 
 test('collision queue preserves FIFO order, drops newest only at its bound, and uses no polling', () => {
     assert.match(runtimeSource, /const entry = rendererQueue\[0\]/);
     assert.match(runtimeSource, /rendererQueue\.shift\(\)/);
-    assert.match(runtimeSource, /messages\.slice\(0, availableSlots\)/);
+    assert.match(runtimeSource, /visibleMessages\.slice\(0, availableSlots\)/);
     assert.match(runtimeSource, /Renderer queue overflow dropped: \$\{droppedCount\}/);
     assert.match(runtimeSource, /scheduleRendererQueueDrain\(result\.resumeAtMs\)/);
     assert.doesNotMatch(runtimeSource, /setInterval\s*\(|requestAnimationFrame\s*\(/);

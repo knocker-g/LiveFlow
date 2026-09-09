@@ -24,6 +24,8 @@
         autoOpenNativeChatWhenLiveFlowDisabled: true
     });
     const CAPABILITIES = Object.freeze({
+        showGuest: true,
+        showAvatars: true,
         autoEnableLiveFlowWhenNativeChatClosed: true,
         autoOpenNativeChatWhenLiveFlowDisabled: true
     });

@@ -9,14 +9,17 @@
     ];
 
     class ChatMessage {
-        constructor({ id, authorName, message, timestampUsec, authorPhoto, badges, messageType, authorExternalChannelId }) {
+        constructor({ id, authorName, message, timestampUsec, authorPhoto, authorBadges, badges, messageType, authorRole, messageRuns, authorExternalChannelId }) {
             this.id = id || '';
             this.authorName = authorName || '';
             this.message = message || '';
             this.timestampUsec = timestampUsec || '';
             this.authorPhoto = authorPhoto || '';
-            this.badges = Array.isArray(badges) ? badges : [];
+            this.authorBadges = Array.isArray(authorBadges) ? authorBadges : Array.isArray(badges) ? badges : [];
+            this.badges = this.authorBadges;
             this.messageType = messageType || 'text';
+            this.authorRole = ['guest', 'member', 'moderator', 'owner'].includes(authorRole) ? authorRole : 'guest';
+            this.messageRuns = Array.isArray(messageRuns) ? messageRuns : [];
             this.authorExternalChannelId = authorExternalChannelId || '';
         }
 
@@ -33,6 +36,9 @@
                 ? renderer.message.runs
                 : [];
             const messageText = textRuns.map((run) => run?.text || '').join('');
+            const messageRuns = textRuns
+                .filter((run) => typeof run?.text === 'string' && run.text)
+                .map((run) => ({ type: 'text', text: run.text }));
 
             const firstThumbnail = Array.isArray(renderer.authorPhoto?.thumbnails) && renderer.authorPhoto.thumbnails.length > 0
                 ? renderer.authorPhoto.thumbnails[0].url || ''
@@ -48,8 +54,10 @@
                 message: messageText,
                 timestampUsec: renderer.timestampUsec || '',
                 authorPhoto: firstThumbnail,
-                badges,
+                authorBadges: badges,
                 messageType: 'text',
+                authorRole: 'guest',
+                messageRuns,
                 authorExternalChannelId: renderer.authorExternalChannelId || ''
             });
         }

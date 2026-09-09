@@ -43,8 +43,35 @@ test('ChatMessage converts text message renderer into model', () => {
     assert.equal(message.timestampUsec, '1710000000000000');
     assert.equal(message.authorPhoto, 'https://example.com/a.jpg');
     assert.equal(message.badges.length, 1);
+    assert.deepEqual(message.authorBadges, ['member']);
     assert.equal(message.messageType, 'text');
+    assert.equal(message.authorRole, 'guest');
+    assert.deepEqual(message.messageRuns, [{ type: 'text', text: 'Hello' }, { type: 'text', text: ' world' }]);
     assert.equal(message.authorExternalChannelId, 'UC-abc');
+});
+
+test('text renderer normalization ignores malformed runs and safely falls back to Guest', () => {
+    const message = ChatMessage.fromRenderer({
+        id: 'mixed',
+        authorName: { runs: [{ text: 'Bob' }] },
+        message: { runs: [{ text: 'safe' }, null, { emoji: { image: {} } }, { text: ' text' }] },
+        authorPhoto: { thumbnails: [] }
+    });
+    assert.equal(message.message, 'safe text');
+    assert.deepEqual(message.messageRuns, [{ type: 'text', text: 'safe' }, { type: 'text', text: ' text' }]);
+    assert.equal(message.authorPhoto, '');
+    assert.equal(message.authorRole, 'guest');
+});
+
+test('unknown and malformed renderer actions are ignored', () => {
+    const response = {
+        continuationContents: { liveChatContinuation: { actions: [
+            { addChatItemAction: { item: { unknownRenderer: { id: 'unknown' } } } },
+            { replaceChatItemAction: { replacementItem: {} } },
+            null
+        ] } }
+    };
+    assert.deepEqual(extractChatMessagesFromResponse(response), []);
 });
 
 test('extractChatMessagesFromResponse returns chat data from measured response format', () => {

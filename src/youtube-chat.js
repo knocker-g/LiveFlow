@@ -19,6 +19,7 @@
         autoEnableLiveFlowWhenNativeChatClosed: true,
         autoOpenNativeChatWhenLiveFlowDisabled: true
     });
+    let runtimeSettings = null;
     const PLAYER_SELECTORS = Object.freeze({
         watchRoot: 'ytd-watch-flexy',
         nativeChat: 'ytd-live-chat-frame#chat, ytd-live-chat-frame',
@@ -426,6 +427,14 @@
             #${MANAGEMENT_BAR_ID}[data-enabled="false"] .liveflow-read-indicator {
                 visibility: hidden;
             }
+            .liveflow-danmaku { display: inline-flex; align-items: center; gap: 6px; max-width: min(80%, 720px); }
+            .liveflow-danmaku-avatar { flex: 0 0 22px; width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+            .liveflow-danmaku-author { flex: 0 0 auto; font-weight: 700; }
+            .liveflow-danmaku-message { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+            .liveflow-danmaku[data-author-role="guest"] { color: #fff; text-shadow: 0 1px 3px #000, 0 0 2px #000; }
+            .liveflow-danmaku[data-author-role="member"] { color: #66e08a; text-shadow: 0 1px 3px #001a08, 0 0 2px #000; }
+            .liveflow-danmaku[data-author-role="moderator"] { color: #70b7ff; text-shadow: 0 1px 3px #00152b, 0 0 2px #000; }
+            .liveflow-danmaku[data-author-role="owner"] { color: #ffd75e; text-shadow: 0 1px 3px #2b2100, 0 0 2px #000; }
             @keyframes liveflow-read-indicator { from { opacity: .35; } to { opacity: 1; } }
             @media (prefers-reduced-motion: reduce) {
                 #${MANAGEMENT_BAR_ID}[data-read-state="active"] .liveflow-read-indicator { animation: none; }
@@ -535,6 +544,7 @@
     function applyPersistentSettings(settings) {
         const normalized = window.LiveFlowSettingsCore?.normalizeSettings?.(settings);
         if (!normalized) return;
+        runtimeSettings = normalized;
         displayLinkSettings = Object.freeze({
             autoEnableLiveFlowWhenNativeChatClosed: normalized.autoEnableLiveFlowWhenNativeChatClosed,
             autoOpenNativeChatWhenLiveFlowDisabled: normalized.autoOpenNativeChatWhenLiveFlowDisabled
@@ -629,8 +639,29 @@
 
         const node = document.createElement('div');
         node.className = 'liveflow-danmaku';
-        node.textContent = normalized.text;
-        node.style.cssText = `position:absolute;left:0;top:0;visibility:hidden;white-space:nowrap;font:${overlayCore.DANMAKU_FONT_SIZE_PX}px/${overlayCore.DANMAKU_LINE_HEIGHT_PX}px sans-serif;font-weight:600;color:#fff;text-shadow:0 1px 3px #000;will-change:transform;pointer-events:none;`;
+        node.dataset.authorRole = normalized.authorRole;
+        node.style.cssText = `position:absolute;left:0;top:0;visibility:hidden;white-space:nowrap;font:${overlayCore.DANMAKU_FONT_SIZE_PX}px/${overlayCore.DANMAKU_LINE_HEIGHT_PX}px sans-serif;font-weight:600;will-change:transform;pointer-events:none;`;
+        if (overlayCore.shouldRenderAvatar(normalized, runtimeSettings || {})) {
+            const avatar = document.createElement('img');
+            avatar.className = 'liveflow-danmaku-avatar';
+            avatar.alt = '';
+            avatar.src = normalized.authorPhoto;
+            avatar.width = 22;
+            avatar.height = 22;
+            node.appendChild(avatar);
+        }
+        if (normalized.authorName) {
+            const author = document.createElement('span');
+            author.className = 'liveflow-danmaku-author';
+            author.textContent = `${normalized.authorName}:`;
+            node.appendChild(author);
+        }
+        const content = document.createElement('span');
+        content.className = 'liveflow-danmaku-message';
+        for (const run of normalized.messageRuns) {
+            if (run.type === 'text') content.appendChild(document.createTextNode(run.text));
+        }
+        node.appendChild(content);
         overlaySurface.appendChild(node);
         const commentWidth = node.getBoundingClientRect().width;
         const speed = overlayCore.calculateDanmakuSpeed({ overlayWidth: surfaceRect.width, commentWidth });
@@ -757,8 +788,11 @@
         const scheduledGeneration = rendererGeneration;
         const scheduledVideo = media.video;
         const availableSlots = Math.max(0, overlayCore.DANMAKU_MAX_RENDER_QUEUE - rendererQueue.length);
-        const incoming = Array.isArray(messages) ? messages.slice(0, availableSlots) : [];
-        const droppedCount = Array.isArray(messages) ? messages.length - incoming.length : 0;
+        const visibleMessages = Array.isArray(messages)
+            ? messages.filter((message) => overlayCore.isMessageVisibleForSettings(message, runtimeSettings || {}))
+            : [];
+        const incoming = visibleMessages.slice(0, availableSlots);
+        const droppedCount = visibleMessages.length - incoming.length;
         if (droppedCount > 0) logInfo(`Renderer queue overflow dropped: ${droppedCount}`);
         const batchStartMs = performance.now();
         const plan = overlayCore.planDanmakuBatch(incoming, incoming.length || 1);
