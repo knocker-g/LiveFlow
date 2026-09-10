@@ -13,6 +13,8 @@ const {
     normalizeImageUrl,
     isMessageVisibleForSettings,
     shouldRenderAvatar,
+    getRenderableMessageRuns,
+    normalizeYouTubeColor,
     isPlaybackEligible,
     calculateVideoSurfaceRect,
     MIN_PLAYABLE_READY_STATE,
@@ -210,11 +212,54 @@ test('avatar preference controls validated avatar rendering', () => {
     assert.equal(shouldRenderAvatar({}, { showAvatars: true }), false);
 });
 
+test('emoji image setting switches validated image runs to safe alt text immediately', () => {
+    const message = { messageRuns: [
+        { type: 'text', text: 'a' },
+        { type: 'image', url: 'https://example.com/emoji.png', alt: ':wave:', isCustomEmoji: true },
+        { type: 'image', url: 'javascript:bad', alt: 'bad' }
+    ] };
+    assert.deepEqual(getRenderableMessageRuns(message, { emojiImages: true }), [
+        { type: 'text', text: 'a' },
+        { type: 'image', url: 'https://example.com/emoji.png', alt: ':wave:', isCustomEmoji: true }
+    ]);
+    assert.deepEqual(getRenderableMessageRuns(message, { emojiImages: false }), [
+        { type: 'text', text: 'a' }, { type: 'text', text: ':wave:' }
+    ]);
+    assert.notEqual(normalizeDanmakuMessage({ messageType: 'text', message: '', messageRuns: [{ type: 'image', url: 'https://example.com/only.png', alt: '' }] }), null);
+});
+
+test('Super Chat and Super Sticker visibility follows enabled settings', () => {
+    assert.equal(isMessageVisibleForSettings({ messageType: 'superChat' }, { showSuperChat: true }), true);
+    assert.equal(isMessageVisibleForSettings({ messageType: 'superChat' }, { showSuperChat: false }), false);
+    assert.equal(isMessageVisibleForSettings({ messageType: 'superSticker' }, { showSuperSticker: true }), true);
+    assert.equal(isMessageVisibleForSettings({ messageType: 'superSticker' }, { showSuperSticker: false }), false);
+});
+
+test('special messages normalize observed fields and malformed colors fall back safely', () => {
+    const normalized = normalizeDanmakuMessage({
+        id: 'paid', messageType: 'superChat', message: 'hello', authorName: 'Alice', purchaseAmountText: '$5',
+        colors: { bodyBackgroundColor: 0xff112233, bodyTextColor: 'unsafe' },
+        messageRuns: [{ type: 'text', text: 'hello' }]
+    });
+    assert.equal(normalized.messageType, 'superChat');
+    assert.equal(normalized.purchaseAmountText, '$5');
+    assert.deepEqual(normalized.colors, { bodyBackgroundColor: 'rgba(17, 34, 51, 1)' });
+    assert.equal(normalizeYouTubeColor(Number.NaN), '');
+    assert.equal(normalizeYouTubeColor('4278190080'), '');
+    assert.equal(normalizeYouTubeColor(0x00112233), '');
+    assert.equal(normalizeDanmakuMessage({ messageType: 'superSticker', message: '', purchaseAmountText: '', sticker: { url: 'javascript:bad' } }), null);
+});
+
 test('rich comment DOM uses safe construction, bounded avatar geometry, and measured total width', () => {
     assert.match(runtimeSource, /document\.createElement\('img'\)/);
     assert.match(runtimeSource, /avatar\.width = 22/);
     assert.match(runtimeSource, /avatar\.height = 22/);
     assert.match(runtimeSource, /document\.createTextNode\(run\.text\)/);
+    assert.match(runtimeSource, /liveflow-danmaku-emoji/);
+    assert.match(runtimeSource, /image\.width = 29/);
+    assert.match(runtimeSource, /liveflow-danmaku-sticker/);
+    assert.match(runtimeSource, /sticker\.width = 28/);
+    assert.match(runtimeSource, /liveflow-danmaku-special/);
     assert.match(runtimeSource, /const commentWidth = node\.getBoundingClientRect\(\)\.width/);
     assert.doesNotMatch(runtimeSource, /innerHTML|insertAdjacentHTML|eval\s*\(|new Function/);
     assert.match(runtimeSource, /data-author-role="member"/);

@@ -431,6 +431,11 @@
             .liveflow-danmaku-avatar { flex: 0 0 22px; width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
             .liveflow-danmaku-author { flex: 0 0 auto; font-weight: 700; }
             .liveflow-danmaku-message { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+            .liveflow-danmaku-emoji { width: 1.2em; height: 1.2em; object-fit: contain; vertical-align: middle; }
+            .liveflow-danmaku-special { box-sizing: border-box; max-width: min(72%, 520px); height: 32px; padding: 0 8px; overflow: hidden; border-radius: 8px; background: rgba(24,24,24,.92); color: #fff; text-shadow: 0 1px 2px #000; }
+            .liveflow-danmaku-special .liveflow-danmaku-author { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+            .liveflow-danmaku-amount { flex: 0 1 auto; max-width: 100px; overflow: hidden; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.25); font-weight: 700; text-overflow: ellipsis; }
+            .liveflow-danmaku-sticker { flex: 0 0 28px; width: 28px; height: 28px; object-fit: contain; }
             .liveflow-danmaku[data-author-role="guest"] { color: #fff; text-shadow: 0 1px 3px #000, 0 0 2px #000; }
             .liveflow-danmaku[data-author-role="member"] { color: #66e08a; text-shadow: 0 1px 3px #001a08, 0 0 2px #000; }
             .liveflow-danmaku[data-author-role="moderator"] { color: #70b7ff; text-shadow: 0 1px 3px #00152b, 0 0 2px #000; }
@@ -641,6 +646,15 @@
         node.className = 'liveflow-danmaku';
         node.dataset.authorRole = normalized.authorRole;
         node.style.cssText = `position:absolute;left:0;top:0;visibility:hidden;white-space:nowrap;font:${overlayCore.DANMAKU_FONT_SIZE_PX}px/${overlayCore.DANMAKU_LINE_HEIGHT_PX}px sans-serif;font-weight:600;will-change:transform;pointer-events:none;`;
+        const special = normalized.messageType === 'superChat' || normalized.messageType === 'superSticker';
+        if (special) {
+            node.classList.add('liveflow-danmaku-special');
+            node.dataset.messageType = normalized.messageType;
+            const backgroundColor = normalized.colors.bodyBackgroundColor || normalized.colors.backgroundColor || normalized.colors.headerBackgroundColor;
+            const textColor = normalized.colors.bodyTextColor || normalized.colors.moneyChipTextColor || normalized.colors.headerTextColor;
+            if (backgroundColor) node.style.backgroundColor = backgroundColor;
+            if (textColor) node.style.color = textColor;
+        }
         if (overlayCore.shouldRenderAvatar(normalized, runtimeSettings || {})) {
             const avatar = document.createElement('img');
             avatar.className = 'liveflow-danmaku-avatar';
@@ -650,18 +664,45 @@
             avatar.height = 22;
             node.appendChild(avatar);
         }
-        if (normalized.authorName) {
+        if (special && normalized.authorName) {
             const author = document.createElement('span');
             author.className = 'liveflow-danmaku-author';
-            author.textContent = `${normalized.authorName}:`;
+            author.textContent = normalized.authorName;
+            if (normalized.colors.authorNameTextColor) author.style.color = normalized.colors.authorNameTextColor;
             node.appendChild(author);
+        }
+        if (special && normalized.purchaseAmountText) {
+            const amount = document.createElement('span');
+            amount.className = 'liveflow-danmaku-amount';
+            amount.textContent = normalized.purchaseAmountText;
+            if (normalized.colors.moneyChipBackgroundColor) amount.style.backgroundColor = normalized.colors.moneyChipBackgroundColor;
+            if (normalized.colors.moneyChipTextColor) amount.style.color = normalized.colors.moneyChipTextColor;
+            node.appendChild(amount);
+        }
+        if (normalized.messageType === 'superSticker' && normalized.sticker?.url) {
+            const sticker = document.createElement('img');
+            sticker.className = 'liveflow-danmaku-sticker';
+            sticker.src = normalized.sticker.url;
+            sticker.alt = normalized.sticker.alt;
+            sticker.width = 28;
+            sticker.height = 28;
+            node.appendChild(sticker);
         }
         const content = document.createElement('span');
         content.className = 'liveflow-danmaku-message';
-        for (const run of normalized.messageRuns) {
+        for (const run of overlayCore.getRenderableMessageRuns(normalized, runtimeSettings || {})) {
             if (run.type === 'text') content.appendChild(document.createTextNode(run.text));
+            if (run.type === 'image') {
+                const image = document.createElement('img');
+                image.className = 'liveflow-danmaku-emoji';
+                image.src = run.url;
+                image.alt = run.alt;
+                image.width = 29;
+                image.height = 29;
+                content.appendChild(image);
+            }
         }
-        node.appendChild(content);
+        if (content.childNodes.length > 0) node.appendChild(content);
         overlaySurface.appendChild(node);
         const commentWidth = node.getBoundingClientRect().width;
         const speed = overlayCore.calculateDanmakuSpeed({ overlayWidth: surfaceRect.width, commentWidth });

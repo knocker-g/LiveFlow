@@ -416,7 +416,10 @@
                 messageType: message.messageType,
                 authorRole: message.authorRole,
                 messageRuns: message.messageRuns,
-                authorExternalChannelId: message.authorExternalChannelId
+                authorExternalChannelId: message.authorExternalChannelId,
+                purchaseAmountText: message.purchaseAmountText,
+                sticker: message.sticker,
+                colors: message.colors
             }));
 
             return {

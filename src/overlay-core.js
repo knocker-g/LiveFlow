@@ -43,15 +43,23 @@
     }
 
     function normalizeDanmakuMessage(message) {
-        if (!message || message.messageType !== 'text' || typeof message.message !== 'string') return null;
+        if (!message || !['text', 'superChat', 'superSticker'].includes(message.messageType) || typeof message.message !== 'string') return null;
         const text = message.message.trim();
-        if (!text || text.length > DANMAKU_MAX_MESSAGE_LENGTH) return null;
+        const purchaseAmountText = typeof message.purchaseAmountText === 'string' ? message.purchaseAmountText.trim() : '';
+        const sticker = message.messageType === 'superSticker' && message.sticker
+            ? { url: normalizeImageUrl(message.sticker.url), alt: typeof message.sticker.alt === 'string' ? message.sticker.alt : '' }
+            : null;
         const role = ['guest', 'member', 'moderator', 'owner'].includes(message.authorRole) ? message.authorRole : 'guest';
         const messageRuns = Array.isArray(message.messageRuns)
-            ? message.messageRuns.filter((run) => run?.type === 'text' && typeof run.text === 'string' && run.text)
-                .map((run) => ({ type: 'text', text: run.text }))
-            : [{ type: 'text', text }];
-        return {
+            ? message.messageRuns.flatMap((run) => {
+                if (run?.type === 'text' && typeof run.text === 'string' && run.text) return [{ type: 'text', text: run.text }];
+                if (run?.type !== 'image') return [];
+                const url = normalizeImageUrl(run.url);
+                return url ? [{ type: 'image', url, alt: typeof run.alt === 'string' ? run.alt : '', isCustomEmoji: run.isCustomEmoji === true }] : [];
+            })
+            : text ? [{ type: 'text', text }] : [];
+        if ((!text && messageRuns.length === 0 && !purchaseAmountText && !sticker?.url) || text.length > DANMAKU_MAX_MESSAGE_LENGTH) return null;
+        const normalized = {
             id: typeof message.id === 'string' ? message.id : '',
             text,
             authorName: typeof message.authorName === 'string' ? message.authorName.trim() : '',
@@ -59,6 +67,13 @@
             authorRole: role,
             messageRuns
         };
+        if (message.messageType !== 'text') {
+            normalized.messageType = message.messageType;
+            normalized.purchaseAmountText = purchaseAmountText;
+            normalized.colors = normalizeMessageColors(message.colors);
+            normalized.sticker = sticker?.url ? sticker : null;
+        }
+        return normalized;
     }
 
     function normalizeImageUrl(value) {
@@ -72,7 +87,10 @@
     }
 
     function isMessageVisibleForSettings(message, settings = {}) {
-        if (!message || message.messageType !== 'text') return false;
+        if (!message) return false;
+        if (message.messageType === 'superChat') return settings.showSuperChat !== false;
+        if (message.messageType === 'superSticker') return settings.showSuperSticker !== false;
+        if (message.messageType !== 'text') return false;
         const role = ['guest', 'member', 'moderator', 'owner'].includes(message.authorRole) ? message.authorRole : 'guest';
         const key = { guest: 'showGuest', member: 'showMember', moderator: 'showModerator', owner: 'showOwner' }[role];
         return settings[key] !== false;
@@ -80,6 +98,42 @@
 
     function shouldRenderAvatar(message, settings = {}) {
         return settings.showAvatars !== false && Boolean(normalizeImageUrl(message?.authorPhoto));
+    }
+
+    function getRenderableMessageRuns(message, settings = {}) {
+        const runs = Array.isArray(message?.messageRuns) ? message.messageRuns : [];
+        return runs.flatMap((run) => {
+            if (run?.type === 'text' && typeof run.text === 'string' && run.text) return [{ type: 'text', text: run.text }];
+            if (run?.type !== 'image') return [];
+            const url = normalizeImageUrl(run.url);
+            if (!url) return [];
+            const alt = typeof run.alt === 'string' ? run.alt : '';
+            return settings.emojiImages === false
+                ? alt ? [{ type: 'text', text: alt }] : []
+                : [{ type: 'image', url, alt, isCustomEmoji: run.isCustomEmoji === true }];
+        });
+    }
+
+    function normalizeYouTubeColor(value) {
+        if (typeof value !== 'number' || !Number.isInteger(value) || value < -2147483648 || value > 4294967295) return '';
+        const color = value >>> 0;
+        const alphaByte = (color >>> 24) & 255;
+        if (alphaByte === 0) return '';
+        const alpha = alphaByte / 255;
+        const red = (color >>> 16) & 255;
+        const green = (color >>> 8) & 255;
+        const blue = color & 255;
+        return `rgba(${red}, ${green}, ${blue}, ${Number(alpha.toFixed(3))})`;
+    }
+
+    function normalizeMessageColors(colors) {
+        if (!colors || typeof colors !== 'object' || Array.isArray(colors)) return {};
+        const normalized = {};
+        for (const [key, value] of Object.entries(colors)) {
+            const color = normalizeYouTubeColor(value);
+            if (color) normalized[key] = color;
+        }
+        return normalized;
     }
 
     function calculateLaneCount(overlayHeight, lineHeight = DANMAKU_LINE_HEIGHT_PX, laneGap = DANMAKU_LANE_GAP_PX, maxLanes = DANMAKU_MAX_LANES) {
@@ -447,6 +501,9 @@
         normalizeImageUrl,
         isMessageVisibleForSettings,
         shouldRenderAvatar,
+        getRenderableMessageRuns,
+        normalizeYouTubeColor,
+        normalizeMessageColors,
         calculateLaneCount,
         selectAvailableLane,
         calculateDanmakuMotion,

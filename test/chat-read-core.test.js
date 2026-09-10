@@ -1,8 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { MAX_VISIBLE_MESSAGES, mergeMessagesById, getVisibleMessages, formatMessageText } = require('../src/overlay-core.js');
 
-const { ChatMessage, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs, validateLiveChatReadResponse, isSuccessfulHttpStatus, canStartReadLoop, canScheduleNextRead, extractWatchTargetIdentity, evaluateBootstrapTarget, canEstablishPageLifecycle, canReevaluatePageLifecycle, canSignalOwnershipReevaluation, LIVEFLOW_MIN_READ_DELAY_MS, LIVEFLOW_MAX_TIMER_DELAY_MS } = require('../src/chat-read-core.js');
+const { ChatMessage, normalizeMessageRuns, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs, validateLiveChatReadResponse, isSuccessfulHttpStatus, canStartReadLoop, canScheduleNextRead, extractWatchTargetIdentity, evaluateBootstrapTarget, canEstablishPageLifecycle, canReevaluatePageLifecycle, canSignalOwnershipReevaluation, LIVEFLOW_MIN_READ_DELAY_MS, LIVEFLOW_MAX_TIMER_DELAY_MS } = require('../src/chat-read-core.js');
 
 const sampleResponse = {
     continuationContents: {
@@ -72,6 +74,84 @@ test('unknown and malformed renderer actions are ignored', () => {
         ] } }
     };
     assert.deepEqual(extractChatMessagesFromResponse(response), []);
+});
+
+test('observed text runs preserve mixed text and custom emoji order', () => {
+    const runs = normalizeMessageRuns([
+        { text: 'before' },
+        { emoji: { image: { thumbnails: [{ url: 'https://example.com/emoji.png' }], accessibility: { accessibilityData: { label: 'wave' } } }, shortcuts: [':wave:'], isCustomEmoji: true } },
+        { text: 'after' }
+    ]);
+    assert.deepEqual(runs, [
+        { type: 'text', text: 'before' },
+        { type: 'image', url: 'https://example.com/emoji.png', alt: 'wave', isCustomEmoji: true },
+        { type: 'text', text: 'after' }
+    ]);
+});
+
+test('emoji normalization rejects malformed and unsafe images and uses observed shortcut fallback', () => {
+    assert.deepEqual(normalizeMessageRuns([
+        { emoji: { image: { thumbnails: [{ url: 'javascript:alert(1)' }] }, shortcuts: [':bad:'] } },
+        { emoji: { image: { thumbnails: [{ url: 'https://example.com/safe.png' }] }, shortcuts: [':safe:'] } },
+        { emoji: null }
+    ]), [{ type: 'image', url: 'https://example.com/safe.png', alt: ':safe:', isCustomEmoji: false }]);
+    assert.equal(normalizeMessageRuns([{ emoji: { image: { thumbnails: [{ url: 'https://example.com/safe.png' }] }, shortcuts: ['x'.repeat(500)] } }])[0].alt.length, 160);
+});
+
+test('observed Super Chat renderer normalizes amount, author, runs, avatar, and colors', () => {
+    const response = { continuationContents: { liveChatContinuation: { actions: [{ addChatItemAction: { item: {
+        liveChatPaidMessageRenderer: {
+            id: 'paid', timestampUsec: '1', authorName: { simpleText: 'Alice' },
+            authorPhoto: { thumbnails: [{ url: 'https://example.com/avatar.png' }] },
+            purchaseAmountText: { simpleText: '$5' }, message: { runs: [{ text: 'Thanks' }] },
+            headerBackgroundColor: 0xff112233, bodyTextColor: 0xffffffff,
+            trackingParams: 'ignored', contextMenuEndpoint: { ignored: true }
+        }
+    } } }] } } };
+    const [message] = extractChatMessagesFromResponse(response);
+    assert.equal(message.messageType, 'superChat');
+    assert.equal(message.authorName, 'Alice');
+    assert.equal(message.purchaseAmountText, '$5');
+    assert.equal(message.message, 'Thanks');
+    assert.equal(message.authorPhoto, 'https://example.com/avatar.png');
+    assert.deepEqual(message.colors, { headerBackgroundColor: 0xff112233, bodyTextColor: 0xffffffff });
+    assert.equal('trackingParams' in message, false);
+    assert.equal('contextMenuEndpoint' in message, false);
+});
+
+test('observed Super Sticker renderer normalizes bounded image source data', () => {
+    const response = { continuationContents: { liveChatContinuation: { actions: [{ addChatItemAction: { item: {
+        liveChatPaidStickerRenderer: {
+            id: 'sticker', authorName: { simpleText: 'Bob' }, purchaseAmountText: { simpleText: '$2' },
+            sticker: { thumbnails: [{ url: 'https://example.com/sticker.png' }], accessibility: { accessibilityData: { label: 'celebration' } } },
+            backgroundColor: 0xff334455
+        }
+    } } }] } } };
+    const [message] = extractChatMessagesFromResponse(response);
+    assert.equal(message.messageType, 'superSticker');
+    assert.equal(message.purchaseAmountText, '$2');
+    assert.deepEqual(message.sticker, { url: 'https://example.com/sticker.png', alt: 'celebration' });
+    assert.deepEqual(message.colors, { backgroundColor: 0xff334455 });
+});
+
+test('malformed sticker, ticker duplicate, gift view model, and unknown renderer fail safe', () => {
+    const response = { continuationContents: { liveChatContinuation: { actions: [
+        { addChatItemAction: { item: { liveChatPaidStickerRenderer: { id: 'bad', sticker: { thumbnails: [{ url: 'data:image/png;base64,bad' }] } } } } },
+        { addLiveChatTickerItemAction: { item: { liveChatTickerPaidMessageItemRenderer: { showLiveChatItemEndpoint: { renderer: { liveChatPaidMessageRenderer: { id: 'ticker' } } } } } } },
+        { addChatItemAction: { item: { giftMessageViewModel: { id: 'gift' } } } },
+        { addChatItemAction: { item: { unknownRenderer: { id: 'unknown' } } } }
+    ] } } };
+    const messages = extractChatMessagesFromResponse(response);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].messageType, 'superSticker');
+    assert.equal(messages[0].sticker, null);
+    assert.equal(messages.some((message) => message.id === 'ticker' || message.id === 'gift'), false);
+});
+
+test('normalized special fields cross the existing bridge without raw response fields', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../src/page-state-main.js'), 'utf8');
+    for (const field of ['purchaseAmountText', 'sticker', 'colors']) assert.match(source, new RegExp(`${field}: message\\.${field}`));
+    assert.doesNotMatch(source, /trackingParams: message|contextMenuEndpoint: message|clickTrackingParams: message/);
 });
 
 test('extractChatMessagesFromResponse returns chat data from measured response format', () => {

@@ -7,9 +7,16 @@
         'timedContinuationData',
         'reloadContinuationData'
     ];
+    const MAX_AUTHOR_NAME_LENGTH = 100;
+    const MAX_AMOUNT_TEXT_LENGTH = 64;
+    const MAX_IMAGE_ALT_LENGTH = 160;
+
+    function normalizeDisplayText(value, maxLength) {
+        return typeof value === 'string' ? value.slice(0, maxLength) : '';
+    }
 
     class ChatMessage {
-        constructor({ id, authorName, message, timestampUsec, authorPhoto, authorBadges, badges, messageType, authorRole, messageRuns, authorExternalChannelId }) {
+        constructor({ id, authorName, message, timestampUsec, authorPhoto, authorBadges, badges, messageType, authorRole, messageRuns, authorExternalChannelId, purchaseAmountText, sticker, colors }) {
             this.id = id || '';
             this.authorName = authorName || '';
             this.message = message || '';
@@ -21,28 +28,27 @@
             this.authorRole = ['guest', 'member', 'moderator', 'owner'].includes(authorRole) ? authorRole : 'guest';
             this.messageRuns = Array.isArray(messageRuns) ? messageRuns : [];
             this.authorExternalChannelId = authorExternalChannelId || '';
+            this.purchaseAmountText = purchaseAmountText || '';
+            this.sticker = sticker && typeof sticker === 'object' ? sticker : null;
+            this.colors = colors && typeof colors === 'object' ? colors : {};
         }
 
-        static fromRenderer(renderer) {
+        static fromRenderer(renderer, messageType = 'text') {
             if (!renderer) {
                 return new ChatMessage({});
             }
 
-            const authorName = renderer.authorName?.simpleText ||
+            const authorName = normalizeDisplayText(renderer.authorName?.simpleText ||
                 renderer.authorName?.runs?.map((run) => run.text).join('') ||
-                '';
+                '', MAX_AUTHOR_NAME_LENGTH);
 
-            const textRuns = Array.isArray(renderer.message?.runs)
+            const sourceRuns = Array.isArray(renderer.message?.runs)
                 ? renderer.message.runs
                 : [];
-            const messageText = textRuns.map((run) => run?.text || '').join('');
-            const messageRuns = textRuns
-                .filter((run) => typeof run?.text === 'string' && run.text)
-                .map((run) => ({ type: 'text', text: run.text }));
+            const messageRuns = normalizeMessageRuns(sourceRuns);
+            const messageText = messageRuns.map((run) => run.type === 'text' ? run.text : run.alt).join('');
 
-            const firstThumbnail = Array.isArray(renderer.authorPhoto?.thumbnails) && renderer.authorPhoto.thumbnails.length > 0
-                ? renderer.authorPhoto.thumbnails[0].url || ''
-                : '';
+            const firstThumbnail = normalizeThumbnailImage(renderer.authorPhoto);
 
             const badges = Array.isArray(renderer.authorBadges)
                 ? renderer.authorBadges.map((badge) => badge?.liveChatAuthorBadgeRenderer?.tooltip || badge?.tooltip || 'badge')
@@ -55,21 +61,88 @@
                 timestampUsec: renderer.timestampUsec || '',
                 authorPhoto: firstThumbnail,
                 authorBadges: badges,
-                messageType: 'text',
+                messageType,
                 authorRole: 'guest',
                 messageRuns,
-                authorExternalChannelId: renderer.authorExternalChannelId || ''
+                authorExternalChannelId: renderer.authorExternalChannelId || '',
+                purchaseAmountText: normalizeDisplayText(renderer.purchaseAmountText?.simpleText, MAX_AMOUNT_TEXT_LENGTH),
+                sticker: messageType === 'superSticker' ? normalizeSticker(renderer.sticker) : null,
+                colors: normalizeObservedColors(renderer)
             });
         }
+    }
+
+    function normalizeReadImageUrl(value) {
+        if (typeof value !== 'string' || !value) return '';
+        try {
+            const url = new URL(value);
+            return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : '';
+        } catch {
+            return '';
+        }
+    }
+
+    function getAccessibilityLabel(value) {
+        const label = value?.accessibilityData?.label;
+        return normalizeDisplayText(label, MAX_IMAGE_ALT_LENGTH);
+    }
+
+    function normalizeThumbnailImage(value) {
+        const thumbnails = Array.isArray(value?.thumbnails) ? value.thumbnails : [];
+        for (const thumbnail of thumbnails) {
+            const url = normalizeReadImageUrl(thumbnail?.url);
+            if (url) return url;
+        }
+        return '';
+    }
+
+    function normalizeMessageRuns(runs) {
+        if (!Array.isArray(runs)) return [];
+        const normalized = [];
+        for (const run of runs) {
+            if (typeof run?.text === 'string' && run.text) {
+                normalized.push({ type: 'text', text: run.text });
+                continue;
+            }
+            if (!run?.emoji || typeof run.emoji !== 'object') continue;
+            const url = normalizeThumbnailImage(run.emoji.image);
+            if (!url) continue;
+            const accessibilityAlt = getAccessibilityLabel(run.emoji.image?.accessibility);
+            const shortcut = Array.isArray(run.emoji.shortcuts) && typeof run.emoji.shortcuts[0] === 'string'
+                ? normalizeDisplayText(run.emoji.shortcuts[0], MAX_IMAGE_ALT_LENGTH)
+                : '';
+            normalized.push({ type: 'image', url, alt: accessibilityAlt || shortcut, isCustomEmoji: run.emoji.isCustomEmoji === true });
+        }
+        return normalized;
+    }
+
+    function normalizeSticker(sticker) {
+        if (!sticker || typeof sticker !== 'object') return null;
+        const url = normalizeThumbnailImage(sticker);
+        if (!url) return null;
+        return { url, alt: getAccessibilityLabel(sticker.accessibility) };
+    }
+
+    function normalizeObservedColors(renderer) {
+        const keys = ['headerBackgroundColor', 'headerTextColor', 'bodyBackgroundColor', 'bodyTextColor', 'authorNameTextColor', 'moneyChipBackgroundColor', 'moneyChipTextColor', 'backgroundColor'];
+        const colors = {};
+        for (const key of keys) {
+            if (typeof renderer?.[key] === 'number' && Number.isInteger(renderer[key])) colors[key] = renderer[key];
+        }
+        return colors;
     }
 
     function extractChatMessagesFromResponse(response) {
         const actions = response?.continuationContents?.liveChatContinuation?.actions || [];
 
-        return actions
-            .map((action) => action?.addChatItemAction?.item?.liveChatTextMessageRenderer)
-            .filter(Boolean)
-            .map((renderer) => ChatMessage.fromRenderer(renderer));
+        return actions.flatMap((action) => {
+            const item = action?.addChatItemAction?.item;
+            if (!item || typeof item !== 'object') return [];
+            if (item.liveChatTextMessageRenderer) return [ChatMessage.fromRenderer(item.liveChatTextMessageRenderer, 'text')];
+            if (item.liveChatPaidMessageRenderer) return [ChatMessage.fromRenderer(item.liveChatPaidMessageRenderer, 'superChat')];
+            if (item.liveChatPaidStickerRenderer) return [ChatMessage.fromRenderer(item.liveChatPaidStickerRenderer, 'superSticker')];
+            return [];
+        });
     }
 
     function extractContinuationFromResponse(response) {
@@ -308,6 +381,9 @@
         LIVEFLOW_MIN_READ_DELAY_MS,
         LIVEFLOW_MAX_TIMER_DELAY_MS,
         ChatMessage,
+        normalizeReadImageUrl,
+        normalizeMessageRuns,
+        normalizeSticker,
         extractChatMessagesFromResponse,
         extractContinuationFromResponse,
         extractContinuationInfoFromResponse,

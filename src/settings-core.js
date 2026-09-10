@@ -25,7 +25,10 @@
     });
     const CAPABILITIES = Object.freeze({
         showGuest: true,
+        showSuperChat: true,
+        showSuperSticker: true,
         showAvatars: true,
+        emojiImages: true,
         autoEnableLiveFlowWhenNativeChatClosed: true,
         autoOpenNativeChatWhenLiveFlowDisabled: true
     });
