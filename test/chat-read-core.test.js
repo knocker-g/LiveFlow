@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { MAX_VISIBLE_MESSAGES, mergeMessagesById, getVisibleMessages, formatMessageText } = require('../src/overlay-core.js');
 
-const { ChatMessage, normalizeMessageRuns, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs, validateLiveChatReadResponse, isSuccessfulHttpStatus, canStartReadLoop, canScheduleNextRead, extractWatchTargetIdentity, evaluateBootstrapTarget, canEstablishPageLifecycle, canReevaluatePageLifecycle, canSignalOwnershipReevaluation, LIVEFLOW_MIN_READ_DELAY_MS, LIVEFLOW_MAX_TIMER_DELAY_MS } = require('../src/chat-read-core.js');
+const { ChatMessage, normalizeMessageRuns, extractChatMessagesFromResponse, extractContinuationFromResponse, extractContinuationInfoFromResponse, getContinuationTypes, extractInitialLiveChatContinuation, normalizeInternalApiContext, buildLiveChatReadRequest, summarizeLiveChatResponse, canAttemptOneShotRead, getPageRevisionState, canIssueSecondRead, getReadDelayMs, validateLiveChatReadResponse, isSuccessfulHttpStatus, canStartReadLoop, canScheduleNextRead, extractWatchTargetIdentity, evaluateBootstrapTarget, canEstablishPageLifecycle, canReevaluatePageLifecycle, canSignalOwnershipReevaluation, canResumeReadAfterVisibility, LIVEFLOW_MIN_READ_DELAY_MS, LIVEFLOW_MAX_TIMER_DELAY_MS } = require('../src/chat-read-core.js');
 
 const sampleResponse = {
     continuationContents: {
@@ -534,6 +534,22 @@ test('stale, aborted, or invalid responses cannot schedule another READ', () => 
     assert.equal(canScheduleNextRead({ ...valid, currentRevision: 4 }), false);
     assert.equal(canScheduleNextRead({ ...valid, aborted: true }), false);
     assert.equal(canScheduleNextRead({ ...valid, validationOk: false }), false);
+});
+
+test('foreground resume requires the exact hidden-stop lifecycle and current ownership', () => {
+    const valid = {
+        visibilityState: 'visible', userEnabled: true, stopReason: 'visibility-hidden',
+        requestedLifecycleGeneration: 4, currentLifecycleGeneration: 4, navigationPending: false,
+        targetMatched: true, continuationAvailable: true, contextAvailable: true,
+        watchRootCurrent: true, activeLoopGeneration: 0, requestInFlight: false
+    };
+    assert.equal(canResumeReadAfterVisibility(valid), true);
+    for (const patch of [
+        { visibilityState: 'hidden' }, { userEnabled: false }, { stopReason: 'pagehide' },
+        { stopReason: 'navigation' }, { requestedLifecycleGeneration: 3 }, { navigationPending: true },
+        { targetMatched: false }, { continuationAvailable: false }, { contextAvailable: false },
+        { watchRootCurrent: false }, { activeLoopGeneration: 9 }, { requestInFlight: true }
+    ]) assert.equal(canResumeReadAfterVisibility({ ...valid, ...patch }), false);
 });
 
 test('overlay helpers deduplicate messages and retain the newest bounded history', () => {

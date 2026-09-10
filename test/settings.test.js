@@ -104,8 +104,12 @@ test('popup is mobile-first, localized, and has no LiveFlow master switch', () =
     assert.match(html, /reset-settings/);
     assert.doesNotMatch(html + source, /masterEnabled|master-toggle|LiveFlow master/i);
     assert.match(css, /width:\s*340px/);
-    assert.match(css, /max-width:\s*100vw/);
     assert.match(css, /min-height:\s*44px/);
+    assert.match(css, /color-scheme:\s*light dark/);
+    assert.match(css, /background:\s*Canvas/);
+    assert.match(css, /color:\s*CanvasText/);
+    assert.match(css, /scrollbar-gutter:\s*stable/);
+    assert.doesNotMatch(css, /position:\s*(?:fixed|absolute)|height:\s*100%|min-height:\s*100%|100vh|transition\s*:/);
     assert.match(source, /chrome\?\.i18n\?\.getMessage/);
     assert.match(source, /control\.disabled = core\.CAPABILITIES\[key\] !== true/);
     assert.match(source, /globalThis\.confirm\(message\('resetConfirmation'/);

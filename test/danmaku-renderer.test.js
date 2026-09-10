@@ -22,6 +22,8 @@ const {
     isLaneCollisionSafe,
     selectCollisionSafeLane,
     planDanmakuBatch,
+    planContinuousDanmakuLaunch,
+    calculateDanmakuLaunchCadence,
     DANMAKU_MAX_BATCH_SPREAD_MS,
     DANMAKU_BATCH_STAGGER_MS,
     DANMAKU_MAX_PENDING_COMMENTS,
@@ -183,6 +185,40 @@ test('empty, unknown, and excessively long messages are ignored safely', () => {
     assert.deepEqual(normalizeDanmakuMessage({ id: 'a', authorName: 'Alice', messageType: 'text', message: ' hello ' }), {
         id: 'a', text: 'hello', authorName: 'Alice', authorPhoto: '', authorRole: 'guest', messageRuns: [{ type: 'text', text: 'hello' }]
     });
+});
+
+test('continuous launch planning preserves order and state across response batches', () => {
+    const first = planContinuousDanmakuLaunch([{ id: 'a' }, { id: 'b' }], 1000, 0);
+    assert.deepEqual(first.plan.map((entry) => [entry.message.id, entry.notBeforeMs]), [['a', 1000], ['b', 1050]]);
+    const second = planContinuousDanmakuLaunch([{ id: 'c' }, { id: 'd' }], 1020, first.nextLaunchAtMs);
+    assert.deepEqual(second.plan.map((entry) => [entry.message.id, entry.notBeforeMs]), [['c', 1100], ['d', 1150]]);
+});
+
+test('continuous launch planning gives low-density arrivals immediate deterministic launch', () => {
+    const plan = planContinuousDanmakuLaunch([{ id: 'one' }], 5000, 1100);
+    assert.equal(plan.plan[0].notBeforeMs, 5000);
+    assert.equal(plan.nextLaunchAtMs, 5050);
+    assert.deepEqual(planContinuousDanmakuLaunch(null, 10), { plan: [], nextLaunchAtMs: 10 });
+});
+
+test('high-density launch planning remains bounded and evenly cadenced', () => {
+    const messages = Array.from({ length: 100 }, (_, index) => ({ id: String(index) }));
+    const cadence = calculateDanmakuLaunchCadence(DANMAKU_MAX_PENDING_COMMENTS);
+    const result = planContinuousDanmakuLaunch(messages, 2000, 0, DANMAKU_MAX_PENDING_COMMENTS, cadence);
+    assert.equal(result.plan.length, DANMAKU_MAX_PENDING_COMMENTS);
+    assert.equal(result.plan.every((entry, index) => index === 0 || entry.notBeforeMs - result.plan[index - 1].notBeforeMs === cadence), true);
+    assert.equal(new Set(result.plan.map((entry) => entry.notBeforeMs)).size, result.plan.length);
+    assert.equal(result.plan.at(-1).notBeforeMs - result.plan[0].notBeforeMs <= DANMAKU_MAX_BATCH_SPREAD_MS, true);
+    assert.equal(calculateDanmakuLaunchCadence(2), DANMAKU_BATCH_STAGGER_MS);
+    assert.equal(calculateDanmakuLaunchCadence(150), 10);
+});
+
+test('runtime smoothing does not reset cadence at response boundaries or burst overdue entries', () => {
+    const scheduler = runtimeSource.slice(runtimeSource.indexOf('function drainRendererQueue'), runtimeSource.indexOf('function handleInitialContinuation'));
+    assert.match(scheduler, /planContinuousDanmakuLaunch\([\s\S]*?rendererNextLaunchAtMs/);
+    assert.doesNotMatch(scheduler, /rendererNextLaunchAtMs\s*=\s*0/);
+    assert.match(scheduler, /performance\.now\(\) \+ overlayCore\.calculateDanmakuLaunchCadence\(rendererQueue\.length\)/);
+    assert.match(scheduler, /scheduleRendererQueueDrain\(rendererQueue\[0\]\.notBeforeMs\)/);
 });
 
 test('rich text normalization validates avatar URLs and role fallback', () => {

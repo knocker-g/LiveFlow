@@ -4,6 +4,7 @@
     const READ_REQUEST_TYPE = 'LIVEFLOW_REQUEST_CHAT_READ_ONCE';
     const READ_RESPONSE_TYPE = 'LIVEFLOW_CHAT_READ_ONCE_RESULT';
     const STOP_READ_LOOP_TYPE = 'LIVEFLOW_STOP_CHAT_READ_LOOP';
+    const RESUME_READ_LOOP_TYPE = 'LIVEFLOW_RESUME_CHAT_READ_AFTER_VISIBILITY';
     const NAVIGATION_INVALIDATED_TYPE = 'LIVEFLOW_PAGE_LIFECYCLE_INVALIDATED';
     const LIFECYCLE_DIAGNOSTIC_TYPE = 'LIVEFLOW_READ_LIFECYCLE_DIAGNOSTIC';
     let pageRevision = 0;
@@ -28,6 +29,8 @@
     let observedWatchRoot = null;
     let watchRootObserver = null;
     let ownershipReevaluationQueued = false;
+    let readStopReason = 'none';
+    let deferredVisibilityResumeGeneration = null;
 
     function getYtcfgValue(key) {
         try {
@@ -178,7 +181,7 @@
 
     function invalidatePageLifecycle(eventSource = 'yt-navigate-start') {
         const abortIssued = Boolean(activeAbortController);
-        stopReadLoop();
+        stopReadLoop('navigation');
         pageRevision += 1;
         pageLifecycleGeneration += 1;
         navigationPending = true;
@@ -194,13 +197,13 @@
     }
 
     function respond({ pageDataUpdated = false, navigationFinished = false, ownershipMutation = false, eventSource = 'request', event = null, expectedLifecycleGeneration = null } = {}) {
-        if (expectedLifecycleGeneration !== null && expectedLifecycleGeneration !== pageLifecycleGeneration) return;
+        if (expectedLifecycleGeneration !== null && expectedLifecycleGeneration !== pageLifecycleGeneration) return false;
         const nextPageKey = `${location.origin}${location.pathname}${location.search}`;
         const hadEstablishedPage = pageKey !== '';
         const revisionState = window.LiveFlowChatReadCore?.getPageRevisionState?.(pageKey, pageRevision, nextPageKey);
         if (revisionState?.changed || (!revisionState && nextPageKey !== pageKey)) {
             if (hadEstablishedPage && !navigationPending) {
-                stopReadLoop();
+                stopReadLoop('navigation');
                 pageRevision = revisionState?.revision || pageRevision + 1;
                 pageLifecycleGeneration += 1;
                 navigationPending = true;
@@ -230,7 +233,7 @@
             navigationFinished,
             ownershipMutation
         }) === true;
-        if (!canReevaluate) return;
+        if (!canReevaluate) return false;
         const watchSnapshot = watchRoot?.data;
         const continuation = readContinuation(watchSnapshot);
         const context = readInternalApiContext();
@@ -279,7 +282,7 @@
                 watchRootChanged,
                 videoElementChanged
             });
-            return;
+            return false;
         }
         navigationPending = false;
         navigationPageDataUpdated = false;
@@ -321,6 +324,7 @@
             pageRevision,
             pageLifecycleGeneration
         }, window.location.origin);
+        return true;
     }
 
     function postReadResult(result, lifecycleGeneration) {
@@ -338,7 +342,7 @@
         }, window.location.origin);
     }
 
-    function stopReadLoop() {
+    function stopReadLoop(reason = 'explicit') {
         currentLoopGeneration += 1;
         activeLoopGeneration = 0;
         if (activeAbortController) activeAbortController.abort();
@@ -346,6 +350,52 @@
         if (activeWaitTimer !== null) window.clearTimeout(activeWaitTimer);
         activeWaitTimer = null;
         deferredReadStartGeneration = null;
+        deferredVisibilityResumeGeneration = null;
+        readStopReason = reason;
+    }
+
+    function resumeReadAfterVisibility(requestedLifecycleGeneration, userEnabled) {
+        const core = window.LiveFlowChatReadCore;
+        const watchRoot = document.querySelector('ytd-watch-flexy');
+        const watchSnapshot = watchRoot?.data;
+        const targetIdentity = core?.extractWatchTargetIdentity?.(window.location.href) || '';
+        const evidence = readBootstrapTargetEvidence(watchSnapshot, watchRoot);
+        const target = core?.evaluateBootstrapTarget?.(targetIdentity, evidence.authoritative, evidence.supporting);
+        const continuation = readContinuation(watchSnapshot);
+        const context = readInternalApiContext();
+        const currentVideo = watchRoot?.querySelector('#movie_player video.html5-main-video, #movie_player video') || null;
+        const currentWatchRoot = Boolean(watchRoot?.isConnected && document.querySelector('ytd-watch-flexy') === watchRoot && currentVideo);
+        const allowed = core?.canResumeReadAfterVisibility?.({
+            visibilityState: document.visibilityState,
+            userEnabled,
+            stopReason: readStopReason,
+            requestedLifecycleGeneration,
+            currentLifecycleGeneration: pageLifecycleGeneration,
+            navigationPending,
+            targetMatched: target?.matched === true && pageState.targetIdentity === targetIdentity,
+            continuationAvailable: Boolean(continuation),
+            contextAvailable: Boolean(context),
+            watchRootCurrent: currentWatchRoot,
+            activeLoopGeneration,
+            requestInFlight: readRequestInFlight
+        }) === true;
+        if (!allowed) return false;
+        const accepted = respond({
+            eventSource: 'visibility-resume',
+            expectedLifecycleGeneration: requestedLifecycleGeneration
+        });
+        if (accepted) readStopReason = 'none';
+        return accepted;
+    }
+
+    function requestVisibilityResume(requestedLifecycleGeneration, userEnabled) {
+        if (document.visibilityState === 'visible' && userEnabled === true &&
+            readStopReason === 'visibility-hidden' && requestedLifecycleGeneration === pageLifecycleGeneration &&
+            activeLoopGeneration === 0 && readRequestInFlight) {
+            deferredVisibilityResumeGeneration = requestedLifecycleGeneration;
+            return false;
+        }
+        return resumeReadAfterVisibility(requestedLifecycleGeneration, userEnabled);
     }
 
     function waitForNextRead(delay, generation) {
@@ -464,6 +514,7 @@
 
         const generation = ++currentLoopGeneration;
         activeLoopGeneration = generation;
+        readStopReason = 'none';
         const revision = pageRevision;
         const lifecycleGeneration = pageLifecycleGeneration;
         const context = pageState.context;
@@ -494,6 +545,11 @@
                 result = await performRead(continuation, context, readCount, revision, generation, abortController);
             } finally {
                 readRequestInFlight = false;
+                const deferredVisibilityGeneration = deferredVisibilityResumeGeneration;
+                deferredVisibilityResumeGeneration = null;
+                if (deferredVisibilityGeneration === pageLifecycleGeneration && readStopReason === 'visibility-hidden') {
+                    window.queueMicrotask(() => resumeReadAfterVisibility(deferredVisibilityGeneration, true));
+                }
             }
             if (activeAbortController === abortController) activeAbortController = null;
             postLifecycleDiagnostic('READ_RESPONSE_RECEIVED', {
@@ -545,7 +601,11 @@
             return;
         }
         if (event.data.type === STOP_READ_LOOP_TYPE) {
-            stopReadLoop();
+            stopReadLoop('user-disabled');
+            return;
+        }
+        if (event.data.type === RESUME_READ_LOOP_TYPE) {
+            requestVisibilityResume(event.data.pageLifecycleGeneration, event.data.userEnabled === true);
             return;
         }
     });
@@ -555,9 +615,11 @@
     window.addEventListener('yt-page-data-updated', () => respond({ pageDataUpdated: true, eventSource: 'yt-page-data-updated' }));
     window.addEventListener('pagehide', () => {
         disconnectWatchRootObserver();
-        stopReadLoop();
+        stopReadLoop('pagehide');
     });
     window.addEventListener('visibilitychange', () => {
-        if (document.hidden) stopReadLoop();
+        if (document.hidden && (activeLoopGeneration !== 0 || readRequestInFlight || activeWaitTimer !== null)) {
+            stopReadLoop('visibility-hidden');
+        }
     });
 })();

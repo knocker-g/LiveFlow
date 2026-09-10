@@ -377,6 +377,20 @@
         return pageEstablished !== true;
     }
 
+    function canResumeReadAfterVisibility({ visibilityState, userEnabled, stopReason, requestedLifecycleGeneration, currentLifecycleGeneration, navigationPending, targetMatched, continuationAvailable, contextAvailable, watchRootCurrent, activeLoopGeneration, requestInFlight } = {}) {
+        return visibilityState === 'visible' &&
+            userEnabled === true &&
+            stopReason === 'visibility-hidden' &&
+            requestedLifecycleGeneration === currentLifecycleGeneration &&
+            navigationPending === false &&
+            targetMatched === true &&
+            continuationAvailable === true &&
+            contextAvailable === true &&
+            watchRootCurrent === true &&
+            activeLoopGeneration === 0 &&
+            requestInFlight === false;
+    }
+
     const api = {
         LIVEFLOW_MIN_READ_DELAY_MS,
         LIVEFLOW_MAX_TIMER_DELAY_MS,
@@ -404,7 +418,8 @@
         evaluateBootstrapTarget,
         canEstablishPageLifecycle,
         canReevaluatePageLifecycle,
-        canSignalOwnershipReevaluation
+        canSignalOwnershipReevaluation,
+        canResumeReadAfterVisibility
     };
 
     if (typeof module !== 'undefined' && module.exports) {

@@ -56,14 +56,27 @@ test('READ loop does not use an interval or permit a duplicate active loop', () 
 });
 
 test('navigation and pagehide invalidate or abort stale READ work', () => {
-    assert.match(pageStateSource, /if \(revisionState\?\.changed[^]*?stopReadLoop\(\)/);
+    assert.match(pageStateSource, /if \(revisionState\?\.changed[^]*?stopReadLoop\('navigation'\)/);
     assert.match(pageStateSource, /activeAbortController\.abort\(\)/);
-    assert.match(pageStateSource, /function invalidatePageLifecycle\(eventSource = 'yt-navigate-start'\)[^]*?stopReadLoop\(\)/);
+    assert.match(pageStateSource, /function invalidatePageLifecycle\(eventSource = 'yt-navigate-start'\)[^]*?stopReadLoop\('navigation'\)/);
     assert.match(pageStateSource, /addEventListener\('yt-navigate-start', \(\) => invalidatePageLifecycle\('yt-navigate-start'\)\)/);
-    assert.match(pageStateSource, /addEventListener\('pagehide', \(\) => \{[^]*?disconnectWatchRootObserver\(\);[^]*?stopReadLoop\(\);/);
+    assert.match(pageStateSource, /addEventListener\('pagehide', \(\) => \{[^]*?disconnectWatchRootObserver\(\);[^]*?stopReadLoop\('pagehide'\);/);
     assert.match(pageStateSource, /addEventListener\('visibilitychange'/);
-    assert.match(pageStateSource, /if \(document\.hidden\) stopReadLoop\(\)/);
+    assert.match(pageStateSource, /if \(document\.hidden && \(activeLoopGeneration !== 0 \|\| readRequestInFlight \|\| activeWaitTimer !== null\)\) \{\s*stopReadLoop\('visibility-hidden'\)/);
     assert.match(contentSource, /addEventListener\('yt-navigate-finish', detectPage\)/);
+});
+
+test('foreground resume is one-shot, user-enabled, generation-bound, and ownership validated', () => {
+    assert.match(contentSource, /function handleVisibilityChange\(\)[^]*?if \(document\.hidden\)[^]*?cleanupOverlay\(\)[^]*?if \(!userEnabled \|\| !isYouTubeWatchPage\(\)\) return/);
+    assert.match(contentSource, /type: RESUME_READ_LOOP_TYPE[^]*?pageLifecycleGeneration: currentPageLifecycleGeneration[^]*?userEnabled: true/);
+    assert.match(pageStateSource, /stopReason: readStopReason/);
+    assert.match(pageStateSource, /targetMatched: target\?\.matched === true && pageState\.targetIdentity === targetIdentity/);
+    assert.match(pageStateSource, /continuationAvailable: Boolean\(continuation\)/);
+    assert.match(pageStateSource, /currentWatchRoot = Boolean\(watchRoot\?\.isConnected/);
+    assert.match(pageStateSource, /if \(accepted\) readStopReason = 'none'/);
+    assert.match(pageStateSource, /readRequestInFlight\) \{\s*deferredVisibilityResumeGeneration = requestedLifecycleGeneration/);
+    assert.match(pageStateSource, /window\.queueMicrotask\(\(\) => resumeReadAfterVisibility\(deferredVisibilityGeneration, true\)\)/);
+    assert.doesNotMatch(pageStateSource + contentSource, /setInterval\s*\(|requestAnimationFrame\s*\(/);
 });
 
 test('SPA lifecycle prevents delayed old-page requests and responses from restarting READ', () => {
@@ -95,7 +108,7 @@ test('new page bootstrap is not established before YouTube page data is updated'
     assert.match(pageStateSource, /const hadEstablishedPage = pageKey !== '';/);
     assert.match(pageStateSource, /if \(hadEstablishedPage && !navigationPending\)/);
     assert.match(pageStateSource, /canReevaluatePageLifecycle/);
-    assert.match(pageStateSource, /if \(!canReevaluate\) return;/);
+    assert.match(pageStateSource, /if \(!canReevaluate\) return false;/);
     assert.match(pageStateSource, /canEstablishPageLifecycle/);
     assert.match(pageStateSource, /pageTargetChanged/);
     assert.match(pageStateSource, /bootstrapTargetMatched: bootstrapTarget\.matched/);

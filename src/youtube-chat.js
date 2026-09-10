@@ -5,6 +5,7 @@
     const READ_REQUEST_TYPE = 'LIVEFLOW_REQUEST_CHAT_READ_ONCE';
     const READ_RESPONSE_TYPE = 'LIVEFLOW_CHAT_READ_ONCE_RESULT';
     const STOP_READ_LOOP_TYPE = 'LIVEFLOW_STOP_CHAT_READ_LOOP';
+    const RESUME_READ_LOOP_TYPE = 'LIVEFLOW_RESUME_CHAT_READ_AFTER_VISIBILITY';
     const NAVIGATION_INVALIDATED_TYPE = 'LIVEFLOW_PAGE_LIFECYCLE_INVALIDATED';
     const LIFECYCLE_DIAGNOSTIC_TYPE = 'LIVEFLOW_READ_LIFECYCLE_DIAGNOSTIC';
     const MAX_MESSAGES = 500;
@@ -43,6 +44,7 @@
     const rendererQueue = [];
     let rendererQueueTimer = null;
     let rendererQueueTimerDueAt = null;
+    let rendererNextLaunchAtMs = 0;
     let initialContinuation = '';
     let internalApiContext = null;
     let chatAvailable = false;
@@ -123,6 +125,7 @@
         rendererQueueTimer = null;
         rendererQueueTimerDueAt = null;
         rendererQueue.length = 0;
+        rendererNextLaunchAtMs = 0;
         laneStates = [];
         overlayRoot?.remove();
         overlayRoot = null;
@@ -810,7 +813,18 @@
                 return;
             }
             const result = renderDanmaku(entry.message, entry.generation, entry.video);
-            if (result.status === 'rendered' || result.status === 'drop') {
+            if (result.status === 'rendered') {
+                rendererQueue.shift();
+                if (rendererQueue.length > 0) {
+                    rendererQueue[0].notBeforeMs = Math.max(
+                        rendererQueue[0].notBeforeMs,
+                        performance.now() + overlayCore.calculateDanmakuLaunchCadence(rendererQueue.length)
+                    );
+                    scheduleRendererQueueDrain(rendererQueue[0].notBeforeMs);
+                }
+                return;
+            }
+            if (result.status === 'drop') {
                 rendererQueue.shift();
                 continue;
             }
@@ -835,11 +849,17 @@
         const incoming = visibleMessages.slice(0, availableSlots);
         const droppedCount = visibleMessages.length - incoming.length;
         if (droppedCount > 0) logInfo(`Renderer queue overflow dropped: ${droppedCount}`);
-        const batchStartMs = performance.now();
-        const plan = overlayCore.planDanmakuBatch(incoming, incoming.length || 1);
-        plan.forEach(({ message, delayMs }) => rendererQueue.push({
+        const launchPlan = overlayCore.planContinuousDanmakuLaunch(
+            incoming,
+            performance.now(),
+            rendererNextLaunchAtMs,
+            incoming.length || 1,
+            overlayCore.calculateDanmakuLaunchCadence(rendererQueue.length + incoming.length) || overlayCore.DANMAKU_BATCH_STAGGER_MS
+        );
+        rendererNextLaunchAtMs = launchPlan.nextLaunchAtMs;
+        launchPlan.plan.forEach(({ message, notBeforeMs }) => rendererQueue.push({
             message,
-            notBeforeMs: batchStartMs + delayMs,
+            notBeforeMs,
             generation: scheduledGeneration,
             pageLifecycleGeneration: currentPageLifecycleGeneration,
             video: scheduledVideo
@@ -1003,6 +1023,23 @@
         cleanupOverlay();
     }
 
+    function handleVisibilityChange() {
+        if (document.hidden) {
+            acceptingReadResults = false;
+            setReadIndicatorState('idle');
+            cleanupOverlay();
+            return;
+        }
+        if (!userEnabled || !isYouTubeWatchPage()) return;
+        readRequestedRevision = -1;
+        window.postMessage({
+            source: 'liveflow-content-script',
+            type: RESUME_READ_LOOP_TYPE,
+            pageLifecycleGeneration: currentPageLifecycleGeneration,
+            userEnabled: true
+        }, window.location.origin);
+    }
+
     function handlePageLifecycleInvalidated(event) {
         if (event.source !== window || event.origin !== window.location.origin) return;
         if (event.data?.source !== 'liveflow-page-state' || event.data.type !== NAVIGATION_INVALIDATED_TYPE) return;
@@ -1024,7 +1061,7 @@
         if (event.data?.source !== 'liveflow-page-state' || event.data.type !== LIFECYCLE_DIAGNOSTIC_TYPE) return;
         const allowedEvents = new Set(['NAV_INVALIDATE', 'PAGE_STATE_REJECTED', 'NEW_PAGE_STATE', 'READ_START_REJECTED', 'READ_START', 'READ_REQUEST_BEGIN', 'READ_RESPONSE_RECEIVED', 'READ_STOP']);
         if (!allowedEvents.has(event.data.eventName)) return;
-        const lifecycleSignal = ['request', 'yt-navigate-start', 'yt-navigate-finish', 'yt-page-data-updated', 'watch-root-mutation'].includes(event.data.lifecycleSignal || event.data.eventSource)
+        const lifecycleSignal = ['request', 'yt-navigate-start', 'yt-navigate-finish', 'yt-page-data-updated', 'watch-root-mutation', 'visibility-resume'].includes(event.data.lifecycleSignal || event.data.eventSource)
             ? event.data.lifecycleSignal || event.data.eventSource
             : 'unknown';
         logInfo(`READ lifecycle: event=${event.data.eventName}, signal=${lifecycleSignal}, pageRevision=${event.data.pageRevision}, pageGeneration=${event.data.pageLifecycleGeneration}, readGeneration=${event.data.readGeneration}, active=${event.data.readActive}, inFlight=${event.data.requestInFlight}, reason=${event.data.rejectionReason || 'NONE'}, pageDataSeen=${event.data.navigationPageDataUpdated === true}, canReevaluate=${event.data.canReevaluate === true}, navigationTargetMatched=${event.data.navigationTargetMatched === true}, targetKnown=${event.data.targetKnown === true}, bootstrapKnown=${event.data.bootstrapKnown === true}, ownershipSource=${event.data.ownershipSource === 'WATCH_ROOT_SNAPSHOT' ? event.data.ownershipSource : 'NONE'}, ownershipContinuationAvailable=${event.data.ownershipContinuationAvailable === true}, ownershipSameSnapshot=${event.data.ownershipSameSnapshot === true}, watchRootObserved=${event.data.watchRootObserved === true}, watchRootRebound=${event.data.watchRootRebound === true}, pageTargetChanged=${event.data.pageTargetChanged === true}, bootstrapTargetMatched=${event.data.bootstrapTargetMatched === true}, supportingCandidates=${Number.isInteger(event.data.supportingCandidateCount) ? event.data.supportingCandidateCount : 0}, supportingMatches=${Number.isInteger(event.data.supportingMatchCount) ? event.data.supportingMatchCount : 0}, abortIssued=${event.data.abortIssued === true}, aborted=${event.data.aborted === true}, requestAfterInvalidation=${event.data.requestAfterInvalidation === true}, responseAfterInvalidation=${event.data.responseAfterInvalidation === true}, watchRootChanged=${event.data.watchRootChanged === true}, videoElementChanged=${event.data.videoElementChanged === true}`);
@@ -1048,6 +1085,7 @@
     window.addEventListener('yt-navigate-finish', detectPage);
     window.addEventListener('yt-page-data-updated', handleNavigation);
     window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('resize', handleGeometryChange);
     window.addEventListener('orientationchange', handleGeometryChange);
     document.addEventListener('fullscreenchange', handleGeometryChange);

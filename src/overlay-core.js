@@ -17,6 +17,7 @@
     const DANMAKU_MAX_PENDING_COMMENTS = 40;
     const DANMAKU_MAX_RENDER_QUEUE = 150;
     const DANMAKU_ENTRY_CLEAR_FRACTION = 0.25;
+    const DANMAKU_MIN_LAUNCH_CADENCE_MS = 10;
 
     function mergeMessagesById(currentMessages, incomingMessages, maxMessages = 500) {
         const messages = Array.isArray(currentMessages) ? currentMessages.slice() : [];
@@ -348,6 +349,27 @@
         }
     }
 
+    function planContinuousDanmakuLaunch(messages, nowMs, nextLaunchAtMs = 0, maxItems = DANMAKU_MAX_PENDING_COMMENTS, cadenceMs = DANMAKU_BATCH_STAGGER_MS) {
+        if (!Array.isArray(messages) || !Number.isFinite(nowMs) || nowMs < 0 || !Number.isFinite(nextLaunchAtMs) ||
+            !Number.isInteger(maxItems) || maxItems <= 0 || !Number.isFinite(cadenceMs) || cadenceMs < 0) {
+            return { plan: [], nextLaunchAtMs: Math.max(0, Number.isFinite(nowMs) ? nowMs : 0) };
+        }
+        const selected = messages.slice(-maxItems);
+        let launchAtMs = Math.max(nowMs, nextLaunchAtMs);
+        const plan = selected.map((message) => {
+            const entry = { message, notBeforeMs: launchAtMs };
+            launchAtMs += cadenceMs;
+            return entry;
+        });
+        return { plan, nextLaunchAtMs: launchAtMs };
+    }
+
+    function calculateDanmakuLaunchCadence(queueDepth, maxWindowMs = DANMAKU_MAX_BATCH_SPREAD_MS, baselineMs = DANMAKU_BATCH_STAGGER_MS, minimumMs = DANMAKU_MIN_LAUNCH_CADENCE_MS) {
+        if (!Number.isInteger(queueDepth) || queueDepth <= 0 || ![maxWindowMs, baselineMs, minimumMs].every(Number.isFinite) ||
+            maxWindowMs < 0 || baselineMs <= 0 || minimumMs <= 0 || minimumMs > baselineMs) return null;
+        return Math.max(minimumMs, Math.min(baselineMs, Math.floor(maxWindowMs / Math.max(1, queueDepth - 1))));
+    }
+
     function getManagementBarViewModel({ userEnabled, readState, enabledLabel = 'LiveFlow ON', disabledLabel = 'LiveFlow OFF' } = {}) {
         const enabled = userEnabled === true;
         const normalizedReadState = ['idle', 'active', 'stopped'].includes(readState) ? readState : 'idle';
@@ -494,6 +516,7 @@
         DANMAKU_MAX_PENDING_COMMENTS,
         DANMAKU_MAX_RENDER_QUEUE,
         DANMAKU_ENTRY_CLEAR_FRACTION,
+        DANMAKU_MIN_LAUNCH_CADENCE_MS,
         mergeMessagesById,
         getVisibleMessages,
         formatMessageText,
@@ -513,6 +536,8 @@
         calculateLaneSafeAtMs,
         findNextLaneAvailability,
         planDanmakuBatch,
+        planContinuousDanmakuLaunch,
+        calculateDanmakuLaunchCadence,
         isRendererTargetCurrent,
         isEffectiveDisplayActive,
         getDisplayStateTransition,
