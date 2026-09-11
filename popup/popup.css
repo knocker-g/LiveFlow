@@ -12,3 +12,7 @@ section { padding: 12px 0; border-top: 1px solid GrayText; }
 .setting[data-ready="false"] { color: GrayText; }
 button { min-height: 44px; padding: 0 14px; border: 1px solid ButtonText; border-radius: 8px; background: ButtonFace; color: ButtonText; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+.reset-confirmation { box-sizing: border-box; min-height: 82px; margin-top: 8px; padding: 8px; border: 1px solid GrayText; border-radius: 8px; visibility: hidden; }
+.reset-confirmation[data-open="true"] { visibility: visible; }
+.reset-confirmation > span { display: block; margin-bottom: 8px; font-size: 13px; }
+.reset-actions { display: flex; justify-content: flex-end; gap: 8px; }

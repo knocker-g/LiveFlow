@@ -17,7 +17,11 @@
     const DANMAKU_MAX_PENDING_COMMENTS = 40;
     const DANMAKU_MAX_RENDER_QUEUE = 150;
     const DANMAKU_ENTRY_CLEAR_FRACTION = 0.25;
-    const DANMAKU_MIN_LAUNCH_CADENCE_MS = 10;
+    const DANMAKU_MIN_LAUNCH_CADENCE_MS = 80;
+    const DANMAKU_DEFAULT_LAUNCH_CADENCE_MS = 120;
+    const DANMAKU_MIN_TIMESTAMP_GAP_MS = 100;
+    const DANMAKU_MAX_TIMESTAMP_GAP_MS = 450;
+    const DANMAKU_MIN_TARGET_DURATION_MS = 6400;
 
     function mergeMessagesById(currentMessages, incomingMessages, maxMessages = 500) {
         const messages = Array.isArray(currentMessages) ? currentMessages.slice() : [];
@@ -66,6 +70,7 @@
             authorName: typeof message.authorName === 'string' ? message.authorName.trim() : '',
             authorPhoto: normalizeImageUrl(message.authorPhoto),
             authorRole: role,
+            timestampUsec: typeof message.timestampUsec === 'string' ? message.timestampUsec : '',
             messageRuns
         };
         if (message.messageType !== 'text') {
@@ -137,6 +142,15 @@
         return normalized;
     }
 
+    function withCssColorAlpha(value, alpha = 0.8) {
+        if (typeof value !== 'string' || !Number.isFinite(alpha) || alpha < 0 || alpha > 1) return '';
+        const match = value.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i);
+        if (!match) return '';
+        const channels = match.slice(1, 4).map(Number);
+        if (channels.some((channel) => channel < 0 || channel > 255)) return '';
+        return `rgba(${channels.join(', ')}, ${alpha})`;
+    }
+
     function calculateLaneCount(overlayHeight, lineHeight = DANMAKU_LINE_HEIGHT_PX, laneGap = DANMAKU_LANE_GAP_PX, maxLanes = DANMAKU_MAX_LANES) {
         if (![overlayHeight, lineHeight, laneGap, maxLanes].every((value) => typeof value === 'number' && Number.isFinite(value))) return 0;
         if (overlayHeight <= 0 || lineHeight <= 0 || laneGap < 0 || maxLanes <= 0) return 0;
@@ -171,6 +185,14 @@
         if (overlayWidth <= 0 || commentWidth <= 0 || targetDurationMs <= 0 || minSpeed <= 0 || maxSpeed < minSpeed) return null;
         const targetSpeed = (overlayWidth + commentWidth) / (targetDurationMs / 1000);
         return Math.min(Math.max(targetSpeed, minSpeed), maxSpeed);
+    }
+
+    function calculateCompensatedDanmakuDuration(overlayWidth, commentWidth, baseDurationMs = DANMAKU_TARGET_DURATION_MS, minimumDurationMs = DANMAKU_MIN_TARGET_DURATION_MS) {
+        if (![overlayWidth, commentWidth, baseDurationMs, minimumDurationMs].every(Number.isFinite) ||
+            overlayWidth <= 0 || commentWidth <= 0 || baseDurationMs <= 0 || minimumDurationMs <= 0 || minimumDurationMs > baseDurationMs) return null;
+        const widthRatio = commentWidth / overlayWidth;
+        const compensation = Math.min(1, Math.max(0, (widthRatio - 0.25) / 1.25));
+        return Math.round(baseDurationMs - (baseDurationMs - minimumDurationMs) * compensation);
     }
 
     function isLaneCollisionSafe(previous, next, nowMs, horizontalGap = DANMAKU_HORIZONTAL_GAP_PX) {
@@ -349,22 +371,37 @@
         }
     }
 
-    function planContinuousDanmakuLaunch(messages, nowMs, nextLaunchAtMs = 0, maxItems = DANMAKU_MAX_PENDING_COMMENTS, cadenceMs = DANMAKU_BATCH_STAGGER_MS) {
-        if (!Array.isArray(messages) || !Number.isFinite(nowMs) || nowMs < 0 || !Number.isFinite(nextLaunchAtMs) ||
+    function calculateTimestampVisualGap(previousTimestampUsec, timestampUsec, fallbackMs = DANMAKU_DEFAULT_LAUNCH_CADENCE_MS,
+        minimumMs = DANMAKU_MIN_TIMESTAMP_GAP_MS, maximumMs = DANMAKU_MAX_TIMESTAMP_GAP_MS) {
+        if (![fallbackMs, minimumMs, maximumMs].every(Number.isFinite) || minimumMs <= 0 || maximumMs < minimumMs) return null;
+        const previous = parseTimestampUsec(previousTimestampUsec);
+        const current = parseTimestampUsec(timestampUsec);
+        if (previous === null || current === null || current <= previous) return Math.min(maximumMs, Math.max(minimumMs, fallbackMs));
+        const deltaMs = Number(current - previous) / 1000;
+        return Number.isFinite(deltaMs) ? Math.min(maximumMs, Math.max(minimumMs, deltaMs)) : Math.min(maximumMs, Math.max(minimumMs, fallbackMs));
+    }
+
+    function planContinuousDanmakuLaunch(messages, nowMs, lastLaunchAtMs = 0, maxItems = DANMAKU_MAX_PENDING_COMMENTS,
+        cadenceMs = DANMAKU_DEFAULT_LAUNCH_CADENCE_MS, previousTimestampUsec = '') {
+        if (!Array.isArray(messages) || !Number.isFinite(nowMs) || nowMs < 0 || !Number.isFinite(lastLaunchAtMs) ||
             !Number.isInteger(maxItems) || maxItems <= 0 || !Number.isFinite(cadenceMs) || cadenceMs < 0) {
             return { plan: [], nextLaunchAtMs: Math.max(0, Number.isFinite(nowMs) ? nowMs : 0) };
         }
         const selected = messages.slice(-maxItems);
-        let launchAtMs = Math.max(nowMs, nextLaunchAtMs);
-        const plan = selected.map((message) => {
+        let launchAtMs = lastLaunchAtMs > 0 ? lastLaunchAtMs : nowMs;
+        let lastTimestampUsec = previousTimestampUsec;
+        const plan = selected.map((message, index) => {
+            if (lastLaunchAtMs > 0 || index > 0) {
+                launchAtMs = Math.max(nowMs, launchAtMs + calculateTimestampVisualGap(lastTimestampUsec, message?.timestampUsec, cadenceMs));
+            }
             const entry = { message, notBeforeMs: launchAtMs };
-            launchAtMs += cadenceMs;
+            if (parseTimestampUsec(message?.timestampUsec) !== null) lastTimestampUsec = message.timestampUsec;
             return entry;
         });
-        return { plan, nextLaunchAtMs: launchAtMs };
+        return { plan, nextLaunchAtMs: launchAtMs, lastTimestampUsec };
     }
 
-    function calculateDanmakuLaunchCadence(queueDepth, maxWindowMs = DANMAKU_MAX_BATCH_SPREAD_MS, baselineMs = DANMAKU_BATCH_STAGGER_MS, minimumMs = DANMAKU_MIN_LAUNCH_CADENCE_MS) {
+    function calculateDanmakuLaunchCadence(queueDepth, maxWindowMs = DANMAKU_MAX_BATCH_SPREAD_MS, baselineMs = DANMAKU_DEFAULT_LAUNCH_CADENCE_MS, minimumMs = DANMAKU_MIN_LAUNCH_CADENCE_MS) {
         if (!Number.isInteger(queueDepth) || queueDepth <= 0 || ![maxWindowMs, baselineMs, minimumMs].every(Number.isFinite) ||
             maxWindowMs < 0 || baselineMs <= 0 || minimumMs <= 0 || minimumMs > baselineMs) return null;
         return Math.max(minimumMs, Math.min(baselineMs, Math.floor(maxWindowMs / Math.max(1, queueDepth - 1))));
@@ -517,6 +554,10 @@
         DANMAKU_MAX_RENDER_QUEUE,
         DANMAKU_ENTRY_CLEAR_FRACTION,
         DANMAKU_MIN_LAUNCH_CADENCE_MS,
+        DANMAKU_DEFAULT_LAUNCH_CADENCE_MS,
+        DANMAKU_MIN_TIMESTAMP_GAP_MS,
+        DANMAKU_MAX_TIMESTAMP_GAP_MS,
+        DANMAKU_MIN_TARGET_DURATION_MS,
         mergeMessagesById,
         getVisibleMessages,
         formatMessageText,
@@ -527,10 +568,12 @@
         getRenderableMessageRuns,
         normalizeYouTubeColor,
         normalizeMessageColors,
+        withCssColorAlpha,
         calculateLaneCount,
         selectAvailableLane,
         calculateDanmakuMotion,
         calculateDanmakuSpeed,
+        calculateCompensatedDanmakuDuration,
         isLaneCollisionSafe,
         selectCollisionSafeLane,
         calculateLaneSafeAtMs,
@@ -538,6 +581,7 @@
         planDanmakuBatch,
         planContinuousDanmakuLaunch,
         calculateDanmakuLaunchCadence,
+        calculateTimestampVisualGap,
         isRendererTargetCurrent,
         isEffectiveDisplayActive,
         getDisplayStateTransition,

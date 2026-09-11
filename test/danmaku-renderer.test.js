@@ -15,15 +15,20 @@ const {
     shouldRenderAvatar,
     getRenderableMessageRuns,
     normalizeYouTubeColor,
+    withCssColorAlpha,
     isPlaybackEligible,
     calculateVideoSurfaceRect,
     MIN_PLAYABLE_READY_STATE,
     calculateDanmakuSpeed,
+    calculateCompensatedDanmakuDuration,
     isLaneCollisionSafe,
     selectCollisionSafeLane,
     planDanmakuBatch,
     planContinuousDanmakuLaunch,
     calculateDanmakuLaunchCadence,
+    calculateTimestampVisualGap,
+    DANMAKU_DEFAULT_LAUNCH_CADENCE_MS,
+    DANMAKU_MIN_LAUNCH_CADENCE_MS,
     DANMAKU_MAX_BATCH_SPREAD_MS,
     DANMAKU_BATCH_STAGGER_MS,
     DANMAKU_MAX_PENDING_COMMENTS,
@@ -183,21 +188,21 @@ test('empty, unknown, and excessively long messages are ignored safely', () => {
     assert.equal(normalizeDanmakuMessage({ messageType: 'unknown', message: 'hello' }), null);
     assert.equal(normalizeDanmakuMessage({ messageType: 'text', message: 'x'.repeat(DANMAKU_MAX_MESSAGE_LENGTH + 1) }), null);
     assert.deepEqual(normalizeDanmakuMessage({ id: 'a', authorName: 'Alice', messageType: 'text', message: ' hello ' }), {
-        id: 'a', text: 'hello', authorName: 'Alice', authorPhoto: '', authorRole: 'guest', messageRuns: [{ type: 'text', text: 'hello' }]
+        id: 'a', text: 'hello', authorName: 'Alice', authorPhoto: '', authorRole: 'guest', timestampUsec: '', messageRuns: [{ type: 'text', text: 'hello' }]
     });
 });
 
 test('continuous launch planning preserves order and state across response batches', () => {
-    const first = planContinuousDanmakuLaunch([{ id: 'a' }, { id: 'b' }], 1000, 0);
-    assert.deepEqual(first.plan.map((entry) => [entry.message.id, entry.notBeforeMs]), [['a', 1000], ['b', 1050]]);
-    const second = planContinuousDanmakuLaunch([{ id: 'c' }, { id: 'd' }], 1020, first.nextLaunchAtMs);
-    assert.deepEqual(second.plan.map((entry) => [entry.message.id, entry.notBeforeMs]), [['c', 1100], ['d', 1150]]);
+    const first = planContinuousDanmakuLaunch([{ id: 'a', timestampUsec: '1000000' }, { id: 'b', timestampUsec: '1150000' }], 1000, 0);
+    assert.deepEqual(first.plan.map((entry) => [entry.message.id, entry.notBeforeMs]), [['a', 1000], ['b', 1150]]);
+    const second = planContinuousDanmakuLaunch([{ id: 'c', timestampUsec: '1300000' }, { id: 'd', timestampUsec: '1600000' }], 1020, first.nextLaunchAtMs, 40, 120, first.lastTimestampUsec);
+    assert.deepEqual(second.plan.map((entry) => [entry.message.id, entry.notBeforeMs]), [['c', 1300], ['d', 1600]]);
 });
 
 test('continuous launch planning gives low-density arrivals immediate deterministic launch', () => {
     const plan = planContinuousDanmakuLaunch([{ id: 'one' }], 5000, 1100);
     assert.equal(plan.plan[0].notBeforeMs, 5000);
-    assert.equal(plan.nextLaunchAtMs, 5050);
+    assert.equal(plan.nextLaunchAtMs, 5000);
     assert.deepEqual(planContinuousDanmakuLaunch(null, 10), { plan: [], nextLaunchAtMs: 10 });
 });
 
@@ -206,11 +211,50 @@ test('high-density launch planning remains bounded and evenly cadenced', () => {
     const cadence = calculateDanmakuLaunchCadence(DANMAKU_MAX_PENDING_COMMENTS);
     const result = planContinuousDanmakuLaunch(messages, 2000, 0, DANMAKU_MAX_PENDING_COMMENTS, cadence);
     assert.equal(result.plan.length, DANMAKU_MAX_PENDING_COMMENTS);
-    assert.equal(result.plan.every((entry, index) => index === 0 || entry.notBeforeMs - result.plan[index - 1].notBeforeMs === cadence), true);
+    assert.equal(result.plan.every((entry, index) => index === 0 || entry.notBeforeMs - result.plan[index - 1].notBeforeMs === 100), true);
     assert.equal(new Set(result.plan.map((entry) => entry.notBeforeMs)).size, result.plan.length);
-    assert.equal(result.plan.at(-1).notBeforeMs - result.plan[0].notBeforeMs <= DANMAKU_MAX_BATCH_SPREAD_MS, true);
-    assert.equal(calculateDanmakuLaunchCadence(2), DANMAKU_BATCH_STAGGER_MS);
-    assert.equal(calculateDanmakuLaunchCadence(150), 10);
+    assert.equal(result.plan.at(-1).notBeforeMs - result.plan[0].notBeforeMs <= DANMAKU_MAX_BATCH_SPREAD_MS * 6, true);
+    assert.equal(calculateDanmakuLaunchCadence(2), DANMAKU_DEFAULT_LAUNCH_CADENCE_MS);
+    assert.equal(calculateDanmakuLaunchCadence(150), DANMAKU_MIN_LAUNCH_CADENCE_MS);
+});
+
+test('timestamp visual gaps are deterministic and bounded', () => {
+    assert.equal(calculateTimestampVisualGap('1000000', '1250000'), 250);
+    assert.equal(calculateTimestampVisualGap('1000000', '1001000'), 100);
+    assert.equal(calculateTimestampVisualGap('1000000', '9000000'), 450);
+    for (const current of ['', 'invalid', '999999', '1000000']) {
+        assert.equal(calculateTimestampVisualGap('1000000', current), DANMAKU_DEFAULT_LAUNCH_CADENCE_MS);
+    }
+});
+
+test('long comment duration compensation is bounded by rendered width and video width', () => {
+    assert.equal(calculateCompensatedDanmakuDuration(800, 100), 8000);
+    assert.equal(calculateCompensatedDanmakuDuration(800, 500), 7520);
+    assert.equal(calculateCompensatedDanmakuDuration(800, 1000), 6720);
+    assert.equal(calculateCompensatedDanmakuDuration(800, 5000), 6400);
+    assert.equal(calculateCompensatedDanmakuDuration(0, 100), null);
+    const duration = calculateCompensatedDanmakuDuration(800, 1000);
+    const speed = calculateDanmakuSpeed({ overlayWidth: 800, commentWidth: 1000, targetDurationMs: duration });
+    assert.equal(speed, Math.min(240, 1800 / (duration / 1000)));
+});
+
+test('special card color alpha is bounded and invalid colors fail closed', () => {
+    assert.equal(withCssColorAlpha('rgba(17, 34, 51, 1)', 0.8), 'rgba(17, 34, 51, 0.8)');
+    assert.equal(withCssColorAlpha('rgb(1, 2, 3)', 0.75), 'rgba(1, 2, 3, 0.75)');
+    assert.equal(withCssColorAlpha('rgba(999, 2, 3, 1)', 0.8), '');
+    assert.equal(withCssColorAlpha('red', 0.8), '');
+});
+
+test('rich text uses sharp strokes and special cards keep opaque white flexible headers', () => {
+    assert.doesNotMatch(runtimeSource, /text-shadow\s*:/);
+    assert.match(runtimeSource, /-webkit-text-stroke/);
+    assert.match(runtimeSource, /\.liveflow-danmaku img \{ -webkit-text-stroke: 0/);
+    assert.match(runtimeSource, /withCssColorAlpha\(backgroundColor, 0\.8\)/);
+    assert.match(runtimeSource, /node\.style\.color = '#FFFFFF'/);
+    assert.match(runtimeSource, /liveflow-danmaku-amount \{ flex: 0 0 auto; white-space: nowrap/);
+    assert.doesNotMatch(runtimeSource, /liveflow-danmaku-amount[^}]*text-overflow:\s*ellipsis/);
+    assert.match(runtimeSource, /liveflow-danmaku-author[^}]*max-width: 220px[^}]*text-overflow: ellipsis/);
+    assert.match(runtimeSource, /const commentWidth = node\.getBoundingClientRect\(\)\.width[^]*?calculateCompensatedDanmakuDuration\(surfaceRect\.width, commentWidth\)/);
 });
 
 test('runtime smoothing does not reset cadence at response boundaries or burst overdue entries', () => {
@@ -757,6 +801,13 @@ test('management bar view reflects enabled state without controlling READ timing
     });
     assert.equal(getManagementBarViewModel({ userEnabled: true, enabledLabel: '有効' }).toggleLabel, '有効');
     assert.equal(getManagementBarViewModel({ userEnabled: false, disabledLabel: 'Disabled' }).toggleLabel, 'Disabled');
+});
+
+test('lane availability deterministically selects the earliest currently safe lane', () => {
+    const busy = previousLaneState();
+    const next = { startX: 800, speed: 120 };
+    assert.deepEqual(findNextLaneAvailability([busy, null, null], 3, next, 800, 1000), { lane: 1, nextSafeAtMs: 1000 });
+    assert.deepEqual(findNextLaneAvailability([busy, busy], 2, next, 800, 1000), { lane: -1, nextSafeAtMs: 3334 });
 });
 
 test('runtime localization uses Chrome i18n and falls back deterministically', () => {

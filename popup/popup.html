@@ -14,7 +14,17 @@
         <section><h2 data-i18n="appearanceSection"></h2><div id="appearance-controls"></div></section>
         <section><h2 data-i18n="adaptiveSection"></h2><div id="adaptive-controls"></div></section>
         <section><h2 data-i18n="nativeChatSection"></h2><div id="native-chat-controls"></div></section>
-        <section><h2 data-i18n="otherSection"></h2><button id="reset-settings" type="button" data-i18n="resetSettings"></button></section>
+        <section>
+            <h2 data-i18n="otherSection"></h2>
+            <button id="reset-settings" type="button" data-i18n="resetSettings"></button>
+            <div id="reset-confirmation" class="reset-confirmation" aria-hidden="true">
+                <span data-i18n="resetConfirmation"></span>
+                <div class="reset-actions">
+                    <button id="cancel-reset" type="button" data-i18n="cancel"></button>
+                    <button id="confirm-reset" type="button" data-i18n="confirmReset"></button>
+                </div>
+            </div>
+        </section>
         <p id="save-status" role="status" aria-live="polite"></p>
     </main>
     <script src="../src/settings-core.js"></script>

@@ -85,11 +85,24 @@
         controls.forEach((control) => control.addEventListener('change', handleChange));
         settings = await core.getStoredSettings(storageArea);
         render();
-        document.getElementById('reset-settings').addEventListener('click', async () => {
-            if (!globalThis.confirm(message('resetConfirmation', 'Reset all settings?'))) return;
+        const resetConfirmation = document.getElementById('reset-confirmation');
+        const resetButton = document.getElementById('reset-settings');
+        const cancelResetButton = document.getElementById('cancel-reset');
+        const confirmResetButton = document.getElementById('confirm-reset');
+        function setResetConfirmationOpen(open) {
+            resetConfirmation.dataset.open = String(open);
+            resetConfirmation.setAttribute('aria-hidden', String(!open));
+            resetButton.setAttribute('aria-expanded', String(open));
+            if (open) cancelResetButton.focus();
+            else resetButton.focus();
+        }
+        resetButton.addEventListener('click', () => setResetConfirmationOpen(true));
+        cancelResetButton.addEventListener('click', () => setResetConfirmationOpen(false));
+        confirmResetButton.addEventListener('click', async () => {
             settings = await core.resetSettings(storageArea);
             render();
             showStatus('settingsReset');
+            setResetConfirmationOpen(false);
         });
     }
 

@@ -41,6 +41,8 @@
     "automatic": { "message": "自動" },
     "resetSettings": { "message": "設定を初期化" },
     "resetConfirmation": { "message": "すべての設定を初期値に戻しますか？" },
+    "cancel": { "message": "キャンセル" },
+    "confirmReset": { "message": "リセット" },
     "settingsSaved": { "message": "保存しました" },
     "settingsReset": { "message": "設定を初期化しました" }
 }

@@ -45,6 +45,7 @@
     let rendererQueueTimer = null;
     let rendererQueueTimerDueAt = null;
     let rendererNextLaunchAtMs = 0;
+    let rendererLastTimestampUsec = '';
     let initialContinuation = '';
     let internalApiContext = null;
     let chatAvailable = false;
@@ -126,6 +127,7 @@
         rendererQueueTimerDueAt = null;
         rendererQueue.length = 0;
         rendererNextLaunchAtMs = 0;
+        rendererLastTimestampUsec = '';
         laneStates = [];
         overlayRoot?.remove();
         overlayRoot = null;
@@ -433,16 +435,17 @@
             .liveflow-danmaku { display: inline-flex; align-items: center; gap: 6px; max-width: min(80%, 720px); }
             .liveflow-danmaku-avatar { flex: 0 0 22px; width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
             .liveflow-danmaku-author { flex: 0 0 auto; font-weight: 700; }
-            .liveflow-danmaku-message { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+            .liveflow-danmaku-message { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
             .liveflow-danmaku-emoji { width: 1.2em; height: 1.2em; object-fit: contain; vertical-align: middle; }
-            .liveflow-danmaku-special { box-sizing: border-box; max-width: min(72%, 520px); height: 32px; padding: 0 8px; overflow: hidden; border-radius: 8px; background: rgba(24,24,24,.92); color: #fff; text-shadow: 0 1px 2px #000; }
-            .liveflow-danmaku-special .liveflow-danmaku-author { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
-            .liveflow-danmaku-amount { flex: 0 1 auto; max-width: 100px; overflow: hidden; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.25); font-weight: 700; text-overflow: ellipsis; }
+            .liveflow-danmaku-special { box-sizing: border-box; width: max-content; min-width: 180px; max-width: min(72%, 520px); height: 32px; padding: 0 8px; overflow: hidden; border-radius: 8px; background: rgba(24,24,24,.8); color: #fff; -webkit-text-stroke: .35px rgba(0,0,0,.85); }
+            .liveflow-danmaku-special .liveflow-danmaku-author { flex: 0 1 auto; min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; }
+            .liveflow-danmaku-amount { flex: 0 0 auto; white-space: nowrap; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.25); color: #fff; font-weight: 700; }
             .liveflow-danmaku-sticker { flex: 0 0 28px; width: 28px; height: 28px; object-fit: contain; }
-            .liveflow-danmaku[data-author-role="guest"] { color: #fff; text-shadow: 0 1px 3px #000, 0 0 2px #000; }
-            .liveflow-danmaku[data-author-role="member"] { color: #66e08a; text-shadow: 0 1px 3px #001a08, 0 0 2px #000; }
-            .liveflow-danmaku[data-author-role="moderator"] { color: #70b7ff; text-shadow: 0 1px 3px #00152b, 0 0 2px #000; }
-            .liveflow-danmaku[data-author-role="owner"] { color: #ffd75e; text-shadow: 0 1px 3px #2b2100, 0 0 2px #000; }
+            .liveflow-danmaku[data-author-role="guest"] { color: #fff; -webkit-text-stroke: .45px #202020; }
+            .liveflow-danmaku[data-author-role="member"] { color: #66e08a; -webkit-text-stroke: .45px #12381d; }
+            .liveflow-danmaku[data-author-role="moderator"] { color: #70b7ff; -webkit-text-stroke: .45px #183b5c; }
+            .liveflow-danmaku[data-author-role="owner"] { color: #ffd75e; -webkit-text-stroke: .45px #564813; }
+            .liveflow-danmaku img { -webkit-text-stroke: 0; }
             @keyframes liveflow-read-indicator { from { opacity: .35; } to { opacity: 1; } }
             @media (prefers-reduced-motion: reduce) {
                 #${MANAGEMENT_BAR_ID}[data-read-state="active"] .liveflow-read-indicator { animation: none; }
@@ -654,9 +657,8 @@
             node.classList.add('liveflow-danmaku-special');
             node.dataset.messageType = normalized.messageType;
             const backgroundColor = normalized.colors.bodyBackgroundColor || normalized.colors.backgroundColor || normalized.colors.headerBackgroundColor;
-            const textColor = normalized.colors.bodyTextColor || normalized.colors.moneyChipTextColor || normalized.colors.headerTextColor;
-            if (backgroundColor) node.style.backgroundColor = backgroundColor;
-            if (textColor) node.style.color = textColor;
+            node.style.backgroundColor = overlayCore.withCssColorAlpha(backgroundColor, 0.8) || 'rgba(24, 24, 24, 0.8)';
+            node.style.color = '#FFFFFF';
         }
         if (overlayCore.shouldRenderAvatar(normalized, runtimeSettings || {})) {
             const avatar = document.createElement('img');
@@ -671,7 +673,6 @@
             const author = document.createElement('span');
             author.className = 'liveflow-danmaku-author';
             author.textContent = normalized.authorName;
-            if (normalized.colors.authorNameTextColor) author.style.color = normalized.colors.authorNameTextColor;
             node.appendChild(author);
         }
         if (special && normalized.purchaseAmountText) {
@@ -679,7 +680,6 @@
             amount.className = 'liveflow-danmaku-amount';
             amount.textContent = normalized.purchaseAmountText;
             if (normalized.colors.moneyChipBackgroundColor) amount.style.backgroundColor = normalized.colors.moneyChipBackgroundColor;
-            if (normalized.colors.moneyChipTextColor) amount.style.color = normalized.colors.moneyChipTextColor;
             node.appendChild(amount);
         }
         if (normalized.messageType === 'superSticker' && normalized.sticker?.url) {
@@ -708,7 +708,8 @@
         if (content.childNodes.length > 0) node.appendChild(content);
         overlaySurface.appendChild(node);
         const commentWidth = node.getBoundingClientRect().width;
-        const speed = overlayCore.calculateDanmakuSpeed({ overlayWidth: surfaceRect.width, commentWidth });
+        const targetDurationMs = overlayCore.calculateCompensatedDanmakuDuration(surfaceRect.width, commentWidth);
+        const speed = overlayCore.calculateDanmakuSpeed({ overlayWidth: surfaceRect.width, commentWidth, targetDurationMs });
         const nextMotion = { startX: surfaceRect.width, speed };
         const availability = overlayCore.findNextLaneAvailability(laneStates, laneCount, nextMotion, surfaceRect.width, now);
         if (availability.lane < 0) {
@@ -854,9 +855,11 @@
             performance.now(),
             rendererNextLaunchAtMs,
             incoming.length || 1,
-            overlayCore.calculateDanmakuLaunchCadence(rendererQueue.length + incoming.length) || overlayCore.DANMAKU_BATCH_STAGGER_MS
+            overlayCore.calculateDanmakuLaunchCadence(rendererQueue.length + incoming.length) || overlayCore.DANMAKU_DEFAULT_LAUNCH_CADENCE_MS,
+            rendererLastTimestampUsec
         );
         rendererNextLaunchAtMs = launchPlan.nextLaunchAtMs;
+        rendererLastTimestampUsec = launchPlan.lastTimestampUsec;
         launchPlan.plan.forEach(({ message, notBeforeMs }) => rendererQueue.push({
             message,
             notBeforeMs,

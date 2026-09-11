@@ -112,7 +112,15 @@ test('popup is mobile-first, localized, and has no LiveFlow master switch', () =
     assert.doesNotMatch(css, /position:\s*(?:fixed|absolute)|height:\s*100%|min-height:\s*100%|100vh|transition\s*:/);
     assert.match(source, /chrome\?\.i18n\?\.getMessage/);
     assert.match(source, /control\.disabled = core\.CAPABILITIES\[key\] !== true/);
-    assert.match(source, /globalThis\.confirm\(message\('resetConfirmation'/);
+    assert.doesNotMatch(source, /(?:window|globalThis)\.confirm\s*\(|\balert\s*\(/);
+    assert.match(html, /id="reset-confirmation"[^>]*aria-hidden="true"/);
+    assert.match(html, /id="cancel-reset"/);
+    assert.match(html, /id="confirm-reset"/);
+    assert.match(source, /resetButton\.addEventListener\('click', \(\) => setResetConfirmationOpen\(true\)\)/);
+    assert.match(source, /cancelResetButton\.addEventListener\('click', \(\) => setResetConfirmationOpen\(false\)\)/);
+    assert.match(source, /confirmResetButton\.addEventListener\('click', async \(\) => \{[^]*?core\.resetSettings\(storageArea\)/);
+    assert.match(css, /\.reset-confirmation[^}]*min-height:\s*82px[^}]*visibility:\s*hidden/);
+    assert.match(css, /\.reset-confirmation\[data-open="true"\][^}]*visibility:\s*visible/);
     assert.match(source, /core\.updateSettings\(storageArea/);
 });
 

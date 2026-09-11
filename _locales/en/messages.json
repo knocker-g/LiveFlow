@@ -41,6 +41,8 @@
     "automatic": { "message": "Auto" },
     "resetSettings": { "message": "Reset settings" },
     "resetConfirmation": { "message": "Reset all settings to their defaults?" },
+    "cancel": { "message": "Cancel" },
+    "confirmReset": { "message": "Reset" },
     "settingsSaved": { "message": "Saved" },
     "settingsReset": { "message": "Settings reset" }
 }

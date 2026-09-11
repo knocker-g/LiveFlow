@@ -22,6 +22,8 @@ const requiredKeys = [
     'liveFlowOffOpensChat',
     'resetSettings',
     'resetConfirmation',
+    'cancel',
+    'confirmReset',
     'settingsSaved',
     'settingsReset'
 ];
