@@ -18,6 +18,8 @@
             ],
             "js": [
                 "src/schema-diagnostics-core.js",
+                "src/replay-schema-probe-core.js",
+                "src/replay-schema-probe.js",
                 "src/chat-read-core.js",
                 "src/page-state-main.js"
             ],
