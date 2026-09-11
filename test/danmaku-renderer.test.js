@@ -10,6 +10,7 @@ const {
     calculateDanmakuMotion,
     canRenderDanmaku,
     normalizeDanmakuMessage,
+    getDanmakuLaneSpan,
     normalizeImageUrl,
     isMessageVisibleForSettings,
     shouldRenderAvatar,
@@ -36,6 +37,9 @@ const {
     DANMAKU_ENTRY_CLEAR_FRACTION,
     calculateLaneSafeAtMs,
     findNextLaneAvailability,
+    findNextLaneSpanAvailability,
+    reserveLaneSpan,
+    releaseLaneReservation,
     isRendererTargetCurrent,
     isEffectiveDisplayActive,
     getDisplayStateTransition,
@@ -188,7 +192,7 @@ test('empty, unknown, and excessively long messages are ignored safely', () => {
     assert.equal(normalizeDanmakuMessage({ messageType: 'unknown', message: 'hello' }), null);
     assert.equal(normalizeDanmakuMessage({ messageType: 'text', message: 'x'.repeat(DANMAKU_MAX_MESSAGE_LENGTH + 1) }), null);
     assert.deepEqual(normalizeDanmakuMessage({ id: 'a', authorName: 'Alice', messageType: 'text', message: ' hello ' }), {
-        id: 'a', text: 'hello', authorName: 'Alice', authorPhoto: '', authorRole: 'guest', timestampUsec: '', messageRuns: [{ type: 'text', text: 'hello' }]
+        id: 'a', text: 'hello', authorName: 'Alice', authorPhoto: '', authorRole: 'guest', timestampUsec: '', laneSpan: 1, messageRuns: [{ type: 'text', text: 'hello' }]
     });
 });
 
@@ -338,9 +342,13 @@ test('rich comment DOM uses safe construction, bounded avatar geometry, and meas
     assert.match(runtimeSource, /liveflow-danmaku-emoji/);
     assert.match(runtimeSource, /image\.width = 29/);
     assert.match(runtimeSource, /liveflow-danmaku-sticker/);
-    assert.match(runtimeSource, /sticker\.width = 28/);
+    assert.match(runtimeSource, /sticker\.width = 32/);
     assert.match(runtimeSource, /liveflow-danmaku-special/);
     assert.match(runtimeSource, /const commentWidth = node\.getBoundingClientRect\(\)\.width/);
+    assert.match(runtimeSource, /height: 68px/);
+    assert.match(runtimeSource, /getDanmakuLaneSpan\(normalized\)/);
+    assert.match(runtimeSource, /reserveLaneSpan\(laneStates, lane, laneSpan, reservation\)/);
+    assert.match(runtimeSource, /releaseLaneReservation\(laneStates, token\)/);
     assert.doesNotMatch(runtimeSource, /innerHTML|insertAdjacentHTML|eval\s*\(|new Function/);
     assert.match(runtimeSource, /data-author-role="member"/);
     assert.match(runtimeSource, /data-author-role="moderator"/);
@@ -808,6 +816,39 @@ test('lane availability deterministically selects the earliest currently safe la
     const next = { startX: 800, speed: 120 };
     assert.deepEqual(findNextLaneAvailability([busy, null, null], 3, next, 800, 1000), { lane: 1, nextSafeAtMs: 1000 });
     assert.deepEqual(findNextLaneAvailability([busy, busy], 2, next, 800, 1000), { lane: -1, nextSafeAtMs: 3334 });
+});
+
+test('message metadata assigns one lane normally and two lanes to observed special cards', () => {
+    assert.equal(getDanmakuLaneSpan({ messageType: 'text' }), 1);
+    assert.equal(getDanmakuLaneSpan({ messageType: 'superChat' }), 2);
+    assert.equal(getDanmakuLaneSpan({ messageType: 'superSticker' }), 2);
+    assert.equal(getDanmakuLaneSpan({ messageType: 'futureSpecial', laneSpan: 2 }), 2);
+    assert.equal(getDanmakuLaneSpan({ messageType: 'futureUnknown' }), 1);
+});
+
+test('two-lane selection requires a consecutive safe pair and handles narrow surfaces safely', () => {
+    const next = { startX: 800, speed: 120 };
+    const busy = previousLaneState();
+    assert.deepEqual(findNextLaneSpanAvailability([null, null, busy], 3, next, 800, 1000, 2), { lane: 0, nextSafeAtMs: 1000 });
+    assert.deepEqual(findNextLaneSpanAvailability([busy, null, null], 3, next, 800, 1000, 2), { lane: 1, nextSafeAtMs: 1000 });
+    assert.deepEqual(findNextLaneSpanAvailability([null, busy, null], 3, next, 800, 1000, 2), { lane: -1, nextSafeAtMs: 3334 });
+    assert.deepEqual(findNextLaneSpanAvailability([null], 1, next, 800, 1000, 2), { lane: -1, nextSafeAtMs: null });
+});
+
+test('two-lane reservation shares one token and releases only matching reservations', () => {
+    const token = Symbol('special');
+    const replacement = Symbol('replacement');
+    const lanes = [null, null, null];
+    const reservation = { token, speed: 120 };
+    assert.equal(reserveLaneSpan(lanes, 1, 2, reservation), true);
+    assert.equal(lanes[1], reservation);
+    assert.equal(lanes[2], reservation);
+    assert.equal(findNextLaneSpanAvailability(lanes, 3, { startX: 800, speed: 120 }, 800, 1000, 2).lane, -1);
+    lanes[2] = { token: replacement };
+    assert.equal(releaseLaneReservation(lanes, token), 1);
+    assert.equal(lanes[1], null);
+    assert.equal(lanes[2].token, replacement);
+    assert.equal(reserveLaneSpan(lanes, 2, 2, reservation), false);
 });
 
 test('runtime localization uses Chrome i18n and falls back deterministically', () => {

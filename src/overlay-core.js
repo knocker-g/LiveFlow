@@ -71,6 +71,7 @@
             authorPhoto: normalizeImageUrl(message.authorPhoto),
             authorRole: role,
             timestampUsec: typeof message.timestampUsec === 'string' ? message.timestampUsec : '',
+            laneSpan: getDanmakuLaneSpan(message),
             messageRuns
         };
         if (message.messageType !== 'text') {
@@ -80,6 +81,11 @@
             normalized.sticker = sticker?.url ? sticker : null;
         }
         return normalized;
+    }
+
+    function getDanmakuLaneSpan(message) {
+        if (Number.isInteger(message?.laneSpan) && message.laneSpan >= 1 && message.laneSpan <= 2) return message.laneSpan;
+        return message?.messageType === 'superChat' || message?.messageType === 'superSticker' ? 2 : 1;
     }
 
     function normalizeImageUrl(value) {
@@ -294,19 +300,49 @@
         return Math.min(previous.endTimeMs, Math.max(nowMs, safeAtMs));
     }
 
-    function findNextLaneAvailability(laneStates, laneCount, next, overlayWidth, nowMs, horizontalGap = DANMAKU_HORIZONTAL_GAP_PX) {
-        if (!Array.isArray(laneStates) || !Number.isInteger(laneCount) || laneCount <= 0) return { lane: -1, nextSafeAtMs: null };
+    function findNextLaneSpanAvailability(laneStates, laneCount, next, overlayWidth, nowMs, laneSpan = 1, horizontalGap = DANMAKU_HORIZONTAL_GAP_PX) {
+        if (!Array.isArray(laneStates) || !Number.isInteger(laneCount) || laneCount <= 0 ||
+            !Number.isInteger(laneSpan) || laneSpan <= 0 || laneSpan > laneCount) return { lane: -1, nextSafeAtMs: null };
         let nextSafeAtMs = null;
-        const limit = Math.min(laneCount, laneStates.length);
-        for (let index = 0; index < limit; index += 1) {
-            const safeAtMs = calculateLaneSafeAtMs(laneStates[index], next, overlayWidth, nowMs, horizontalGap);
-            if (safeAtMs === null) continue;
-            if (safeAtMs <= nowMs && isLaneCollisionSafe(laneStates[index], next, nowMs, horizontalGap)) {
-                return { lane: index, nextSafeAtMs: nowMs };
+        const limit = Math.min(laneCount, laneStates.length) - laneSpan + 1;
+        for (let startLane = 0; startLane < limit; startLane += 1) {
+            let candidateSafeAtMs = nowMs;
+            let valid = true;
+            for (let offset = 0; offset < laneSpan; offset += 1) {
+                const lane = laneStates[startLane + offset];
+                const safeAtMs = calculateLaneSafeAtMs(lane, next, overlayWidth, nowMs, horizontalGap);
+                if (safeAtMs === null) { valid = false; break; }
+                candidateSafeAtMs = Math.max(candidateSafeAtMs, safeAtMs);
             }
-            if (nextSafeAtMs === null || safeAtMs < nextSafeAtMs) nextSafeAtMs = safeAtMs;
+            if (!valid) continue;
+            const collisionSafe = candidateSafeAtMs <= nowMs && Array.from({ length: laneSpan }, (_, offset) =>
+                isLaneCollisionSafe(laneStates[startLane + offset], next, nowMs, horizontalGap)).every(Boolean);
+            if (collisionSafe) return { lane: startLane, nextSafeAtMs: nowMs };
+            if (nextSafeAtMs === null || candidateSafeAtMs < nextSafeAtMs) nextSafeAtMs = candidateSafeAtMs;
         }
         return { lane: -1, nextSafeAtMs };
+    }
+
+    function findNextLaneAvailability(laneStates, laneCount, next, overlayWidth, nowMs, horizontalGap = DANMAKU_HORIZONTAL_GAP_PX) {
+        return findNextLaneSpanAvailability(laneStates, laneCount, next, overlayWidth, nowMs, 1, horizontalGap);
+    }
+
+    function reserveLaneSpan(laneStates, startLane, laneSpan, reservation) {
+        if (!Array.isArray(laneStates) || !Number.isInteger(startLane) || !Number.isInteger(laneSpan) || laneSpan <= 0 ||
+            startLane < 0 || startLane + laneSpan > laneStates.length || !reservation) return false;
+        for (let offset = 0; offset < laneSpan; offset += 1) laneStates[startLane + offset] = reservation;
+        return true;
+    }
+
+    function releaseLaneReservation(laneStates, token) {
+        if (!Array.isArray(laneStates) || !token) return 0;
+        let released = 0;
+        for (let index = 0; index < laneStates.length; index += 1) {
+            if (laneStates[index]?.token !== token) continue;
+            laneStates[index] = null;
+            released += 1;
+        }
+        return released;
     }
 
     function getDisplayStateTransition(currentState = {}, nextState = {}) {
@@ -562,6 +598,7 @@
         getVisibleMessages,
         formatMessageText,
         normalizeDanmakuMessage,
+        getDanmakuLaneSpan,
         normalizeImageUrl,
         isMessageVisibleForSettings,
         shouldRenderAvatar,
@@ -578,6 +615,9 @@
         selectCollisionSafeLane,
         calculateLaneSafeAtMs,
         findNextLaneAvailability,
+        findNextLaneSpanAvailability,
+        reserveLaneSpan,
+        releaseLaneReservation,
         planDanmakuBatch,
         planContinuousDanmakuLaunch,
         calculateDanmakuLaunchCadence,
