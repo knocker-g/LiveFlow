@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>LiveFlow icon preview</title>
+<style>
+  :root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
+  body { margin: 24px; background: Canvas; color: CanvasText; }
+  h1 { font-size: 18px; margin: 0 0 18px; }
+  .panel { display: flex; gap: 22px; align-items: end; padding: 20px; border: 1px solid GrayText; border-radius: 12px; margin-bottom: 16px; }
+  .light { background: #f4f6f8; color: #111827; }
+  .dark { background: #202124; color: #f1f3f4; }
+  figure { margin: 0; text-align: center; }
+  img { display: block; margin: 0 auto 8px; }
+  .zoom img { width: 128px; height: 128px; image-rendering: pixelated; }
+  figcaption { white-space: nowrap; }
+</style>
+<h1>LiveFlow extension icon — actual sizes</h1>
+<div class="panel light">
+  <figure><img src="icon128.png" width="128" height="128"><figcaption>128 px</figcaption></figure>
+  <figure><img src="icon48.png" width="48" height="48"><figcaption>48 px</figcaption></figure>
+  <figure><img src="icon32.png" width="32" height="32"><figcaption>32 px</figcaption></figure>
+  <figure><img src="icon16.png" width="16" height="16"><figcaption>16 px</figcaption></figure>
+</div>
+<div class="panel dark">
+  <figure><img src="icon128.png" width="128" height="128"><figcaption>128 px</figcaption></figure>
+  <figure><img src="icon48.png" width="48" height="48"><figcaption>48 px</figcaption></figure>
+  <figure><img src="icon32.png" width="32" height="32"><figcaption>32 px</figcaption></figure>
+  <figure><img src="icon16.png" width="16" height="16"><figcaption>16 px</figcaption></figure>
+</div>
+<h1>Nearest-neighbor small-size inspection</h1>
+<div class="panel zoom dark">
+  <figure><img src="icon16.png"><figcaption>16 px × 8</figcaption></figure>
+  <figure><img src="icon32.png"><figcaption>32 px × 4</figcaption></figure>
+</div>
