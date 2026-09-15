@@ -120,15 +120,50 @@
             }
             return true;
         }
-        function observeResponse(value) {
-            if (!enabled) return false;
-            const shape = collectResponseShape(value, effective);
+        function mergeResponseShape(shape) {
+            if (!enabled || !shape || typeof shape !== 'object') return false;
             shape.responseTopLevelKeys.forEach((entry) => responseKeys.set(`${entry.key}:${entry.type}`, entry));
             Object.entries(pathMaps).forEach(([key, map]) => mergeRecords(map, shape[key], key === 'continuationPaths' ? effective.maxContinuationPaths : effective.maxTimingPaths));
             ignoredVisualTimingCount += shape.visualUiTimingPaths.length;
             Object.entries(nameSets).forEach(([key, set]) => shape[key].forEach((name) => { if (set.size < effective.maxNames) set.add(name); else categoryTruncated = true; }));
             if (Object.values(shape.truncated).some(Boolean)) categoryTruncated = true;
             return true;
+        }
+        function observeResponse(value) { return mergeResponseShape(collectResponseShape(value, effective)); }
+        function validType(type) { return ['string', 'number', 'boolean', 'object', 'array', 'null', 'undefined', 'unsupported', 'unavailable'].includes(type); }
+        function validPath(path) { return typeof path === 'string' && path.length <= 800 && /^[A-Za-z_$]+(?:\[\])?(?:\.[A-Za-z_$]+(?:\[\])?)*$/.test(path); }
+        function safeEntries(entries, maximum, pathMode = false) {
+            if (!Array.isArray(entries)) return [];
+            return entries.slice(0, maximum).flatMap((entry) => {
+                if (!entry || typeof entry !== 'object' || !validType(entry.type)) return [];
+                const key = pathMode ? entry.path : entry.key;
+                if (pathMode ? !validPath(key) : !safeKey(key)) return [];
+                return [pathMode ? { path: key, type: entry.type } : { key, type: entry.type }];
+            });
+        }
+        function observeSanitizedRequest(packet) {
+            if (!enabled || !packet || !ENDPOINTS.has(packet.path) || !['GET', 'POST', 'UNKNOWN'].includes(packet.method)) return false;
+            const key = `${packet.method} ${packet.path}`;
+            endpointCounts.set(key, (endpointCounts.get(key) || 0) + 1);
+            safeEntries(packet.requestTopLevelKeys, effective.maxTopLevelKeys).forEach((entry) => requestKeys.set(`${entry.key}:${entry.type}`, entry));
+            if (packet.authPresence?.cookieSeen === true) explicitCookie = true;
+            if (packet.authPresence?.authorizationSeen === true) explicitAuthHeader = true;
+            return true;
+        }
+        function observeSanitizedResponse(shape) {
+            if (!enabled || !shape || typeof shape !== 'object') return false;
+            return mergeResponseShape({
+                responseTopLevelKeys: safeEntries(shape.responseTopLevelKeys, effective.maxTopLevelKeys),
+                replayTimingCandidates: safeEntries(shape.replayTimingCandidates, effective.maxTimingPaths, true),
+                continuationTimingPaths: safeEntries(shape.continuationTimingPaths, effective.maxTimingPaths, true),
+                genericTimingPaths: safeEntries(shape.genericTimingPaths, effective.maxTimingPaths, true),
+                visualUiTimingPaths: safeEntries(shape.visualUiTimingPaths, effective.maxTimingPaths, true), continuationPaths: safeEntries(shape.continuationPaths, effective.maxContinuationPaths, true),
+                rendererNames: Array.isArray(shape.rendererNames) ? shape.rendererNames.map(safeKey).filter(Boolean).slice(0, effective.maxNames) : [],
+                actionNames: Array.isArray(shape.actionNames) ? shape.actionNames.map(safeKey).filter(Boolean).slice(0, effective.maxNames) : [],
+                viewModelNames: Array.isArray(shape.viewModelNames) ? shape.viewModelNames.map(safeKey).filter(Boolean).slice(0, effective.maxNames) : [],
+                continuationDataNames: Array.isArray(shape.continuationDataNames) ? shape.continuationDataNames.map(safeKey).filter(Boolean).slice(0, effective.maxNames) : [],
+                truncated: {}
+            });
         }
         function recordVideoEvent(event) {
             if (!enabled || !['play', 'pause', 'seeking', 'seeked', 'ratechange'].includes(event)) return;
@@ -165,7 +200,7 @@
         return Object.freeze({
             enable() { enabled = true; return summary(); }, disable() { enabled = false; operationStarts.clear(); return summary(); },
             reset() { endpointCounts.clear(); requestKeys.clear(); responseKeys.clear(); Object.values(pathMaps).forEach((map) => map.clear()); Object.values(nameSets).forEach((set) => set.clear()); history.length = 0; Object.keys(operations).forEach((key) => { operations[key] = 0; }); operationStarts.clear(); explicitCookie = false; explicitAuthHeader = false; replayUIObserved = false; categoryTruncated = false; ignoredVisualTimingCount = 0; return summary(); },
-            observeRequest, observeResponse, recordVideoEvent, startOperation, finishOperation,
+            observeRequest, observeResponse, observeSanitizedRequest, observeSanitizedResponse, recordVideoEvent, startOperation, finishOperation,
             cancelOperation(name) { operationStarts.delete(name); },
             setReplayUIObserved(value) { if (enabled && value === true) replayUIObserved = true; }, summary
         });

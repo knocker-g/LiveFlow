@@ -124,7 +124,7 @@ test('operation deltas count endpoint requests and history stays bounded', () =>
 });
 
 test('runtime is explicit opt-in, passive, bounded, and has no external output', () => {
-    assert.match(runtimeSource, /enable\(\) \{ collector\.enable\(\); installHooks\(\)/);
+    assert.match(runtimeSource, /function enable[\s\S]*collector\.enable\(\); installHooks\(\)/);
     assert.doesNotMatch(runtimeSource, /setInterval|requestAnimationFrame|sendBeacon|WebSocket|chrome\.storage|localStorage|sessionStorage|clipboard|innerHTML/);
     assert.doesNotMatch(runtimeSource, /credentials\s*:|Authorization\s*:|Cookie\s*:/);
     assert.match(runtimeSource, /originalFetch\.apply\(this, args\)/);
@@ -142,8 +142,11 @@ test('runtime enable is idempotent, fetch stays nonblocking, and disable restore
     FakeXHR.prototype.setRequestHeader = function () {};
     FakeXHR.prototype.addEventListener = function () {};
     const listeners = new Map();
+    const windowListeners = new Map();
+    const testWindow = { LiveFlowReplayProbeCore: require('../src/replay-schema-probe-core.js'), fetch: originalFetch, frames: [], addEventListener(name, fn) { windowListeners.set(name, fn); }, postMessage() {} };
+    testWindow.top = testWindow; testWindow.parent = testWindow;
     const context = {
-        window: { LiveFlowReplayProbeCore: require('../src/replay-schema-probe-core.js'), fetch: originalFetch },
+        window: testWindow,
         XMLHttpRequest: FakeXHR,
         Headers: class { constructor() {} keys() { return []; } },
         document: { querySelector() { return null; }, addEventListener(name, fn) { listeners.set(name, fn); }, removeEventListener(name) { listeners.delete(name); } },
@@ -166,10 +169,88 @@ test('runtime enable is idempotent, fetch stays nonblocking, and disable restore
     assert.equal(listeners.size, 0);
 });
 
+test('top probe aggregates a child-frame Replay request as shape-only data', async () => {
+    function makeXHR() {
+        function FrameXHR() {}
+        FrameXHR.prototype.open = function () {};
+        FrameXHR.prototype.send = function () {};
+        FrameXHR.prototype.setRequestHeader = function () {};
+        FrameXHR.prototype.addEventListener = function () {};
+        return FrameXHR;
+    }
+    function makeDocument() { return { querySelector() { return null; }, addEventListener() {}, removeEventListener() {} }; }
+    let topMessage = null;
+    let childMessage = null;
+    let activeGeneration = 0;
+    let childFetchCalls = 0;
+    const topFetch = () => Promise.resolve({ clone() { return { json: async () => ({}) }; } });
+    const childResponse = { clone() { return { json: async () => ({ continuationContents: { liveChatContinuation: { actions: [{ replayChatItemAction: { videoOffsetTimeMsec: 'private-offset', item: { privateRenderer: { continuation: 'private-token' } } } }] } } }) }; } };
+    const childFetch = () => { childFetchCalls += 1; return Promise.resolve(childResponse); };
+    const topWindow = { LiveFlowReplayProbeCore: require('../src/replay-schema-probe-core.js'), fetch: topFetch, frames: [], addEventListener(name, fn) { if (name === 'message') topMessage = fn; } };
+    const childWindow = { LiveFlowReplayProbeCore: require('../src/replay-schema-probe-core.js'), fetch: childFetch, frames: [], addEventListener(name, fn) { if (name === 'message') childMessage = fn; } };
+    topWindow.top = topWindow; topWindow.parent = topWindow;
+    childWindow.top = topWindow; childWindow.parent = topWindow;
+    topWindow.frames.push(childWindow);
+    topWindow.postMessage = (data) => topMessage?.({ data, source: childWindow });
+    childWindow.postMessage = (data) => { if (data.command === 'enable') activeGeneration = data.generation; childMessage?.({ data, source: topWindow }); };
+    const common = { Headers: class { keys() { return []; } }, console: { log() {} }, Promise, URL };
+    vm.runInNewContext(runtimeSource, { ...common, window: topWindow, XMLHttpRequest: makeXHR(), document: makeDocument() });
+    vm.runInNewContext(runtimeSource, { ...common, window: childWindow, XMLHttpRequest: makeXHR(), document: makeDocument() });
+    assert.equal(childWindow.fetch, childFetch);
+    topWindow.LiveFlowReplayProbe.enable();
+    assert.notEqual(childWindow.fetch, childFetch);
+    const returned = childWindow.fetch('/youtubei/v1/live_chat/get_live_chat_replay?key=private-key', { method: 'POST', body: '{"continuation":"private-token","visitorData":"private-visitor","trackingParams":"private-tracking"}' });
+    assert.equal(childFetchCalls, 1);
+    assert.equal(await returned, childResponse);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    const duplicate = { channel: 'LIVEFLOW_REPLAY_SHAPE_PROBE_V1', command: 'report', generation: activeGeneration, sequence: 1, kind: 'request', payload: { path: '/live_chat_replay', method: 'GET', requestTopLevelKeys: [] } };
+    topMessage({ data: duplicate, source: childWindow });
+    topMessage({ data: { ...duplicate, generation: activeGeneration - 1, sequence: 99 }, source: childWindow });
+    const summary = topWindow.LiveFlowReplayProbe.summary();
+    assert.deepEqual(summary.endpoints, [{ path: '/youtubei/v1/live_chat/get_live_chat_replay', method: 'POST', count: 1 }]);
+    assert.equal(summary.observedFrameCount, 1);
+    assert.equal(summary.replayFrameObserved, true);
+    assert.ok(summary.replayTimingCandidates.some((entry) => /videoOffsetTimeMsec$/.test(entry.path)));
+    const serialized = JSON.stringify(summary);
+    for (const secret of ['private-key', 'private-offset', 'private-token', 'private-visitor', 'private-tracking']) assert.equal(serialized.includes(secret), false);
+    topWindow.LiveFlowReplayProbe.disable();
+    assert.equal(childWindow.fetch, childFetch);
+});
+
+test('XHR Replay observation preserves callbacks and isolates non-JSON responses', () => {
+    let loadHandler = null;
+    let sends = 0;
+    function FakeXHR() { this.responseType = ''; this.responseText = 'not-json'; }
+    const originalOpen = function () {};
+    const originalSend = function () { sends += 1; return 'sent'; };
+    const originalHeader = function () {};
+    FakeXHR.prototype.open = originalOpen; FakeXHR.prototype.send = originalSend; FakeXHR.prototype.setRequestHeader = originalHeader;
+    FakeXHR.prototype.addEventListener = function (name, handler) { if (name === 'load') loadHandler = handler; };
+    const listeners = new Map();
+    const testWindow = { LiveFlowReplayProbeCore: require('../src/replay-schema-probe-core.js'), fetch: () => Promise.resolve({}), frames: [], addEventListener(name, fn) { listeners.set(name, fn); }, postMessage() {} };
+    testWindow.top = testWindow; testWindow.parent = testWindow;
+    vm.runInNewContext(runtimeSource, {
+        window: testWindow, XMLHttpRequest: FakeXHR, Headers: class { keys() { return []; } }, Promise, URL,
+        document: { querySelector() { return null; }, addEventListener() {}, removeEventListener() {} }, console: { log() {} }
+    });
+    testWindow.LiveFlowReplayProbe.enable();
+    const xhr = new FakeXHR();
+    xhr.open('POST', '/youtubei/v1/live_chat/get_live_chat_replay?key=secret');
+    assert.equal(xhr.send('{"continuation":"secret"}'), 'sent');
+    assert.equal(sends, 1);
+    assert.doesNotThrow(() => loadHandler());
+    assert.equal(testWindow.LiveFlowReplayProbe.summary().endpoints[0].count, 1);
+    testWindow.LiveFlowReplayProbe.disable();
+    assert.equal(FakeXHR.prototype.open, originalOpen);
+    assert.equal(FakeXHR.prototype.send, originalSend);
+    assert.equal(FakeXHR.prototype.setRequestHeader, originalHeader);
+});
+
 test('manifest loads passive probe in MAIN world without permission expansion', () => {
-    const main = manifest.content_scripts.find((entry) => entry.world === 'MAIN');
+    const main = manifest.content_scripts.find((entry) => entry.world === 'MAIN' && entry.all_frames === true);
     assert.ok(main.js.includes('src/replay-schema-probe-core.js'));
     assert.ok(main.js.includes('src/replay-schema-probe.js'));
+    assert.equal(main.run_at, 'document_start');
     assert.deepEqual(manifest.permissions, ['storage']);
     assert.equal(Object.hasOwn(manifest, 'host_permissions'), false);
     assert.equal(Object.hasOwn(manifest, 'background'), false);

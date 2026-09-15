@@ -28,13 +28,24 @@
             ],
             "js": [
                 "src/schema-diagnostics-core.js",
-                "src/replay-schema-probe-core.js",
-                "src/replay-schema-probe.js",
                 "src/chat-read-core.js",
                 "src/page-state-main.js"
             ],
             "world": "MAIN",
             "run_at": "document_idle"
+        },
+        {
+            "matches": [
+                "https://www.youtube.com/*",
+                "https://youtube.com/*"
+            ],
+            "js": [
+                "src/replay-schema-probe-core.js",
+                "src/replay-schema-probe.js"
+            ],
+            "world": "MAIN",
+            "all_frames": true,
+            "run_at": "document_start"
         },
         {
             "matches": [
