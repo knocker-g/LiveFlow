@@ -21,6 +21,7 @@
     const BRIDGE_TIMEOUT_MS = 12000;
     const frameSequences = new Map();
     const diagnosticFrames = new Set();
+    const diagnosticFrameStates = new Map();
     const pendingDiagnostics = new Map();
     let enabled = false;
     let generation = 0;
@@ -39,6 +40,8 @@
     let diagnosticInvocation = 0;
     let lastExecutedInvocation = 0;
     let lastDiagnosticResult = null;
+    let diagnosticState = 'no-replay-request';
+    let diagnosticStateSequence = 0;
 
     function directChildren() { try { return Array.from({ length: Math.min(window.frames.length, MAX_FRAMES) }, (_, index) => window.frames[index]); } catch { return []; } }
     function isDirectChild(source) { return directChildren().includes(source); }
@@ -58,30 +61,47 @@
         if (!value || ![true, false].includes(value.executed) || ![0, 1].includes(value.requestCount) || value.credentials !== 'omit' || !statuses.has(value.httpStatusClass) || !reasons.has(value.reason)) return safeDiagnosticResult('INVALID_FRAME_RESULT');
         return safeDiagnosticResult(value.reason, { executed: value.executed, requestCount: value.requestCount, httpStatusClass: value.httpStatusClass, jsonParsed: value.jsonParsed === true, replayShapeObserved: value.replayShapeObserved === true, replayTimingPathObserved: value.replayTimingPathObserved === true, continuationShapeObserved: value.continuationShapeObserved === true });
     }
+    const DIAGNOSTIC_STATES = new Set(['no-replay-request', 'replay-request-observed', 'capture-pending', 'request-clone-failed', 'body-read-failed', 'body-source-unsupported', 'body-too-large', 'body-shape-rejected', 'method-rejected', 'origin-rejected', 'stale-generation', 'template-ready', 'in-flight', 'disabled']);
+    function setDiagnosticState(value) {
+        if (!DIAGNOSTIC_STATES.has(value)) return;
+        diagnosticState = value;
+        if (!isTop && enabled) {
+            diagnosticStateSequence += 1;
+            post(window.parent, { channel: DIAGNOSTIC_CHANNEL, command: 'state', generation, sequence: diagnosticStateSequence, state: value });
+        }
+    }
     function captureDiagnosticTemplate(details, expectedGeneration = generation) {
         try {
-            if (!enabled || expectedGeneration !== generation || diagnosticInFlight || core.replayEndpoint(details.url) !== '/youtubei/v1/live_chat/get_live_chat_replay') return;
-            if (String(details.method || '').toUpperCase() !== 'POST' || typeof details.body !== 'string' || details.body.length < 2 || details.body.length > MAX_TEMPLATE_BODY_CHARS) return;
+            if (!enabled || diagnosticInFlight || core.replayEndpoint(details.url) !== '/youtubei/v1/live_chat/get_live_chat_replay') return;
+            setDiagnosticState('replay-request-observed');
+            if (expectedGeneration !== generation) { setDiagnosticState('stale-generation'); return; }
+            if (String(details.method || '').toUpperCase() !== 'POST') { setDiagnosticState('method-rejected'); return; }
+            if (typeof details.body !== 'string') { setDiagnosticState('body-source-unsupported'); return; }
+            if (details.body.length < 2 || details.body.length > MAX_TEMPLATE_BODY_CHARS) { setDiagnosticState('body-too-large'); return; }
             const requestUrl = new URL(String(details.url), window.location?.href || 'https://www.youtube.com/');
-            if (requestUrl.protocol !== 'https:' || !['www.youtube.com', 'youtube.com'].includes(requestUrl.hostname)) return;
+            if (requestUrl.protocol !== 'https:' || !['www.youtube.com', 'youtube.com'].includes(requestUrl.hostname)) { setDiagnosticState('origin-rejected'); return; }
             const parsed = JSON.parse(details.body);
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof parsed.continuation !== 'string' || parsed.continuation.length === 0 || !parsed.context || typeof parsed.context !== 'object') return;
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof parsed.continuation !== 'string' || parsed.continuation.length === 0 || !parsed.context || typeof parsed.context !== 'object') { setDiagnosticState('body-shape-rejected'); return; }
             diagnosticTemplate = { url: requestUrl.href, body: details.body };
+            setDiagnosticState('template-ready');
             if (!isTop) post(window.parent, { channel: DIAGNOSTIC_CHANNEL, command: 'ready', generation });
-        } catch { /* keep any previously validated unconsumed template */ }
+        } catch { setDiagnosticState('body-shape-rejected'); }
     }
     function prepareRequestTemplateCapture(input, init) {
         try {
-            if (!enabled || init.body !== undefined || typeof input?.clone !== 'function' || core.replayEndpoint(input.url) !== '/youtubei/v1/live_chat/get_live_chat_replay') return null;
-            if (String(init.method || input.method || '').toUpperCase() !== 'POST') return null;
+            if (!enabled || init.body !== undefined || core.replayEndpoint(input?.url) !== '/youtubei/v1/live_chat/get_live_chat_replay') return null;
+            setDiagnosticState('replay-request-observed');
+            if (String(init.method || input.method || '').toUpperCase() !== 'POST') { setDiagnosticState('method-rejected'); return null; }
+            if (typeof input?.clone !== 'function') { setDiagnosticState('request-clone-failed'); return null; }
+            setDiagnosticState('capture-pending');
             return { request: input.clone(), generation };
-        } catch { return null; }
+        } catch { setDiagnosticState('request-clone-failed'); return null; }
     }
     function completeRequestTemplateCapture(pending) {
         if (!pending) return;
         try {
-            Promise.resolve(pending.request.text()).then((body) => captureDiagnosticTemplate({ url: pending.request.url, method: pending.request.method, body }, pending.generation)).catch(() => {});
-        } catch { /* diagnostic isolation */ }
+            Promise.resolve(pending.request.text()).then((body) => captureDiagnosticTemplate({ url: pending.request.url, method: pending.request.method, body }, pending.generation)).catch(() => { if (pending.generation === generation) setDiagnosticState('body-read-failed'); });
+        } catch { if (pending.generation === generation) setDiagnosticState('body-read-failed'); }
     }
     function summarizeDiagnosticJson(value) {
         const shape = core.collectResponseShape(value);
@@ -116,7 +136,7 @@
         post(window.parent, { command: 'report', generation, sequence, kind, payload });
     }
     function recordRequest(details) {
-        captureDiagnosticTemplate(details);
+        if (details.body !== undefined) captureDiagnosticTemplate(details);
         const path = core.replayEndpoint(details.url);
         const method = typeof details.method === 'string' ? details.method.toUpperCase().slice(0, 12) : 'UNKNOWN';
         const names = Array.isArray(details.headerNames) ? details.headerNames : [];
@@ -208,14 +228,14 @@
         video = null; stablePlaybackTime = null; seekStart = null; activeRateOperation = null;
     }
     function enable(nextGeneration = generation || 1) {
-        if (nextGeneration !== generation) { diagnosticTemplate = null; lastExecutedInvocation = 0; }
+        if (nextGeneration !== generation) { diagnosticTemplate = null; lastExecutedInvocation = 0; diagnosticState = 'no-replay-request'; diagnosticStateSequence = 0; }
         enabled = true; generation = nextGeneration; sequence = 0; collector.enable(); installHooks(); broadcast('enable');
     }
     function disable() {
-        broadcast('disable'); enabled = false; removeHooks(); collector.disable(); diagnosticTemplate = null; diagnosticFrames.clear();
-        for (const [invocation, pending] of pendingDiagnostics) { clearTimeout(pending.timeout); pending.resolve(safeDiagnosticResult('PASSIVE_PROBE_DISABLED')); pendingDiagnostics.delete(invocation); }
+        broadcast('disable'); enabled = false; removeHooks(); collector.disable(); diagnosticTemplate = null; diagnosticFrames.clear(); diagnosticFrameStates.clear(); diagnosticState = 'disabled';
+        for (const [invocation, pending] of pendingDiagnostics) { if (pending.timeout) clearTimeout(pending.timeout); if (pending.resolve) pending.resolve(safeDiagnosticResult('PASSIVE_PROBE_DISABLED')); pendingDiagnostics.delete(invocation); }
     }
-    function reset() { collector.reset(); frameSequences.clear(); diagnosticFrames.clear(); diagnosticTemplate = null; lastDiagnosticResult = null; }
+    function reset() { collector.reset(); frameSequences.clear(); diagnosticFrames.clear(); diagnosticFrameStates.clear(); diagnosticTemplate = null; lastDiagnosticResult = null; diagnosticState = 'no-replay-request'; diagnosticStateSequence = 0; }
     function summary() {
         for (const source of [...frameSequences.keys()]) if (!isDirectChild(source)) frameSequences.delete(source);
         const currentFrameCount = Math.min(frameSequences.size, MAX_FRAMES);
@@ -229,17 +249,39 @@
             if (data.channel === DIAGNOSTIC_CHANNEL) {
                 if (!isTop && event.source === window.parent && data.command === 'run' && data.generation === generation && Number.isSafeInteger(data.invocation) && data.invocation > lastExecutedInvocation) {
                     lastExecutedInvocation = data.invocation;
-                    executeCredentiallessDiagnostic().then((result) => post(window.parent, { channel: DIAGNOSTIC_CHANNEL, command: 'result', generation, invocation: data.invocation, result })).catch(() => {});
+                    for (const source of [...diagnosticFrames]) if (!isDirectChild(source)) diagnosticFrames.delete(source);
+                    const source = diagnosticTemplate ? null : diagnosticFrames.values().next().value;
+                    if (source) {
+                        pendingDiagnostics.set(data.invocation, { source, relay: true });
+                        post(source, { channel: DIAGNOSTIC_CHANNEL, command: 'run', generation, invocation: data.invocation });
+                    } else {
+                        executeCredentiallessDiagnostic().then((result) => post(window.parent, { channel: DIAGNOSTIC_CHANNEL, command: 'result', generation, invocation: data.invocation, result })).catch(() => {});
+                    }
                     return;
                 }
-                if (isTop && enabled && isDirectChild(event.source) && data.generation === generation) {
-                    if (data.command === 'ready') { if (diagnosticFrames.size < MAX_FRAMES) diagnosticFrames.add(event.source); return; }
+                if (enabled && isDirectChild(event.source) && data.generation === generation) {
+                    if (data.command === 'state' && Number.isSafeInteger(data.sequence) && DIAGNOSTIC_STATES.has(data.state)) {
+                        const previous = diagnosticFrameStates.get(event.source);
+                        if (!previous || data.sequence > previous.sequence) {
+                            diagnosticFrameStates.set(event.source, { sequence: data.sequence, state: data.state });
+                            if (!isTop) setDiagnosticState(data.state);
+                        }
+                        return;
+                    }
+                    if (data.command === 'ready') {
+                        if (diagnosticFrames.size < MAX_FRAMES) diagnosticFrames.add(event.source);
+                        if (!isTop) post(window.parent, { channel: DIAGNOSTIC_CHANNEL, command: 'ready', generation });
+                        return;
+                    }
                     if (data.command === 'result' && Number.isSafeInteger(data.invocation)) {
                         const pending = pendingDiagnostics.get(data.invocation);
                         if (!pending || pending.source !== event.source) return;
-                        clearTimeout(pending.timeout); pendingDiagnostics.delete(data.invocation); diagnosticFrames.delete(event.source);
-                        lastDiagnosticResult = normalizeFrameResult(data.result);
-                        pending.resolve(lastDiagnosticResult); return;
+                        if (pending.timeout) clearTimeout(pending.timeout);
+                        pendingDiagnostics.delete(data.invocation); diagnosticFrames.delete(event.source);
+                        const result = normalizeFrameResult(data.result);
+                        if (!isTop && pending.relay) post(window.parent, { channel: DIAGNOSTIC_CHANNEL, command: 'result', generation, invocation: data.invocation, result });
+                        else { lastDiagnosticResult = result; pending.resolve(result); }
+                        return;
                     }
                 }
                 return;
@@ -290,7 +332,12 @@
             },
             status() {
                 for (const source of [...diagnosticFrames]) if (!isDirectChild(source)) diagnosticFrames.delete(source);
-                return Object.freeze({ enabled, ready: enabled && !diagnosticInFlight && pendingDiagnostics.size === 0 && Boolean(diagnosticTemplate || diagnosticFrames.size), inFlight: diagnosticInFlight || pendingDiagnostics.size > 0, lastResult: lastDiagnosticResult });
+                for (const source of [...diagnosticFrameStates.keys()]) if (!isDirectChild(source)) diagnosticFrameStates.delete(source);
+                const inFlight = diagnosticInFlight || pendingDiagnostics.size > 0;
+                const ready = enabled && !inFlight && Boolean(diagnosticTemplate || diagnosticFrames.size);
+                const childState = [...diagnosticFrameStates.values()].sort((a, b) => b.sequence - a.sequence)[0]?.state;
+                const readyReason = !enabled ? 'disabled' : inFlight ? 'in-flight' : ready ? 'template-ready' : childState || diagnosticState;
+                return Object.freeze({ enabled, ready, inFlight, lastResult: lastDiagnosticResult, readyReason });
             }
         });
         window.LiveFlowReplayProbe = passiveApi;

@@ -259,18 +259,20 @@ test('credentialless diagnostic is explicit, frame-local, single-shot, and shape
     assert.equal(typeof topWindow.LiveFlowReplayCredentiallessDiagnostic.status, 'function');
     assert.equal(typeof topWindow.LiveFlowReplayCredentiallessDiagnostic.run, 'function');
     assert.equal(childWindow.LiveFlowReplayCredentiallessDiagnostic, undefined);
-    assert.deepEqual({ ...topWindow.LiveFlowReplayCredentiallessDiagnostic.status() }, { enabled: false, ready: false, inFlight: false, lastResult: null });
+    assert.deepEqual({ ...topWindow.LiveFlowReplayCredentiallessDiagnostic.status() }, { enabled: false, ready: false, inFlight: false, lastResult: null, readyReason: 'disabled' });
     topWindow.LiveFlowReplayCredentiallessDiagnostic.status();
     assert.equal(activeCalls.length, 0);
     assert.equal((await topWindow.LiveFlowReplayCredentiallessDiagnostic.run()).requestCount, 0);
     topWindow.LiveFlowReplayProbe.enable();
     assert.equal(activeCalls.length, 0);
+    assert.equal(topWindow.LiveFlowReplayCredentiallessDiagnostic.status().readyReason, 'no-replay-request');
     const requestBody = '{"context":{"client":{"visitorData":"visitor-secret"}},"continuation":"continuation-secret","trackingParams":"tracking-secret"}';
     const request = { url: 'https://www.youtube.com/youtubei/v1/live_chat/get_live_chat_replay?key=api-secret', method: 'POST', headers: null, clone() { return { url: this.url, method: this.method, text: async () => requestBody }; } };
     await childWindow.fetch(request);
     await Promise.resolve(); await Promise.resolve();
     assert.equal(activeCalls.length, 1);
     assert.equal(topWindow.LiveFlowReplayCredentiallessDiagnostic.status().ready, true);
+    assert.equal(topWindow.LiveFlowReplayCredentiallessDiagnostic.status().readyReason, 'template-ready');
     const result = await topWindow.LiveFlowReplayCredentiallessDiagnostic.run();
     assert.equal(activeCalls.length, 2);
     const options = activeCalls[1][1];
@@ -284,6 +286,37 @@ test('credentialless diagnostic is explicit, frame-local, single-shot, and shape
     assert.equal((await topWindow.LiveFlowReplayCredentiallessDiagnostic.run()).requestCount, 0);
     assert.equal(activeCalls.length, 2);
     topWindow.LiveFlowReplayProbe.disable();
+});
+
+test('nested Replay frame relays diagnostic readiness and the single run command without raw template data', async () => {
+    function makeXHR() { function XHR() {} XHR.prototype.open = function () {}; XHR.prototype.send = function () {}; XHR.prototype.setRequestHeader = function () {}; XHR.prototype.addEventListener = function () {}; return XHR; }
+    const document = { querySelector() { return null; }, addEventListener() {}, removeEventListener() {} };
+    let topMessage; let middleMessage; let leafMessage; let leafCalls = 0;
+    const passiveResponse = { clone() { return { json: async () => ({ continuationContents: { liveChatContinuation: {} } }) }; } };
+    const activeResponse = { ok: true, json: async () => ({ continuationContents: { liveChatContinuation: { actions: [{ replayChatItemAction: { videoOffsetTimeMsec: 'private-offset' } }], continuations: [{ liveChatReplayContinuationData: { continuation: 'private-next' } }] } } }) };
+    const core = require('../src/replay-schema-probe-core.js');
+    const topWindow = { LiveFlowReplayProbeCore: core, fetch: () => Promise.resolve(passiveResponse), frames: [], addEventListener(name, fn) { if (name === 'message') topMessage = fn; } };
+    const middleWindow = { LiveFlowReplayProbeCore: core, fetch: () => Promise.resolve(passiveResponse), frames: [], addEventListener(name, fn) { if (name === 'message') middleMessage = fn; } };
+    const leafWindow = { LiveFlowReplayProbeCore: core, fetch: (...args) => { leafCalls += 1; return Promise.resolve(leafCalls === 1 ? passiveResponse : activeResponse); }, frames: [], addEventListener(name, fn) { if (name === 'message') leafMessage = fn; } };
+    topWindow.top = topWindow; topWindow.parent = topWindow; middleWindow.top = topWindow; middleWindow.parent = topWindow; leafWindow.top = topWindow; leafWindow.parent = middleWindow;
+    topWindow.frames.push(middleWindow); middleWindow.frames.push(leafWindow);
+    topWindow.postMessage = (data) => topMessage?.({ data, source: middleWindow });
+    middleWindow.postMessage = (data) => middleMessage?.({ data, source: ['enable', 'disable', 'run'].includes(data.command) ? topWindow : leafWindow });
+    leafWindow.postMessage = (data) => leafMessage?.({ data, source: middleWindow });
+    const common = { Headers: class { keys() { return []; } }, console: { log() {} }, Promise, URL, AbortController, setTimeout, clearTimeout, document };
+    vm.runInNewContext(runtimeSource, { ...common, window: topWindow, XMLHttpRequest: makeXHR() });
+    vm.runInNewContext(runtimeSource, { ...common, window: middleWindow, XMLHttpRequest: makeXHR() });
+    vm.runInNewContext(runtimeSource, { ...common, window: leafWindow, XMLHttpRequest: makeXHR() });
+    topWindow.LiveFlowReplayProbe.enable();
+    const body = '{"context":{"client":{"visitorData":"private-visitor"}},"continuation":"private-continuation"}';
+    const request = { url: 'https://www.youtube.com/youtubei/v1/live_chat/get_live_chat_replay?key=private-key', method: 'POST', clone() { return { url: this.url, method: this.method, text: async () => body }; } };
+    await leafWindow.fetch(request); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    const status = topWindow.LiveFlowReplayCredentiallessDiagnostic.status();
+    assert.equal(status.ready, true); assert.equal(status.readyReason, 'template-ready'); assert.equal(leafCalls, 1);
+    const result = await topWindow.LiveFlowReplayCredentiallessDiagnostic.run();
+    assert.equal(result.requestCount, 1); assert.equal(result.credentials, 'omit'); assert.equal(leafCalls, 2);
+    const exposed = JSON.stringify({ status, result });
+    for (const secret of ['private-visitor', 'private-continuation', 'private-key', 'private-offset', 'private-next']) assert.equal(exposed.includes(secret), false);
 });
 
 test('top initialization replaces a stale Passive-only API and exposes both current APIs without a request', () => {
