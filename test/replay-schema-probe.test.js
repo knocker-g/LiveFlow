@@ -256,7 +256,12 @@ test('credentialless diagnostic is explicit, frame-local, single-shot, and shape
     vm.runInNewContext(runtimeSource, { ...common, window: topWindow, XMLHttpRequest: makeXHR(), document });
     vm.runInNewContext(runtimeSource, { ...common, window: childWindow, XMLHttpRequest: makeXHR(), document });
     assert.equal(activeCalls.length, 0);
+    assert.equal(typeof topWindow.LiveFlowReplayCredentiallessDiagnostic.status, 'function');
+    assert.equal(typeof topWindow.LiveFlowReplayCredentiallessDiagnostic.run, 'function');
+    assert.equal(childWindow.LiveFlowReplayCredentiallessDiagnostic, undefined);
     assert.deepEqual({ ...topWindow.LiveFlowReplayCredentiallessDiagnostic.status() }, { enabled: false, ready: false, inFlight: false, lastResult: null });
+    topWindow.LiveFlowReplayCredentiallessDiagnostic.status();
+    assert.equal(activeCalls.length, 0);
     assert.equal((await topWindow.LiveFlowReplayCredentiallessDiagnostic.run()).requestCount, 0);
     topWindow.LiveFlowReplayProbe.enable();
     assert.equal(activeCalls.length, 0);
@@ -275,6 +280,28 @@ test('credentialless diagnostic is explicit, frame-local, single-shot, and shape
     assert.equal((await topWindow.LiveFlowReplayCredentiallessDiagnostic.run()).requestCount, 0);
     assert.equal(activeCalls.length, 2);
     topWindow.LiveFlowReplayProbe.disable();
+});
+
+test('top initialization replaces a stale Passive-only API and exposes both current APIs without a request', () => {
+    let disabled = 0;
+    let fetchCalls = 0;
+    function FakeXHR() {}
+    FakeXHR.prototype.open = function () {}; FakeXHR.prototype.send = function () {}; FakeXHR.prototype.setRequestHeader = function () {}; FakeXHR.prototype.addEventListener = function () {};
+    const staleApi = { disable() { disabled += 1; } };
+    const testWindow = { LiveFlowReplayProbeCore: require('../src/replay-schema-probe-core.js'), LiveFlowReplayProbe: staleApi, fetch() { fetchCalls += 1; return Promise.resolve({}); }, frames: [], addEventListener() {}, postMessage() {} };
+    testWindow.top = testWindow; testWindow.parent = testWindow;
+    const context = { window: testWindow, XMLHttpRequest: FakeXHR, Headers: class { keys() { return []; } }, document: { querySelector() { return null; }, addEventListener() {}, removeEventListener() {} }, console: { log() {} }, Promise, URL, AbortController, setTimeout, clearTimeout };
+    vm.runInNewContext(runtimeSource, context);
+    assert.equal(disabled, 1);
+    assert.notEqual(testWindow.LiveFlowReplayProbe, staleApi);
+    assert.equal(typeof testWindow.LiveFlowReplayProbe.enable, 'function');
+    assert.equal(typeof testWindow.LiveFlowReplayCredentiallessDiagnostic.status, 'function');
+    assert.equal(typeof testWindow.LiveFlowReplayCredentiallessDiagnostic.run, 'function');
+    assert.equal(context.LiveFlowReplayCredentiallessDiagnostic, testWindow.LiveFlowReplayCredentiallessDiagnostic);
+    assert.equal(fetchCalls, 0);
+    testWindow.LiveFlowReplayCredentiallessDiagnostic.status();
+    testWindow.LiveFlowReplayCredentiallessDiagnostic.status();
+    assert.equal(fetchCalls, 0);
 });
 
 test('credentialless diagnostic stops on non-2xx and invalid JSON without follow-up', async () => {

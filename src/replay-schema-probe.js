@@ -1,6 +1,12 @@
 (function () {
     const core = window.LiveFlowReplayProbeCore;
-    if (!core || window.LiveFlowReplayProbe) return;
+    if (!core) return;
+    const RUNTIME_MARKER = '__LIVEFLOW_REPLAY_PROBE_RUNTIME_V2__';
+    const isTop = window === window.top;
+    if (window[RUNTIME_MARKER]) return;
+    if (isTop && typeof window.LiveFlowReplayProbe?.disable === 'function') {
+        try { window.LiveFlowReplayProbe.disable(); } catch { /* stale diagnostic isolation */ }
+    }
     const collector = core.createReplayProbeCollector();
     const originalFetch = window.fetch;
     const originalOpen = XMLHttpRequest.prototype.open;
@@ -13,7 +19,6 @@
     const MAX_TEMPLATE_BODY_CHARS = 65536;
     const DIAGNOSTIC_TIMEOUT_MS = 10000;
     const BRIDGE_TIMEOUT_MS = 12000;
-    const isTop = window === window.top;
     const frameSequences = new Map();
     const diagnosticFrames = new Set();
     const pendingDiagnostics = new Map();
@@ -247,8 +252,8 @@
     window.addEventListener('message', onMessage);
     if (!isTop) post(window.parent, { command: 'ready' });
     if (isTop) {
-        window.LiveFlowReplayProbe = Object.freeze({ enable() { generation += 1; reset(); enable(generation); return summary(); }, disable() { disable(); return summary(); }, reset() { reset(); if (enabled) collector.enable(); return summary(); }, summary });
-        window.LiveFlowReplayCredentiallessDiagnostic = Object.freeze({
+        const passiveApi = Object.freeze({ enable() { generation += 1; reset(); enable(generation); return summary(); }, disable() { disable(); return summary(); }, reset() { reset(); if (enabled) collector.enable(); return summary(); }, summary });
+        const diagnosticApi = Object.freeze({
             async run() {
                 if (!enabled) return safeDiagnosticResult('PASSIVE_PROBE_DISABLED');
                 if (diagnosticInFlight || pendingDiagnostics.size > 0) return safeDiagnosticResult('IN_PROGRESS');
@@ -266,5 +271,12 @@
             },
             status() { return Object.freeze({ enabled, ready: Boolean(diagnosticTemplate || diagnosticFrames.size), inFlight: diagnosticInFlight || pendingDiagnostics.size > 0, lastResult: lastDiagnosticResult }); }
         });
+        window.LiveFlowReplayProbe = passiveApi;
+        window.LiveFlowReplayCredentiallessDiagnostic = diagnosticApi;
+        if (globalThis !== window) {
+            globalThis.LiveFlowReplayProbe = passiveApi;
+            globalThis.LiveFlowReplayCredentiallessDiagnostic = diagnosticApi;
+        }
     }
+    try { Object.defineProperty(window, RUNTIME_MARKER, { value: true, configurable: false, enumerable: false }); } catch { /* public APIs are already initialized */ }
 })();
