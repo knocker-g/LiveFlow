@@ -36,6 +36,35 @@
         } catch { return []; }
     }
 
+    const BOOTSTRAP_CONTINUATION_TYPES = Object.freeze([
+        'reloadContinuationData',
+        'liveChatReplayContinuationData',
+        'invalidationContinuationData',
+        'timedContinuationData'
+    ]);
+
+    function inspectArchiveBootstrapShape(watchSnapshot) {
+        const renderer = watchSnapshot?.contents?.twoColumnWatchNextResults?.conversationBar?.liveChatRenderer;
+        const continuations = renderer?.continuations;
+        const first = Array.isArray(continuations) ? continuations[0] : null;
+        const matched = BOOTSTRAP_CONTINUATION_TYPES.filter((key) => first && typeof first === 'object' && Object.hasOwn(first, key));
+        const continuationType = matched.length === 1 ? matched[0] : matched.length > 1 ? 'multiple' : first && typeof first === 'object' ? 'unknown' : 'none';
+        const data = BOOTSTRAP_CONTINUATION_TYPES.includes(continuationType) ? first[continuationType] : null;
+        const continuationValueType = primitiveType(data?.continuation);
+        const currentTargetPresent = typeof watchSnapshot?.currentVideoEndpoint?.watchEndpoint?.videoId === 'string' && watchSnapshot.currentVideoEndpoint.watchEndpoint.videoId.length > 0;
+        const continuationPresent = continuationValueType === 'string' && data.continuation.length > 0;
+        return Object.freeze({
+            watchSnapshotPresent: Boolean(watchSnapshot && typeof watchSnapshot === 'object'),
+            liveChatRendererPresent: Boolean(renderer && typeof renderer === 'object'),
+            continuationContainerPresent: Array.isArray(continuations),
+            continuationType,
+            continuationValueType,
+            continuationPresent,
+            currentTargetPresent,
+            sameSnapshotTargetAndContinuation: currentTargetPresent && continuationPresent
+        });
+    }
+
     function collectResponseShape(value, options = {}) {
         const limits = { ...DEFAULT_LIMITS, ...options };
         const seen = new WeakSet();
@@ -84,6 +113,7 @@
         const timingRank = (entry) => /videoOffset/i.test(entry.path) ? 0 : /replay/i.test(entry.path) ? 1 : /chatitem|action/i.test(entry.path) ? 2 : 3;
         Object.keys(sets).forEach((key) => { result[key] = [...sets[key].values()].sort((a, b) => typeof a === 'string' ? a.localeCompare(b) : timingRank(a) - timingRank(b) || a.path.localeCompare(b.path)); });
         result.truncated = Object.fromEntries(Object.keys(sets).map((key) => [key, observed[key] > sets[key].size]));
+        result.replayContinuationAndOffsetSameObservation = result.continuationDataNames.includes('liveChatReplayContinuationData') && result.replayTimingCandidates.some((entry) => /replayChatItemAction\.videoOffsetTimeMsec$/.test(entry.path));
         return result;
     }
 
@@ -103,6 +133,8 @@
         let replayUIObserved = false;
         let categoryTruncated = false;
         let ignoredVisualTimingCount = 0;
+        let archiveBootstrapEvidence = inspectArchiveBootstrapShape(null);
+        let replayResponsesObservedTogether = 0;
         const totalRequests = () => [...endpointCounts.values()].reduce((sum, count) => sum + count, 0);
         const mergeRecords = (map, values, max) => values.forEach((entry) => { if (map.size < max) map.set(`${entry.path || entry.key}:${entry.type}`, entry); else categoryTruncated = true; });
         function observeRequest({ url, method = 'GET', body, headerNames = [] } = {}) {
@@ -127,6 +159,7 @@
             ignoredVisualTimingCount += shape.visualUiTimingPaths.length;
             Object.entries(nameSets).forEach(([key, set]) => shape[key].forEach((name) => { if (set.size < effective.maxNames) set.add(name); else categoryTruncated = true; }));
             if (Object.values(shape.truncated).some(Boolean)) categoryTruncated = true;
+            if (shape.replayContinuationAndOffsetSameObservation === true) replayResponsesObservedTogether = Math.min(1000, replayResponsesObservedTogether + 1);
             return true;
         }
         function observeResponse(value) { return mergeResponseShape(collectResponseShape(value, effective)); }
@@ -162,6 +195,7 @@
                 actionNames: Array.isArray(shape.actionNames) ? shape.actionNames.map(safeKey).filter(Boolean).slice(0, effective.maxNames) : [],
                 viewModelNames: Array.isArray(shape.viewModelNames) ? shape.viewModelNames.map(safeKey).filter(Boolean).slice(0, effective.maxNames) : [],
                 continuationDataNames: Array.isArray(shape.continuationDataNames) ? shape.continuationDataNames.map(safeKey).filter(Boolean).slice(0, effective.maxNames) : [],
+                replayContinuationAndOffsetSameObservation: shape.replayContinuationAndOffsetSameObservation === true,
                 truncated: {}
             });
         }
@@ -185,6 +219,8 @@
                 ...Object.fromEntries(Object.entries(pathMaps).map(([key, map]) => [key, [...map.values()].sort((a, b) => a.path.localeCompare(b.path))])),
                 ...Object.fromEntries(Object.entries(nameSets).map(([key, set]) => [key, [...set].sort()])),
                 authPresence: { cookieSeen: explicitCookie ? true : 'unknown', authorizationSeen: explicitAuthHeader ? true : 'unknown' },
+                archiveBootstrapEvidence,
+                responseGenerationConsistency: { replayContinuationAndOffsetObservedTogether: replayResponsesObservedTogether > 0, observationCount: replayResponsesObservedTogether },
                 operationDeltas: Object.fromEntries(Object.entries(operations).map(([key, value]) => [key, value + (operationStarts.has(key) ? Math.max(0, totalRequests() - operationStarts.get(key)) : 0)])), eventHistory: [...history], replayUIObserved, replayEndpointObserved: endpointCounts.size > 0, ignoredTimingCounts: { visualUi: ignoredVisualTimingCount },
                 truncated: { categories: categoryTruncated, history: history.length >= effective.maxHistory, summary: false }
             };
@@ -195,18 +231,25 @@
                 collection.pop();
                 result.truncated.summary = true;
             }
+            for (const key of ['eventHistory', 'archiveBootstrapEvidence', 'responseGenerationConsistency']) {
+                if (JSON.stringify(result).length <= effective.maxSummaryChars) break;
+                delete result[key];
+                result.truncated.summary = true;
+            }
             return result;
         }
         return Object.freeze({
             enable() { enabled = true; return summary(); }, disable() { enabled = false; operationStarts.clear(); return summary(); },
-            reset() { endpointCounts.clear(); requestKeys.clear(); responseKeys.clear(); Object.values(pathMaps).forEach((map) => map.clear()); Object.values(nameSets).forEach((set) => set.clear()); history.length = 0; Object.keys(operations).forEach((key) => { operations[key] = 0; }); operationStarts.clear(); explicitCookie = false; explicitAuthHeader = false; replayUIObserved = false; categoryTruncated = false; ignoredVisualTimingCount = 0; return summary(); },
+            reset() { endpointCounts.clear(); requestKeys.clear(); responseKeys.clear(); Object.values(pathMaps).forEach((map) => map.clear()); Object.values(nameSets).forEach((set) => set.clear()); history.length = 0; Object.keys(operations).forEach((key) => { operations[key] = 0; }); operationStarts.clear(); explicitCookie = false; explicitAuthHeader = false; replayUIObserved = false; categoryTruncated = false; ignoredVisualTimingCount = 0; archiveBootstrapEvidence = inspectArchiveBootstrapShape(null); replayResponsesObservedTogether = 0; return summary(); },
             observeRequest, observeResponse, observeSanitizedRequest, observeSanitizedResponse, recordVideoEvent, startOperation, finishOperation,
             cancelOperation(name) { operationStarts.delete(name); },
-            setReplayUIObserved(value) { if (enabled && value === true) replayUIObserved = true; }, summary
+            setReplayUIObserved(value) { if (enabled && value === true) replayUIObserved = true; },
+            setArchiveBootstrapEvidence(value) { if (enabled) archiveBootstrapEvidence = inspectArchiveBootstrapShape(value); return archiveBootstrapEvidence; },
+            summary
         });
     }
 
-    const api = { ENDPOINTS, DEFAULT_LIMITS, primitiveType, safeKey, replayEndpoint, topLevelShape, requestBodyShape, collectResponseShape, createReplayProbeCollector };
+    const api = { ENDPOINTS, DEFAULT_LIMITS, primitiveType, safeKey, replayEndpoint, topLevelShape, requestBodyShape, inspectArchiveBootstrapShape, collectResponseShape, createReplayProbeCollector };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     global.LiveFlowReplayProbeCore = api;
 })(typeof window !== 'undefined' ? window : globalThis);

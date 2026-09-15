@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const {
     replayEndpoint,
     requestBodyShape,
+    inspectArchiveBootstrapShape,
     collectResponseShape,
     createReplayProbeCollector
 } = require('../src/replay-schema-probe-core.js');
@@ -33,6 +34,40 @@ test('request body summary retains only static keys and primitive types', () => 
     for (const secret of ['visitor-secret', 'continuation-secret', 'video-secret', 'dynamic-secret', '42']) assert.equal(output.includes(secret), false);
 });
 
+test('Archive bootstrap evidence reports only fixed same-snapshot shape and type data', () => {
+    const snapshot = {
+        currentVideoEndpoint: { watchEndpoint: { videoId: 'private-video' } },
+        contents: { twoColumnWatchNextResults: { conversationBar: { liveChatRenderer: { continuations: [
+            { reloadContinuationData: { continuation: 'private-continuation' } }
+        ] } } } }
+    };
+    assert.deepEqual(inspectArchiveBootstrapShape(snapshot), {
+        watchSnapshotPresent: true,
+        liveChatRendererPresent: true,
+        continuationContainerPresent: true,
+        continuationType: 'reloadContinuationData',
+        continuationValueType: 'string',
+        continuationPresent: true,
+        currentTargetPresent: true,
+        sameSnapshotTargetAndContinuation: true
+    });
+    const serialized = JSON.stringify(inspectArchiveBootstrapShape(snapshot));
+    assert.equal(serialized.includes('private-video'), false);
+    assert.equal(serialized.includes('private-continuation'), false);
+});
+
+test('Archive bootstrap continuation classification is allowlisted and fail-closed', () => {
+    const base = (entry) => ({ contents: { twoColumnWatchNextResults: { conversationBar: { liveChatRenderer: { continuations: [entry] } } } } });
+    assert.equal(inspectArchiveBootstrapShape(base({ reloadContinuationData: { continuation: 'secret' } })).continuationType, 'reloadContinuationData');
+    assert.equal(inspectArchiveBootstrapShape(base({ privateDynamicData: { continuation: 'secret' } })).continuationType, 'unknown');
+    assert.equal(inspectArchiveBootstrapShape(null).continuationType, 'none');
+});
+
+test('proven structured Replay bootstrap uses the existing minimal Live request shape', () => {
+    const request = require('../src/chat-read-core.js').buildLiveChatReadRequest({ client: { clientName: 'WEB' } }, 'private-continuation');
+    assert.deepEqual(Object.keys(request).sort(), ['context', 'continuation']);
+});
+
 test('response walker emits normalized paths, names, types, and never values', () => {
     const response = {
         continuationContents: { liveChatContinuation: {
@@ -47,8 +82,17 @@ test('response walker emits normalized paths, names, types, and never values', (
     assert.ok(result.rendererNames.includes('liveChatPaidMessageRenderer'));
     assert.ok(result.actionNames.includes('replayChatItemAction'));
     assert.ok(result.continuationDataNames.includes('liveChatReplayContinuationData'));
+    assert.equal(result.replayContinuationAndOffsetSameObservation, true);
     const output = JSON.stringify(result);
     for (const secret of ['12345', 'channel-secret', 'tracking-secret', 'continuation-secret', 'visitor-secret', 'api-key-secret', '999', '500']) assert.equal(output.includes(secret), false);
+});
+
+test('response consistency requires Replay continuation and offset in one observation', () => {
+    const collector = createReplayProbeCollector(); collector.enable();
+    collector.observeResponse({ continuationContents: { liveChatContinuation: { actions: [{ replayChatItemAction: { videoOffsetTimeMsec: 'private' } }] } } });
+    assert.equal(collector.summary().responseGenerationConsistency.replayContinuationAndOffsetObservedTogether, false);
+    collector.observeResponse({ continuationContents: { liveChatContinuation: { actions: [{ replayChatItemAction: { videoOffsetTimeMsec: 'private' } }], continuations: [{ liveChatReplayContinuationData: { continuation: 'private' } }] } } });
+    assert.deepEqual(collector.summary().responseGenerationConsistency, { replayContinuationAndOffsetObservedTogether: true, observationCount: 1 });
 });
 
 test('timing classification ranks video offsets and omits UI paths from session summary', () => {
@@ -133,6 +177,7 @@ test('runtime is explicit opt-in, passive, bounded, and has no external output',
     assert.equal((runtimeSource.match(/originalFetch\.call\(/g) || []).length, 0);
     assert.doesNotMatch(runtimeSource, /\.clone\(\)\.text\(|diagnosticTemplate|executeCredentiallessDiagnostic/);
     assert.doesNotMatch(runtimeSource, /retry|backoff|setInterval|requestAnimationFrame/);
+    assert.doesNotMatch(runtimeSource, /runStructuredDiagnostic|safeStructuredResult|LiveFlowReplayStructuredDiagnostic\s*=/);
 });
 
 test('runtime enable is idempotent, fetch stays nonblocking, and disable restores hooks', async () => {
@@ -171,6 +216,26 @@ test('runtime enable is idempotent, fetch stays nonblocking, and disable restore
     assert.equal(context.window.fetch, originalFetch);
     assert.equal(FakeXHR.prototype.open.name, '');
     assert.equal(listeners.size, 0);
+});
+
+test('a delayed response from an invalidated Passive generation is discarded', async () => {
+    let resolveFetch;
+    const responseValue = { continuationContents: { liveChatContinuation: { actions: [{ replayChatItemAction: { videoOffsetTimeMsec: 'private' } }], continuations: [{ liveChatReplayContinuationData: { continuation: 'private' } }] } } };
+    const response = { clone() { return { json: async () => responseValue }; } };
+    const originalFetch = () => new Promise((resolve) => { resolveFetch = resolve; });
+    function FakeXHR() {}
+    FakeXHR.prototype.open = function () {}; FakeXHR.prototype.send = function () {}; FakeXHR.prototype.setRequestHeader = function () {}; FakeXHR.prototype.addEventListener = function () {};
+    const documentListeners = new Map();
+    const testWindow = { LiveFlowReplayProbeCore: require('../src/replay-schema-probe-core.js'), fetch: originalFetch, frames: [], location: { pathname: '/watch' }, addEventListener() {}, postMessage() {} };
+    testWindow.top = testWindow; testWindow.parent = testWindow;
+    const document = { querySelector() { return null; }, addEventListener(name, fn) { if (!documentListeners.has(name)) documentListeners.set(name, []); documentListeners.get(name).push(fn); }, removeEventListener() {} };
+    vm.runInNewContext(runtimeSource, { window: testWindow, XMLHttpRequest: FakeXHR, Headers: class { keys() { return []; } }, document, console: { log() {} }, Promise, URL, AbortController, setTimeout, clearTimeout });
+    testWindow.LiveFlowReplayProbe.enable();
+    const pending = testWindow.fetch('/youtubei/v1/live_chat/get_live_chat_replay', { method: 'POST' });
+    documentListeners.get('yt-navigate-start').forEach((listener) => listener());
+    resolveFetch(response);
+    await pending; await Promise.resolve(); await Promise.resolve();
+    assert.equal(testWindow.LiveFlowReplayProbe.summary().responseGenerationConsistency.replayContinuationAndOffsetObservedTogether, false);
 });
 
 test('top probe aggregates a child-frame Replay request as shape-only data', async () => {
@@ -221,7 +286,7 @@ test('top probe aggregates a child-frame Replay request as shape-only data', asy
     assert.equal(childWindow.fetch, childFetch);
 });
 
-test('active Replay diagnostic is absent and passive observation never clones a request body', async () => {
+test('native-template Replay diagnostic is absent and Passive observation never clones a request body', async () => {
     function makeXHR() {
         function FrameXHR() {}
         FrameXHR.prototype.open = function () {}; FrameXHR.prototype.send = function () {}; FrameXHR.prototype.setRequestHeader = function () {}; FrameXHR.prototype.addEventListener = function () {};
@@ -263,7 +328,7 @@ test('top initialization replaces a stale Passive API and removes a legacy activ
     function FakeXHR() {}
     FakeXHR.prototype.open = function () {}; FakeXHR.prototype.send = function () {}; FakeXHR.prototype.setRequestHeader = function () {}; FakeXHR.prototype.addEventListener = function () {};
     const staleApi = { disable() { disabled += 1; } };
-    const testWindow = { LiveFlowReplayProbeCore: require('../src/replay-schema-probe-core.js'), LiveFlowReplayProbe: staleApi, LiveFlowReplayCredentiallessDiagnostic: { run() { throw new Error('must not run'); } }, fetch() { fetchCalls += 1; return Promise.resolve({}); }, frames: [], addEventListener() {}, postMessage() {} };
+    const testWindow = { LiveFlowReplayProbeCore: require('../src/replay-schema-probe-core.js'), LiveFlowReplayProbe: staleApi, LiveFlowReplayCredentiallessDiagnostic: { run() { throw new Error('must not run'); } }, LiveFlowReplayStructuredDiagnostic: { run() { throw new Error('must not run'); } }, fetch() { fetchCalls += 1; return Promise.resolve({}); }, frames: [], addEventListener() {}, postMessage() {} };
     testWindow.top = testWindow; testWindow.parent = testWindow;
     const context = { window: testWindow, XMLHttpRequest: FakeXHR, Headers: class { keys() { return []; } }, document: { querySelector() { return null; }, addEventListener() {}, removeEventListener() {} }, console: { log() {} }, Promise, URL, AbortController, setTimeout, clearTimeout };
     vm.runInNewContext(runtimeSource, context);
@@ -271,6 +336,7 @@ test('top initialization replaces a stale Passive API and removes a legacy activ
     assert.notEqual(testWindow.LiveFlowReplayProbe, staleApi);
     assert.equal(typeof testWindow.LiveFlowReplayProbe.enable, 'function');
     assert.equal(testWindow.LiveFlowReplayCredentiallessDiagnostic, undefined);
+    assert.equal(testWindow.LiveFlowReplayStructuredDiagnostic, undefined);
     assert.equal(context.LiveFlowReplayCredentiallessDiagnostic, undefined);
     assert.equal(fetchCalls, 0);
 });

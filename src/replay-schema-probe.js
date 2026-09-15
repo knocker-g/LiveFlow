@@ -9,8 +9,10 @@
     }
     if (isTop) {
         try { delete window.LiveFlowReplayCredentiallessDiagnostic; } catch { /* legacy API stays inaccessible after page reload */ }
+        try { delete window.LiveFlowReplayStructuredDiagnostic; } catch { /* completed diagnostic stays inaccessible after page reload */ }
         if (globalThis !== window) {
             try { delete globalThis.LiveFlowReplayCredentiallessDiagnostic; } catch { /* test-realm isolation */ }
+            try { delete globalThis.LiveFlowReplayStructuredDiagnostic; } catch { /* test-realm isolation */ }
         }
     }
     const collector = core.createReplayProbeCollector();
@@ -60,14 +62,17 @@
         if (observed) sendReport('request', { path, method: ['GET', 'POST'].includes(method) ? method : 'UNKNOWN', requestTopLevelKeys: core.requestBodyShape(details.body), authPresence: authPresence(names) });
         return observed;
     }
-    function recordResponse(value) {
+    function recordResponse(value, expectedGeneration = generation) {
+        if (!enabled || expectedGeneration !== generation) return;
         const shape = core.collectResponseShape(value);
         collector.observeSanitizedResponse(shape);
         sendReport('response', shape);
     }
-    function observeJsonResponse(response) { try { response.clone().json().then(recordResponse).catch(() => {}); } catch { /* diagnostic isolation */ } }
+    function observeJsonResponse(response, expectedGeneration) { try { response.clone().json().then((value) => recordResponse(value, expectedGeneration)).catch(() => {}); } catch { /* diagnostic isolation */ } }
     function bindVideo() {
         if (!isTop) return;
+        const watchRoot = document.querySelector('ytd-watch-flexy');
+        collector.setArchiveBootstrapEvidence(watchRoot?.data);
         const next = document.querySelector('ytd-watch-flexy #movie_player video');
         if (next === video) return;
         if (video) ['play', 'pause', 'seeking', 'seeked', 'ratechange', 'timeupdate'].forEach((name) => video.removeEventListener(name, onVideoEvent));
@@ -105,20 +110,21 @@
         hooked = true;
         fetchHook = function (...args) {
             let observed = false;
+            const observationGeneration = generation;
             try {
                 const input = args[0]; const init = args[1] || {};
                 observed = recordRequest({ url: typeof input === 'string' ? input : input?.url, method: init.method || input?.method || 'GET', body: init.body, headerNames: [...headerNames(input?.headers), ...headerNames(init.headers)] });
             } catch { /* diagnostic isolation */ }
             const result = originalFetch.apply(this, args);
-            if (observed) Promise.resolve(result).then(observeJsonResponse).catch(() => {});
+            if (observed) Promise.resolve(result).then((response) => observeJsonResponse(response, observationGeneration)).catch(() => {});
             return result;
         };
         if (window.fetch === originalFetch) window.fetch = fetchHook;
         openHook = function (method, url, ...rest) { xhrState.set(this, { method, url, headerNames: [] }); return originalOpen.call(this, method, url, ...rest); };
         headerHook = function (name, value) { const state = xhrState.get(this); if (state && typeof name === 'string') state.headerNames.push(name); return originalSetRequestHeader.call(this, name, value); };
         sendHook = function (body) {
-            const state = xhrState.get(this); const observed = state && recordRequest({ ...state, body });
-            if (observed) this.addEventListener('load', () => { try { recordResponse(this.responseType === 'json' ? this.response : JSON.parse(this.responseText)); } catch { /* diagnostic isolation */ } }, { once: true });
+            const state = xhrState.get(this); const observationGeneration = generation; const observed = state && recordRequest({ ...state, body });
+            if (observed) this.addEventListener('load', () => { try { recordResponse(this.responseType === 'json' ? this.response : JSON.parse(this.responseText), observationGeneration); } catch { /* diagnostic isolation */ } }, { once: true });
             return originalSend.call(this, body);
         };
         if (XMLHttpRequest.prototype.open === originalOpen) XMLHttpRequest.prototype.open = openHook;
