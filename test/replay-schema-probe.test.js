@@ -14,6 +14,19 @@ const root = path.resolve(__dirname, '..');
 const runtimeSource = fs.readFileSync(path.join(root, 'src/replay-schema-probe.js'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 
+function createTopDiagnosticRuntime(activeResponse, timer = { setTimeout, clearTimeout }) {
+    let calls = 0;
+    const passiveResponse = { clone() { return { json: async () => ({}) }; } };
+    const fetch = (...args) => { calls += 1; return calls === 1 ? Promise.resolve(passiveResponse) : typeof activeResponse === 'function' ? activeResponse(...args) : Promise.resolve(activeResponse); };
+    function FakeXHR() {}
+    FakeXHR.prototype.open = function () {}; FakeXHR.prototype.send = function () {}; FakeXHR.prototype.setRequestHeader = function () {}; FakeXHR.prototype.addEventListener = function () {};
+    const testWindow = { LiveFlowReplayProbeCore: require('../src/replay-schema-probe-core.js'), fetch, frames: [], addEventListener() {}, postMessage() {} };
+    testWindow.top = testWindow; testWindow.parent = testWindow;
+    vm.runInNewContext(runtimeSource, { window: testWindow, XMLHttpRequest: FakeXHR, Headers: class { keys() { return []; } }, document: { querySelector() { return null; }, addEventListener() {}, removeEventListener() {} }, console: { log() {} }, Promise, URL, AbortController, setTimeout: timer.setTimeout, clearTimeout: timer.clearTimeout });
+    testWindow.LiveFlowReplayProbe.enable();
+    return { window: testWindow, capture: () => testWindow.fetch('/youtubei/v1/live_chat/get_live_chat_replay?key=secret', { method: 'POST', body: '{"context":{},"continuation":"secret"}' }), calls: () => calls };
+}
+
 test('replay endpoint matching strips query values and rejects other paths', () => {
     assert.equal(replayEndpoint('https://www.youtube.com/live_chat_replay?v=SECRET'), '/live_chat_replay');
     assert.equal(replayEndpoint('/youtubei/v1/live_chat/get_live_chat_replay?key=SECRET'), '/youtubei/v1/live_chat/get_live_chat_replay');
@@ -126,9 +139,12 @@ test('operation deltas count endpoint requests and history stays bounded', () =>
 test('runtime is explicit opt-in, passive, bounded, and has no external output', () => {
     assert.match(runtimeSource, /function enable[\s\S]*collector\.enable\(\); installHooks\(\)/);
     assert.doesNotMatch(runtimeSource, /setInterval|requestAnimationFrame|sendBeacon|WebSocket|chrome\.storage|localStorage|sessionStorage|clipboard|innerHTML/);
-    assert.doesNotMatch(runtimeSource, /credentials\s*:|Authorization\s*:|Cookie\s*:/);
+    assert.equal((runtimeSource.match(/body:\s*template\.body,\s*credentials:\s*'omit'/g) || []).length, 1);
+    assert.doesNotMatch(runtimeSource, /credentials:\s*['"](?:include|same-origin)['"]|Authorization\s*:|Cookie\s*:/);
     assert.match(runtimeSource, /originalFetch\.apply\(this, args\)/);
     assert.equal((runtimeSource.match(/originalFetch\.apply\(this, args\)/g) || []).length, 1);
+    assert.equal((runtimeSource.match(/originalFetch\.call\(window, template\.url/g) || []).length, 1);
+    assert.doesNotMatch(runtimeSource, /retry|backoff|setInterval|requestAnimationFrame/);
 });
 
 test('runtime enable is idempotent, fetch stays nonblocking, and disable restores hooks', async () => {
@@ -193,7 +209,7 @@ test('top probe aggregates a child-frame Replay request as shape-only data', asy
     topWindow.frames.push(childWindow);
     topWindow.postMessage = (data) => topMessage?.({ data, source: childWindow });
     childWindow.postMessage = (data) => { if (data.command === 'enable') activeGeneration = data.generation; childMessage?.({ data, source: topWindow }); };
-    const common = { Headers: class { keys() { return []; } }, console: { log() {} }, Promise, URL };
+    const common = { Headers: class { keys() { return []; } }, console: { log() {} }, Promise, URL, AbortController, setTimeout, clearTimeout };
     vm.runInNewContext(runtimeSource, { ...common, window: topWindow, XMLHttpRequest: makeXHR(), document: makeDocument() });
     vm.runInNewContext(runtimeSource, { ...common, window: childWindow, XMLHttpRequest: makeXHR(), document: makeDocument() });
     assert.equal(childWindow.fetch, childFetch);
@@ -215,6 +231,70 @@ test('top probe aggregates a child-frame Replay request as shape-only data', asy
     for (const secret of ['private-key', 'private-offset', 'private-token', 'private-visitor', 'private-tracking']) assert.equal(serialized.includes(secret), false);
     topWindow.LiveFlowReplayProbe.disable();
     assert.equal(childWindow.fetch, childFetch);
+});
+
+test('credentialless diagnostic is explicit, frame-local, single-shot, and shape-only', async () => {
+    function makeXHR() {
+        function FrameXHR() {}
+        FrameXHR.prototype.open = function () {}; FrameXHR.prototype.send = function () {}; FrameXHR.prototype.setRequestHeader = function () {}; FrameXHR.prototype.addEventListener = function () {};
+        return FrameXHR;
+    }
+    const document = { querySelector() { return null; }, addEventListener() {}, removeEventListener() {} };
+    let topMessage;
+    let childMessage;
+    const activeCalls = [];
+    const passiveResponse = { clone() { return { json: async () => ({}) }; }, ok: true, json: async () => ({}) };
+    const diagnosticResponse = { ok: true, json: async () => ({ continuationContents: { liveChatContinuation: { actions: [{ replayChatItemAction: { videoOffsetTimeMsec: 'offset-secret', item: { liveChatTextMessageRenderer: { message: { runs: [{ text: 'message-secret' }] } } } } }], continuations: [{ liveChatReplayContinuationData: { continuation: 'next-secret' } }] } } }) };
+    const topFetch = () => Promise.resolve(passiveResponse);
+    const childFetch = (...args) => { activeCalls.push(args); return Promise.resolve(activeCalls.length === 1 ? passiveResponse : diagnosticResponse); };
+    const topWindow = { LiveFlowReplayProbeCore: require('../src/replay-schema-probe-core.js'), fetch: topFetch, frames: [], addEventListener(name, fn) { if (name === 'message') topMessage = fn; } };
+    const childWindow = { LiveFlowReplayProbeCore: require('../src/replay-schema-probe-core.js'), fetch: childFetch, frames: [], addEventListener(name, fn) { if (name === 'message') childMessage = fn; } };
+    topWindow.top = topWindow; topWindow.parent = topWindow; childWindow.top = topWindow; childWindow.parent = topWindow; topWindow.frames.push(childWindow);
+    topWindow.postMessage = (data) => topMessage?.({ data, source: childWindow });
+    childWindow.postMessage = (data) => childMessage?.({ data, source: topWindow });
+    const common = { Headers: class { keys() { return []; } }, console: { log() {} }, Promise, URL, AbortController, setTimeout, clearTimeout };
+    vm.runInNewContext(runtimeSource, { ...common, window: topWindow, XMLHttpRequest: makeXHR(), document });
+    vm.runInNewContext(runtimeSource, { ...common, window: childWindow, XMLHttpRequest: makeXHR(), document });
+    assert.equal(activeCalls.length, 0);
+    assert.deepEqual({ ...topWindow.LiveFlowReplayCredentiallessDiagnostic.status() }, { enabled: false, ready: false, inFlight: false, lastResult: null });
+    assert.equal((await topWindow.LiveFlowReplayCredentiallessDiagnostic.run()).requestCount, 0);
+    topWindow.LiveFlowReplayProbe.enable();
+    assert.equal(activeCalls.length, 0);
+    await childWindow.fetch('/youtubei/v1/live_chat/get_live_chat_replay?key=api-secret', { method: 'POST', body: '{"context":{"client":{"visitorData":"visitor-secret"}},"continuation":"continuation-secret","trackingParams":"tracking-secret"}' });
+    assert.equal(activeCalls.length, 1);
+    const result = await topWindow.LiveFlowReplayCredentiallessDiagnostic.run();
+    assert.equal(activeCalls.length, 2);
+    const options = activeCalls[1][1];
+    assert.equal(options.credentials, 'omit');
+    assert.equal(options.method, 'POST');
+    assert.equal(Object.hasOwn(options.headers, 'Authorization'), false);
+    assert.equal(Object.hasOwn(options.headers, 'Cookie'), false);
+    assert.deepEqual({ ...result }, { executed: true, credentials: 'omit', requestCount: 1, httpStatusClass: '2xx', jsonParsed: true, replayShapeObserved: true, replayTimingPathObserved: true, continuationShapeObserved: true, reason: 'COMPLETE' });
+    const output = JSON.stringify(result);
+    for (const secret of ['api-secret', 'visitor-secret', 'continuation-secret', 'tracking-secret', 'offset-secret', 'message-secret', 'next-secret']) assert.equal(output.includes(secret), false);
+    assert.equal((await topWindow.LiveFlowReplayCredentiallessDiagnostic.run()).requestCount, 0);
+    assert.equal(activeCalls.length, 2);
+    topWindow.LiveFlowReplayProbe.disable();
+});
+
+test('credentialless diagnostic stops on non-2xx and invalid JSON without follow-up', async () => {
+    for (const [response, reason, parsed] of [
+        [{ ok: false, json: async () => { throw new Error('must not parse'); } }, 'HTTP_STOP', false],
+        [{ ok: true, json: async () => { throw new Error('invalid'); } }, 'INVALID_JSON', false]
+    ]) {
+        const runtime = createTopDiagnosticRuntime(response);
+        await runtime.capture();
+        const result = await runtime.window.LiveFlowReplayCredentiallessDiagnostic.run();
+        assert.equal(result.reason, reason); assert.equal(result.jsonParsed, parsed); assert.equal(result.requestCount, 1); assert.equal(runtime.calls(), 2);
+    }
+});
+
+test('credentialless diagnostic aborts on its bounded timeout without retry', async () => {
+    const abortError = Object.assign(new Error('aborted'), { name: 'AbortError' });
+    const runtime = createTopDiagnosticRuntime((url, options) => options.signal.aborted ? Promise.reject(abortError) : new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(abortError), { once: true })), { setTimeout(callback) { callback(); return 1; }, clearTimeout() {} });
+    await runtime.capture();
+    const result = await runtime.window.LiveFlowReplayCredentiallessDiagnostic.run();
+    assert.equal(result.reason, 'TIMEOUT'); assert.equal(result.httpStatusClass, 'timeout'); assert.equal(result.requestCount, 1); assert.equal(runtime.calls(), 2);
 });
 
 test('XHR Replay observation preserves callbacks and isolates non-JSON responses', () => {

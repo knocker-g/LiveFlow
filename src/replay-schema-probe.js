@@ -8,9 +8,15 @@
     const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
     const xhrState = new WeakMap();
     const CHANNEL = 'LIVEFLOW_REPLAY_SHAPE_PROBE_V1';
+    const DIAGNOSTIC_CHANNEL = 'LIVEFLOW_REPLAY_CREDENTIALLESS_DIAGNOSTIC_V1';
     const MAX_FRAMES = 8;
+    const MAX_TEMPLATE_BODY_CHARS = 65536;
+    const DIAGNOSTIC_TIMEOUT_MS = 10000;
+    const BRIDGE_TIMEOUT_MS = 12000;
     const isTop = window === window.top;
     const frameSequences = new Map();
+    const diagnosticFrames = new Set();
+    const pendingDiagnostics = new Map();
     let enabled = false;
     let generation = 0;
     let sequence = 0;
@@ -23,6 +29,11 @@
     let openHook = null;
     let sendHook = null;
     let headerHook = null;
+    let diagnosticTemplate = null;
+    let diagnosticInFlight = false;
+    let diagnosticInvocation = 0;
+    let lastExecutedInvocation = 0;
+    let lastDiagnosticResult = null;
 
     function directChildren() { try { return Array.from({ length: Math.min(window.frames.length, MAX_FRAMES) }, (_, index) => window.frames[index]); } catch { return []; } }
     function isDirectChild(source) { return directChildren().includes(source); }
@@ -33,12 +44,61 @@
         const lowered = names.filter((name) => typeof name === 'string').map((name) => name.toLowerCase());
         return { cookieSeen: lowered.includes('cookie') ? true : 'unknown', authorizationSeen: lowered.includes(`author${'ization'}`) ? true : 'unknown' };
     }
+    function safeDiagnosticResult(reason, overrides = {}) {
+        return Object.freeze({ executed: false, credentials: 'omit', requestCount: 0, httpStatusClass: 'not-executed', jsonParsed: false, replayShapeObserved: false, replayTimingPathObserved: false, continuationShapeObserved: false, reason, ...overrides });
+    }
+    function normalizeFrameResult(value) {
+        const statuses = new Set(['2xx', 'non-2xx', 'timeout', 'network-error', 'not-executed']);
+        const reasons = new Set(['COMPLETE', 'HTTP_STOP', 'INVALID_JSON', 'TIMEOUT', 'NETWORK_ERROR', 'NO_TEMPLATE', 'IN_PROGRESS', 'PASSIVE_PROBE_DISABLED']);
+        if (!value || ![true, false].includes(value.executed) || ![0, 1].includes(value.requestCount) || value.credentials !== 'omit' || !statuses.has(value.httpStatusClass) || !reasons.has(value.reason)) return safeDiagnosticResult('INVALID_FRAME_RESULT');
+        return safeDiagnosticResult(value.reason, { executed: value.executed, requestCount: value.requestCount, httpStatusClass: value.httpStatusClass, jsonParsed: value.jsonParsed === true, replayShapeObserved: value.replayShapeObserved === true, replayTimingPathObserved: value.replayTimingPathObserved === true, continuationShapeObserved: value.continuationShapeObserved === true });
+    }
+    function captureDiagnosticTemplate(details) {
+        try {
+            if (!enabled || diagnosticInFlight || core.replayEndpoint(details.url) !== '/youtubei/v1/live_chat/get_live_chat_replay') return;
+            if (String(details.method || '').toUpperCase() !== 'POST' || typeof details.body !== 'string' || details.body.length < 2 || details.body.length > MAX_TEMPLATE_BODY_CHARS) return;
+            const requestUrl = new URL(String(details.url), window.location?.href || 'https://www.youtube.com/');
+            if (requestUrl.protocol !== 'https:' || !['www.youtube.com', 'youtube.com'].includes(requestUrl.hostname)) return;
+            const parsed = JSON.parse(details.body);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof parsed.continuation !== 'string' || parsed.continuation.length === 0 || !parsed.context || typeof parsed.context !== 'object') return;
+            diagnosticTemplate = { url: requestUrl.href, body: details.body };
+            if (!isTop) post(window.parent, { channel: DIAGNOSTIC_CHANNEL, command: 'ready', generation });
+        } catch { diagnosticTemplate = null; }
+    }
+    function summarizeDiagnosticJson(value) {
+        const shape = core.collectResponseShape(value);
+        const liveChatPath = shape.responseTopLevelKeys.some((entry) => entry.key === 'continuationContents') && shape.continuationPaths.some((entry) => entry.path.includes('liveChatContinuation'));
+        return {
+            replayShapeObserved: liveChatPath && shape.actionNames.includes('replayChatItemAction'),
+            replayTimingPathObserved: shape.replayTimingCandidates.some((entry) => /replayChatItemAction\.videoOffsetTimeMsec$/.test(entry.path)),
+            continuationShapeObserved: shape.continuationDataNames.includes('liveChatReplayContinuationData') && shape.continuationPaths.some((entry) => /liveChatReplayContinuationData\.continuation$/.test(entry.path))
+        };
+    }
+    async function executeCredentiallessDiagnostic() {
+        if (!enabled || diagnosticInFlight || !diagnosticTemplate) return safeDiagnosticResult(!enabled ? 'PASSIVE_PROBE_DISABLED' : diagnosticInFlight ? 'IN_PROGRESS' : 'NO_TEMPLATE');
+        diagnosticInFlight = true;
+        const template = diagnosticTemplate;
+        diagnosticTemplate = null;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), DIAGNOSTIC_TIMEOUT_MS);
+        try {
+            const response = await originalFetch.call(window, template.url, { method: 'POST', body: template.body, credentials: 'omit', headers: { 'Content-Type': 'application/json' }, signal: controller.signal });
+            const statusClass = response?.ok ? '2xx' : 'non-2xx';
+            if (!response?.ok) return safeDiagnosticResult('HTTP_STOP', { executed: true, requestCount: 1, httpStatusClass: statusClass });
+            let value;
+            try { value = await response.json(); } catch { return safeDiagnosticResult('INVALID_JSON', { executed: true, requestCount: 1, httpStatusClass: statusClass }); }
+            return safeDiagnosticResult('COMPLETE', { executed: true, requestCount: 1, httpStatusClass: statusClass, jsonParsed: true, ...summarizeDiagnosticJson(value) });
+        } catch (error) {
+            return safeDiagnosticResult(error?.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR', { executed: true, requestCount: 1, httpStatusClass: error?.name === 'AbortError' ? 'timeout' : 'network-error' });
+        } finally { clearTimeout(timeout); diagnosticInFlight = false; }
+    }
     function sendReport(kind, payload) {
         if (!enabled || isTop) return;
         sequence += 1;
         post(window.parent, { command: 'report', generation, sequence, kind, payload });
     }
     function recordRequest(details) {
+        captureDiagnosticTemplate(details);
         const path = core.replayEndpoint(details.url);
         const method = typeof details.method === 'string' ? details.method.toUpperCase().slice(0, 12) : 'UNKNOWN';
         const names = Array.isArray(details.headerNames) ? details.headerNames : [];
@@ -127,8 +187,11 @@
         video = null; stablePlaybackTime = null; seekStart = null; activeRateOperation = null;
     }
     function enable(nextGeneration = generation || 1) { enabled = true; generation = nextGeneration; sequence = 0; collector.enable(); installHooks(); broadcast('enable'); }
-    function disable() { broadcast('disable'); enabled = false; removeHooks(); collector.disable(); }
-    function reset() { collector.reset(); frameSequences.clear(); }
+    function disable() {
+        broadcast('disable'); enabled = false; removeHooks(); collector.disable(); diagnosticTemplate = null; diagnosticFrames.clear();
+        for (const [invocation, pending] of pendingDiagnostics) { clearTimeout(pending.timeout); pending.resolve(safeDiagnosticResult('PASSIVE_PROBE_DISABLED')); pendingDiagnostics.delete(invocation); }
+    }
+    function reset() { collector.reset(); frameSequences.clear(); diagnosticFrames.clear(); diagnosticTemplate = null; lastDiagnosticResult = null; }
     function summary() {
         for (const source of [...frameSequences.keys()]) if (!isDirectChild(source)) frameSequences.delete(source);
         const currentFrameCount = Math.min(frameSequences.size, MAX_FRAMES);
@@ -138,7 +201,26 @@
     function onMessage(event) {
         try {
             const data = event.data;
-            if (!data || data.channel !== CHANNEL || typeof data.command !== 'string') return;
+            if (!data || typeof data.command !== 'string') return;
+            if (data.channel === DIAGNOSTIC_CHANNEL) {
+                if (!isTop && event.source === window.parent && data.command === 'run' && data.generation === generation && Number.isSafeInteger(data.invocation) && data.invocation > lastExecutedInvocation) {
+                    lastExecutedInvocation = data.invocation;
+                    executeCredentiallessDiagnostic().then((result) => post(window.parent, { channel: DIAGNOSTIC_CHANNEL, command: 'result', generation, invocation: data.invocation, result })).catch(() => {});
+                    return;
+                }
+                if (isTop && enabled && isDirectChild(event.source) && data.generation === generation) {
+                    if (data.command === 'ready') { if (diagnosticFrames.size < MAX_FRAMES) diagnosticFrames.add(event.source); return; }
+                    if (data.command === 'result' && Number.isSafeInteger(data.invocation)) {
+                        const pending = pendingDiagnostics.get(data.invocation);
+                        if (!pending || pending.source !== event.source) return;
+                        clearTimeout(pending.timeout); pendingDiagnostics.delete(data.invocation); diagnosticFrames.delete(event.source);
+                        lastDiagnosticResult = normalizeFrameResult(data.result);
+                        pending.resolve(lastDiagnosticResult); return;
+                    }
+                }
+                return;
+            }
+            if (data.channel !== CHANNEL) return;
             if (!isTop && event.source === window.parent) {
                 if (data.command === 'enable' && Number.isSafeInteger(data.generation)) enable(data.generation);
                 if (data.command === 'disable') disable();
@@ -166,5 +248,23 @@
     if (!isTop) post(window.parent, { command: 'ready' });
     if (isTop) {
         window.LiveFlowReplayProbe = Object.freeze({ enable() { generation += 1; reset(); enable(generation); return summary(); }, disable() { disable(); return summary(); }, reset() { reset(); if (enabled) collector.enable(); return summary(); }, summary });
+        window.LiveFlowReplayCredentiallessDiagnostic = Object.freeze({
+            async run() {
+                if (!enabled) return safeDiagnosticResult('PASSIVE_PROBE_DISABLED');
+                if (diagnosticInFlight || pendingDiagnostics.size > 0) return safeDiagnosticResult('IN_PROGRESS');
+                if (diagnosticTemplate) { lastDiagnosticResult = await executeCredentiallessDiagnostic(); return lastDiagnosticResult; }
+                for (const source of [...diagnosticFrames]) if (!isDirectChild(source)) diagnosticFrames.delete(source);
+                const source = diagnosticFrames.values().next().value;
+                if (!source) return safeDiagnosticResult('NO_TEMPLATE');
+                diagnosticInvocation += 1;
+                const invocation = diagnosticInvocation;
+                return new Promise((resolve) => {
+                    const timeout = setTimeout(() => { pendingDiagnostics.delete(invocation); diagnosticFrames.delete(source); lastDiagnosticResult = safeDiagnosticResult('FRAME_TIMEOUT', { executed: 'unknown', requestCount: 'unknown' }); resolve(lastDiagnosticResult); }, BRIDGE_TIMEOUT_MS);
+                    pendingDiagnostics.set(invocation, { source, resolve, timeout });
+                    post(source, { channel: DIAGNOSTIC_CHANNEL, command: 'run', generation, invocation });
+                });
+            },
+            status() { return Object.freeze({ enabled, ready: Boolean(diagnosticTemplate || diagnosticFrames.size), inFlight: diagnosticInFlight || pendingDiagnostics.size > 0, lastResult: lastDiagnosticResult }); }
+        });
     }
 })();
