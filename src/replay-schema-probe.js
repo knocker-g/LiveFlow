@@ -58,9 +58,9 @@
         if (!value || ![true, false].includes(value.executed) || ![0, 1].includes(value.requestCount) || value.credentials !== 'omit' || !statuses.has(value.httpStatusClass) || !reasons.has(value.reason)) return safeDiagnosticResult('INVALID_FRAME_RESULT');
         return safeDiagnosticResult(value.reason, { executed: value.executed, requestCount: value.requestCount, httpStatusClass: value.httpStatusClass, jsonParsed: value.jsonParsed === true, replayShapeObserved: value.replayShapeObserved === true, replayTimingPathObserved: value.replayTimingPathObserved === true, continuationShapeObserved: value.continuationShapeObserved === true });
     }
-    function captureDiagnosticTemplate(details) {
+    function captureDiagnosticTemplate(details, expectedGeneration = generation) {
         try {
-            if (!enabled || diagnosticInFlight || core.replayEndpoint(details.url) !== '/youtubei/v1/live_chat/get_live_chat_replay') return;
+            if (!enabled || expectedGeneration !== generation || diagnosticInFlight || core.replayEndpoint(details.url) !== '/youtubei/v1/live_chat/get_live_chat_replay') return;
             if (String(details.method || '').toUpperCase() !== 'POST' || typeof details.body !== 'string' || details.body.length < 2 || details.body.length > MAX_TEMPLATE_BODY_CHARS) return;
             const requestUrl = new URL(String(details.url), window.location?.href || 'https://www.youtube.com/');
             if (requestUrl.protocol !== 'https:' || !['www.youtube.com', 'youtube.com'].includes(requestUrl.hostname)) return;
@@ -68,7 +68,20 @@
             if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof parsed.continuation !== 'string' || parsed.continuation.length === 0 || !parsed.context || typeof parsed.context !== 'object') return;
             diagnosticTemplate = { url: requestUrl.href, body: details.body };
             if (!isTop) post(window.parent, { channel: DIAGNOSTIC_CHANNEL, command: 'ready', generation });
-        } catch { diagnosticTemplate = null; }
+        } catch { /* keep any previously validated unconsumed template */ }
+    }
+    function prepareRequestTemplateCapture(input, init) {
+        try {
+            if (!enabled || init.body !== undefined || typeof input?.clone !== 'function' || core.replayEndpoint(input.url) !== '/youtubei/v1/live_chat/get_live_chat_replay') return null;
+            if (String(init.method || input.method || '').toUpperCase() !== 'POST') return null;
+            return { request: input.clone(), generation };
+        } catch { return null; }
+    }
+    function completeRequestTemplateCapture(pending) {
+        if (!pending) return;
+        try {
+            Promise.resolve(pending.request.text()).then((body) => captureDiagnosticTemplate({ url: pending.request.url, method: pending.request.method, body }, pending.generation)).catch(() => {});
+        } catch { /* diagnostic isolation */ }
     }
     function summarizeDiagnosticJson(value) {
         const shape = core.collectResponseShape(value);
@@ -156,11 +169,14 @@
         hooked = true;
         fetchHook = function (...args) {
             let observed = false;
+            let pendingTemplate = null;
             try {
                 const input = args[0]; const init = args[1] || {};
+                pendingTemplate = prepareRequestTemplateCapture(input, init);
                 observed = recordRequest({ url: typeof input === 'string' ? input : input?.url, method: init.method || input?.method || 'GET', body: init.body, headerNames: [...headerNames(input?.headers), ...headerNames(init.headers)] });
             } catch { /* diagnostic isolation */ }
             const result = originalFetch.apply(this, args);
+            completeRequestTemplateCapture(pendingTemplate);
             if (observed) Promise.resolve(result).then(observeJsonResponse).catch(() => {});
             return result;
         };
@@ -191,7 +207,10 @@
         if (video) ['play', 'pause', 'seeking', 'seeked', 'ratechange', 'timeupdate'].forEach((name) => video.removeEventListener(name, onVideoEvent));
         video = null; stablePlaybackTime = null; seekStart = null; activeRateOperation = null;
     }
-    function enable(nextGeneration = generation || 1) { enabled = true; generation = nextGeneration; sequence = 0; collector.enable(); installHooks(); broadcast('enable'); }
+    function enable(nextGeneration = generation || 1) {
+        if (nextGeneration !== generation) { diagnosticTemplate = null; lastExecutedInvocation = 0; }
+        enabled = true; generation = nextGeneration; sequence = 0; collector.enable(); installHooks(); broadcast('enable');
+    }
     function disable() {
         broadcast('disable'); enabled = false; removeHooks(); collector.disable(); diagnosticTemplate = null; diagnosticFrames.clear();
         for (const [invocation, pending] of pendingDiagnostics) { clearTimeout(pending.timeout); pending.resolve(safeDiagnosticResult('PASSIVE_PROBE_DISABLED')); pendingDiagnostics.delete(invocation); }
@@ -269,7 +288,10 @@
                     post(source, { channel: DIAGNOSTIC_CHANNEL, command: 'run', generation, invocation });
                 });
             },
-            status() { return Object.freeze({ enabled, ready: Boolean(diagnosticTemplate || diagnosticFrames.size), inFlight: diagnosticInFlight || pendingDiagnostics.size > 0, lastResult: lastDiagnosticResult }); }
+            status() {
+                for (const source of [...diagnosticFrames]) if (!isDirectChild(source)) diagnosticFrames.delete(source);
+                return Object.freeze({ enabled, ready: enabled && !diagnosticInFlight && pendingDiagnostics.size === 0 && Boolean(diagnosticTemplate || diagnosticFrames.size), inFlight: diagnosticInFlight || pendingDiagnostics.size > 0, lastResult: lastDiagnosticResult });
+            }
         });
         window.LiveFlowReplayProbe = passiveApi;
         window.LiveFlowReplayCredentiallessDiagnostic = diagnosticApi;

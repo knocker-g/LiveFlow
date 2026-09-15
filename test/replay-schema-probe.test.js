@@ -265,8 +265,12 @@ test('credentialless diagnostic is explicit, frame-local, single-shot, and shape
     assert.equal((await topWindow.LiveFlowReplayCredentiallessDiagnostic.run()).requestCount, 0);
     topWindow.LiveFlowReplayProbe.enable();
     assert.equal(activeCalls.length, 0);
-    await childWindow.fetch('/youtubei/v1/live_chat/get_live_chat_replay?key=api-secret', { method: 'POST', body: '{"context":{"client":{"visitorData":"visitor-secret"}},"continuation":"continuation-secret","trackingParams":"tracking-secret"}' });
+    const requestBody = '{"context":{"client":{"visitorData":"visitor-secret"}},"continuation":"continuation-secret","trackingParams":"tracking-secret"}';
+    const request = { url: 'https://www.youtube.com/youtubei/v1/live_chat/get_live_chat_replay?key=api-secret', method: 'POST', headers: null, clone() { return { url: this.url, method: this.method, text: async () => requestBody }; } };
+    await childWindow.fetch(request);
+    await Promise.resolve(); await Promise.resolve();
     assert.equal(activeCalls.length, 1);
+    assert.equal(topWindow.LiveFlowReplayCredentiallessDiagnostic.status().ready, true);
     const result = await topWindow.LiveFlowReplayCredentiallessDiagnostic.run();
     assert.equal(activeCalls.length, 2);
     const options = activeCalls[1][1];
@@ -314,6 +318,36 @@ test('credentialless diagnostic stops on non-2xx and invalid JSON without follow
         const result = await runtime.window.LiveFlowReplayCredentiallessDiagnostic.run();
         assert.equal(result.reason, reason); assert.equal(result.jsonParsed, parsed); assert.equal(result.requestCount, 1); assert.equal(runtime.calls(), 2);
     }
+});
+
+test('template readiness accepts only bounded HTTPS YouTube Replay POST bodies', async () => {
+    const valid = createTopDiagnosticRuntime({ ok: false });
+    await valid.capture();
+    assert.equal(valid.window.LiveFlowReplayCredentiallessDiagnostic.status().ready, true);
+    assert.equal(valid.calls(), 1);
+
+    const cases = [
+        ['http://www.youtube.com/youtubei/v1/live_chat/get_live_chat_replay', { method: 'POST', body: '{"context":{},"continuation":"secret"}' }],
+        ['https://example.com/youtubei/v1/live_chat/get_live_chat_replay', { method: 'POST', body: '{"context":{},"continuation":"secret"}' }],
+        ['https://www.youtube.com/youtubei/v1/live_chat/get_live_chat_replay', { method: 'GET', body: '{"context":{},"continuation":"secret"}' }],
+        ['https://www.youtube.com/youtubei/v1/live_chat/get_live_chat', { method: 'POST', body: '{"context":{},"continuation":"secret"}' }],
+        ['https://www.youtube.com/youtubei/v1/live_chat/get_live_chat_replay', { method: 'POST', body: JSON.stringify({ context: {}, continuation: 'x'.repeat(65537) }) }]
+    ];
+    for (const [url, options] of cases) {
+        const runtime = createTopDiagnosticRuntime({ ok: false });
+        await runtime.window.fetch(url, options);
+        assert.equal(runtime.window.LiveFlowReplayCredentiallessDiagnostic.status().ready, false);
+        assert.equal(runtime.calls(), 1);
+    }
+});
+
+test('disable and detached child invalidate unconsumed readiness without a request', async () => {
+    const runtime = createTopDiagnosticRuntime({ ok: false });
+    await runtime.capture();
+    assert.equal(runtime.window.LiveFlowReplayCredentiallessDiagnostic.status().ready, true);
+    runtime.window.LiveFlowReplayProbe.disable();
+    assert.equal(runtime.window.LiveFlowReplayCredentiallessDiagnostic.status().ready, false);
+    assert.equal(runtime.calls(), 1);
 });
 
 test('credentialless diagnostic aborts on its bounded timeout without retry', async () => {
