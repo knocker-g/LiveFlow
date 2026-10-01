@@ -3,6 +3,7 @@
     const SETTINGS_VERSION = 1;
     const DEFAULT_SETTINGS = Object.freeze({
         version: SETTINGS_VERSION,
+        displayEnabled: true,
         showGuest: true,
         showMember: true,
         showModerator: true,
@@ -24,6 +25,7 @@
         autoOpenNativeChatWhenLiveFlowDisabled: true
     });
     const CAPABILITIES = Object.freeze({
+        displayEnabled: true,
         showGuest: true,
         showSuperChat: true,
         showSuperSticker: true,
@@ -33,7 +35,7 @@
         autoOpenNativeChatWhenLiveFlowDisabled: true
     });
     const BOOLEAN_KEYS = Object.freeze([
-        'showGuest', 'showMember', 'showModerator', 'showOwner', 'showYou',
+        'displayEnabled', 'showGuest', 'showMember', 'showModerator', 'showOwner', 'showYou',
         'showSuperChat', 'showSuperSticker', 'showMembership', 'showAvatars',
         'showPinnedComments', 'emojiImages', 'adaptiveDensity', 'avoidSubtitles',
         'autoEnableLiveFlowWhenNativeChatClosed', 'autoOpenNativeChatWhenLiveFlowDisabled'

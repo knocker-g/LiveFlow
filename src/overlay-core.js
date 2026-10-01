@@ -84,8 +84,7 @@
     }
 
     function getDanmakuLaneSpan(message) {
-        if (Number.isInteger(message?.laneSpan) && message.laneSpan >= 1 && message.laneSpan <= 2) return message.laneSpan;
-        return message?.messageType === 'superChat' || message?.messageType === 'superSticker' ? 2 : 1;
+        return 1;
     }
 
     function normalizeImageUrl(value) {
@@ -199,6 +198,11 @@
         const widthRatio = commentWidth / overlayWidth;
         const compensation = Math.min(1, Math.max(0, (widthRatio - 0.25) / 1.25));
         return Math.round(baseDurationMs - (baseDurationMs - minimumDurationMs) * compensation);
+    }
+
+    function calculateReplayPlaybackRateFactor(playbackRate) {
+        return typeof playbackRate === 'number' && Number.isFinite(playbackRate) && playbackRate > 0
+            ? 1 / playbackRate : null;
     }
 
     function isLaneCollisionSafe(previous, next, nowMs, horizontalGap = DANMAKU_HORIZONTAL_GAP_PX) {
@@ -551,6 +555,45 @@
             video.readyState >= MIN_PLAYABLE_READY_STATE;
     }
 
+    function isMainContentPlaybackEligible(player, video) {
+        return isPlaybackEligible(video) &&
+            player?.classList?.contains?.('ad-showing') !== true &&
+            player?.classList?.contains?.('ad-interrupting') !== true;
+    }
+
+    function classifyLiveEdgeProximity({ currentTime, seekable, buffered } = {}) {
+        if (!Number.isFinite(currentTime) || currentTime < 0 || !Array.isArray(seekable) || !Array.isArray(buffered) ||
+            seekable.length === 0 || buffered.length === 0) return 'UNKNOWN';
+        const validRange = (range) => range && Number.isFinite(range.start) && Number.isFinite(range.end) &&
+            range.start >= 0 && range.end >= range.start;
+        if (!seekable.every(validRange) || !buffered.every(validRange)) return 'UNKNOWN';
+        const currentSeekable = seekable.find((range) => range.start <= currentTime && currentTime <= range.end);
+        const currentBuffer = buffered.find((range) => range.start <= currentTime && currentTime <= range.end);
+        if (!currentSeekable || !currentBuffer) return 'UNKNOWN';
+        const liveEdge = seekable[seekable.length - 1].end;
+        return currentBuffer.end >= liveEdge ? 'NEAR_LIVE_EDGE' : 'BEHIND_LIVE';
+    }
+
+    function reduceLivePresentationResumeGate(active, event, proximity = 'UNKNOWN') {
+        if (event === 'PAUSE' || event === 'SEEKING') {
+            return Object.freeze({ active: true, allowLaunch: false, reason: 'MEDIA_PAUSED' });
+        }
+        if (event !== 'BATCH') return Object.freeze({ active: active === true, allowLaunch: false, reason: 'UNKNOWN' });
+        if (active !== true) return Object.freeze({ active: false, allowLaunch: true, reason: 'CURRENT' });
+        if (proximity === 'NEAR_LIVE_EDGE') return Object.freeze({ active: false, allowLaunch: true, reason: 'CURRENT' });
+        if (proximity === 'BEHIND_LIVE') return Object.freeze({ active: true, allowLaunch: false, reason: 'BEHIND_LIVE' });
+        return Object.freeze({ active: true, allowLaunch: false, reason: 'UNKNOWN' });
+    }
+
+    function computeLivePresentationAccounting(input = {}) {
+        const count = (key) => Number.isInteger(input[key]) && input[key] >= 0 ? input[key] : 0;
+        const total = count('input');
+        const accounted = count('enqueued') + count('visibilityFiltered') + count('enqueueRejected') +
+            count('lifecycleSuppressed');
+        return Object.freeze({ input: total, accounted, lostUnaccounted: Math.max(0, total - accounted),
+            valid: accounted <= total });
+    }
+
     function calculateVideoSurfaceRect(playerRect, videoRect) {
         if (!playerRect || !videoRect) return null;
         const values = [
@@ -611,6 +654,7 @@
         calculateDanmakuMotion,
         calculateDanmakuSpeed,
         calculateCompensatedDanmakuDuration,
+        calculateReplayPlaybackRateFactor,
         isLaneCollisionSafe,
         selectCollisionSafeLane,
         calculateLaneSafeAtMs,
@@ -637,6 +681,10 @@
         isNativeChatFrameVisible,
         canRenderDanmaku,
         isPlaybackEligible,
+        isMainContentPlaybackEligible,
+        classifyLiveEdgeProximity,
+        reduceLivePresentationResumeGate,
+        computeLivePresentationAccounting,
         calculateVideoSurfaceRect
     };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;

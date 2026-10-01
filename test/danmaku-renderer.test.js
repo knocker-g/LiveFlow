@@ -18,10 +18,15 @@ const {
     normalizeYouTubeColor,
     withCssColorAlpha,
     isPlaybackEligible,
+    isMainContentPlaybackEligible,
+    classifyLiveEdgeProximity,
+    reduceLivePresentationResumeGate,
+    computeLivePresentationAccounting,
     calculateVideoSurfaceRect,
     MIN_PLAYABLE_READY_STATE,
     calculateDanmakuSpeed,
     calculateCompensatedDanmakuDuration,
+    calculateReplayPlaybackRateFactor,
     isLaneCollisionSafe,
     selectCollisionSafeLane,
     planDanmakuBatch,
@@ -55,6 +60,9 @@ const {
 } = require('../src/overlay-core.js');
 
 const runtimeSource = fs.readFileSync(path.join(__dirname, '../src/youtube-chat.js'), 'utf8');
+const pageStateSource = fs.readFileSync(path.join(__dirname, '../src/page-state-main.js'), 'utf8');
+const schedulerRuntimeSource = fs.readFileSync(path.join(__dirname, '../src/scheduler-runtime.js'), 'utf8');
+const schedulerStateSource = fs.readFileSync(path.join(__dirname, '../src/scheduler-state-machine.js'), 'utf8');
 
 test('lane count follows overlay height and remains bounded', () => {
     assert.equal(calculateLaneCount(360, 32, 4, 20), 10);
@@ -242,6 +250,16 @@ test('long comment duration compensation is bounded by rendered width and video 
     assert.equal(speed, Math.min(240, 1800 / (duration / 1000)));
 });
 
+test('Replay playback-rate factor scales wall-clock duration while Live baseline stays unchanged', () => {
+    assert.equal(calculateReplayPlaybackRateFactor(0.5), 2);
+    assert.equal(calculateReplayPlaybackRateFactor(1), 1);
+    assert.equal(calculateReplayPlaybackRateFactor(2), 0.5);
+    assert.equal(calculateReplayPlaybackRateFactor(1.25), 0.8);
+    assert.equal(calculateReplayPlaybackRateFactor(0), null);
+    assert.equal(calculateReplayPlaybackRateFactor(Number.NaN), null);
+    assert.equal(calculateCompensatedDanmakuDuration(800, 100), 8000);
+});
+
 test('special card color alpha is bounded and invalid colors fail closed', () => {
     assert.equal(withCssColorAlpha('rgba(17, 34, 51, 1)', 0.8), 'rgba(17, 34, 51, 0.8)');
     assert.equal(withCssColorAlpha('rgb(1, 2, 3)', 0.75), 'rgba(1, 2, 3, 0.75)');
@@ -257,16 +275,16 @@ test('rich text uses sharp strokes and special cards keep opaque white flexible 
     assert.match(runtimeSource, /node\.style\.color = '#FFFFFF'/);
     assert.match(runtimeSource, /liveflow-danmaku-amount \{ flex: 0 0 auto; white-space: nowrap/);
     assert.doesNotMatch(runtimeSource, /liveflow-danmaku-amount[^}]*text-overflow:\s*ellipsis/);
-    assert.match(runtimeSource, /liveflow-danmaku-author[^}]*max-width: 220px[^}]*text-overflow: ellipsis/);
-    assert.match(runtimeSource, /const commentWidth = node\.getBoundingClientRect\(\)\.width[^]*?calculateCompensatedDanmakuDuration\(surfaceRect\.width, commentWidth\)/);
+    assert.match(runtimeSource, /liveflow-danmaku-special \.liveflow-danmaku-author[^}]*overflow: visible[^}]*text-overflow: clip[^}]*white-space: nowrap/);
+    assert.match(runtimeSource, /const renderedRect = node\.getBoundingClientRect\(\)[^]*?const commentWidth = renderedRect\.width[^]*?calculateCompensatedDanmakuDuration\(surfaceRect\.width, commentWidth\)/);
 });
 
-test('runtime smoothing does not reset cadence at response boundaries or burst overdue entries', () => {
-    const scheduler = runtimeSource.slice(runtimeSource.indexOf('function drainRendererQueue'), runtimeSource.indexOf('function handleInitialContinuation'));
-    assert.match(scheduler, /planContinuousDanmakuLaunch\([\s\S]*?rendererNextLaunchAtMs/);
-    assert.doesNotMatch(scheduler, /rendererNextLaunchAtMs\s*=\s*0/);
-    assert.match(scheduler, /performance\.now\(\) \+ overlayCore\.calculateDanmakuLaunchCadence\(rendererQueue\.length\)/);
-    assert.match(scheduler, /scheduleRendererQueueDrain\(rendererQueue\[0\]\.notBeforeMs\)/);
+test('runtime smoothing uses one-shot Phase 3 pacing without response-boundary reset or burst credit', () => {
+    assert.match(runtimeSource, /runtime\.enqueue\(/);
+    assert.doesNotMatch(runtimeSource, /rendererNextLaunchAtMs|planContinuousDanmakuLaunch\s*\(|drainRendererQueue/);
+    assert.match(schedulerStateSource, /if \(wasEmpty && state === STATES\.IDLE\) arm\(0\)/);
+    assert.match(schedulerStateSource, /launched: 1/);
+    assert.doesNotMatch(schedulerStateSource, /credit\s*\+=|launchAllowance/);
 });
 
 test('rich text normalization validates avatar URLs and role fallback', () => {
@@ -344,10 +362,10 @@ test('rich comment DOM uses safe construction, bounded avatar geometry, and meas
     assert.match(runtimeSource, /liveflow-danmaku-sticker/);
     assert.match(runtimeSource, /sticker\.width = 32/);
     assert.match(runtimeSource, /liveflow-danmaku-special/);
-    assert.match(runtimeSource, /const commentWidth = node\.getBoundingClientRect\(\)\.width/);
-    assert.match(runtimeSource, /height: 68px/);
-    assert.match(runtimeSource, /getDanmakuLaneSpan\(normalized\)/);
-    assert.match(runtimeSource, /reserveLaneSpan\(laneStates, lane, laneSpan, reservation\)/);
+    assert.match(runtimeSource, /const renderedRect = node\.getBoundingClientRect\(\)/);
+    assert.match(runtimeSource, /min-height: 68px/);
+    assert.match(runtimeSource, /const laneSpan = 1;/);
+    assert.match(runtimeSource, /reserveLaneSpan\(laneStates, anchorIndex, laneSpan, reservation\)/);
     assert.match(runtimeSource, /releaseLaneReservation\(laneStates, token\)/);
     assert.doesNotMatch(runtimeSource, /innerHTML|insertAdjacentHTML|eval\s*\(|new Function/);
     assert.match(runtimeSource, /data-author-role="member"/);
@@ -368,6 +386,67 @@ test('playback gating accepts only a playing and ready video', () => {
     assert.equal(isPlaybackEligible(null), false);
     assert.equal(isPlaybackEligible({ paused: false, ended: false, readyState: 1 }), false);
     assert.equal(isPlaybackEligible({ paused: false, ended: false, readyState: Number.NaN }), false);
+});
+
+test('Live edge proximity uses media ranges without an elapsed-time threshold', () => {
+    assert.equal(classifyLiveEdgeProximity({
+        currentTime: 118,
+        seekable: [{ start: 0, end: 120 }],
+        buffered: [{ start: 110, end: 120 }]
+    }), 'NEAR_LIVE_EDGE');
+    assert.equal(classifyLiveEdgeProximity({
+        currentTime: 60,
+        seekable: [{ start: 0, end: 120 }],
+        buffered: [{ start: 55, end: 70 }]
+    }), 'BEHIND_LIVE');
+    for (const fixture of [
+        {},
+        { currentTime: 60, seekable: [], buffered: [{ start: 55, end: 70 }] },
+        { currentTime: 60, seekable: [{ start: 0, end: 120 }], buffered: [] },
+        { currentTime: 60, seekable: [{ start: 0, end: 120 }], buffered: [{ start: 70, end: 80 }] }
+    ]) assert.equal(classifyLiveEdgeProximity(fixture), 'UNKNOWN');
+});
+
+test('Live and Premiere-live resume gate discards pause backlog and releases only on positive near-edge evidence', () => {
+    const paused = reduceLivePresentationResumeGate(false, 'PAUSE');
+    assert.deepEqual(paused, { active: true, allowLaunch: false, reason: 'MEDIA_PAUSED' });
+    assert.deepEqual(reduceLivePresentationResumeGate(paused.active, 'BATCH', 'BEHIND_LIVE'), {
+        active: true, allowLaunch: false, reason: 'BEHIND_LIVE'
+    });
+    assert.deepEqual(reduceLivePresentationResumeGate(paused.active, 'BATCH', 'UNKNOWN'), {
+        active: true, allowLaunch: false, reason: 'UNKNOWN'
+    });
+    assert.deepEqual(reduceLivePresentationResumeGate(paused.active, 'BATCH', 'NEAR_LIVE_EDGE'), {
+        active: false, allowLaunch: true, reason: 'CURRENT'
+    });
+    assert.deepEqual(reduceLivePresentationResumeGate(false, 'BATCH', 'UNKNOWN'), {
+        active: false, allowLaunch: true, reason: 'CURRENT'
+    });
+});
+
+test('Live and Premiere-live pause gate Presentation while leaving acquisition and Replay R8 separate', () => {
+    const mediaHandler = runtimeSource.match(/function handleReplayMediaContextChange\(event\) \{[^]*?\n    \}/)?.[0] || '';
+    assert.match(mediaHandler, /currentChatMode === 'live' && \['pause', 'seeking'\]\.includes\(event\.type\)[^]*?reduceLivePresentationResumeGate[^]*?livePresentationResumeGateActive = gate\?\.active !== false[^]*?cleanupOverlay\(\)[^]*?return/);
+    const liveBranch = mediaHandler.slice(mediaHandler.indexOf("if (currentChatMode === 'live'"), mediaHandler.indexOf("if (currentChatMode !== 'replay')"));
+    assert.doesNotMatch(liveBranch, /currentMessages\s*=\s*\[\]/);
+    assert.doesNotMatch(mediaHandler, /LiveFlowStopReadLoop|requestInitialContinuation/);
+    assert.match(mediaHandler, /if \(currentChatMode !== 'replay'\) return;[^]*?replaySchedulerDiagnostic/);
+    const schedule = runtimeSource.match(/function scheduleDanmakuBatch\(messages\) \{[^]*?\n    \}/)?.[0] || '';
+    assert.match(schedule, /currentChatMode === 'live' && livePresentationResumeGateActive[^]*?classifyLiveEdgeProximity[^]*?reduceLivePresentationResumeGate[^]*?if \(!gate\.allowLaunch\)[^]*?return/);
+    assert.match(schedule, /suppressedBehindLive[^]*?suppressedUnknown/);
+    assert.doesNotMatch(schedule, /\b\d+\s*\*\s*1000|setTimeout|setInterval/);
+});
+
+test('Live pause suppression accounting is explicit and conservative', () => {
+    assert.deepEqual(computeLivePresentationAccounting({ input: 4, lifecycleSuppressed: 4 }), {
+        input: 4, accounted: 4, lostUnaccounted: 0, valid: true
+    });
+    assert.deepEqual(computeLivePresentationAccounting({ input: 4, enqueued: 3 }), {
+        input: 4, accounted: 3, lostUnaccounted: 1, valid: true
+    });
+    assert.match(runtimeSource, /function livePresentationAccountingStatus\(\)[^]*?computeLivePresentationAccounting/);
+    assert.match(runtimeSource, /suppressedPaused:[^]*suppressedBehindLive:[^]*suppressedUnknown:/);
+    assert.match(runtimeSource, /LiveFlowLivePresentationDiagnostic = Object\.freeze/);
 });
 
 test('video surface matches video when player and video have equal rects', () => {
@@ -409,9 +488,42 @@ test('new geometry can be calculated independently after resize', () => {
 });
 
 test('renderer drops paused messages without queueing or resume bursts', () => {
-    assert.match(runtimeSource, /if \(!media \|\| !overlayCore\?\.isPlaybackEligible\?\.\(media\.video\)\) \{\s*clearRendererQueue\(\)/);
+    assert.match(runtimeSource, /if \(!media \|\| !overlayCore\?\.isMainContentPlaybackEligible\?\.\(media\.player, media\.video\)\) \{\s*phase3Runtime\?\.clear\(\)/);
     assert.doesNotMatch(runtimeSource, /addEventListener\(['"]play|addEventListener\(['"]playing|pendingMessages|messageQueue/);
     assert.match(runtimeSource, /scheduleDanmakuBatch\(newMessages\)/);
+});
+
+test('Replay due handoff can become lifecycleDiscarded when playback pauses before presentation admission', () => {
+    const player = { classList: { contains: () => false } };
+    const video = { paused: false, ended: false, readyState: MIN_PLAYABLE_READY_STATE };
+    assert.equal(isMainContentPlaybackEligible(player, video), true,
+        'the acquisition-side due decision can observe playable media');
+    video.paused = true;
+    assert.equal(isMainContentPlaybackEligible(player, video), false,
+        'the later presentation-side admission can observe the same media paused');
+
+    const flush = pageStateSource.match(/function flushReplayPending\([^]*?\n    \}/)?.[0] || '';
+    assert.ok(flush.indexOf('replayPending = selection.pending') < flush.indexOf('postReadResult({ ok: true'),
+        'due items leave replayPending before the asynchronous bridge handoff');
+    const schedule = runtimeSource.match(/function scheduleDanmakuBatch\(messages\) \{[^]*?\n    \}/)?.[0] || '';
+    assert.match(schedule, /media\.video\?\.paused === true[^]*'lifecycleDiscardedMediaPaused'/);
+    assert.match(schedule, /lifecycleDiscarded: inputCount, \[reasonField\]: inputCount/);
+    const admission = schedule.slice(0, schedule.indexOf('const runtime = ensurePhase3Runtime()'));
+    assert.doesNotMatch(admission, /pageRevision|pageLifecycleGeneration|readGeneration|authority/,
+        'this discard is presentation eligibility, not an authority-binding comparison');
+});
+
+test('Replay lifecycle discard diagnostics distinguish disabled and not-ready admission without changing returns', () => {
+    const schedule = runtimeSource.match(/function scheduleDanmakuBatch\(messages\) \{[^]*?\n    \}/)?.[0] || '';
+    assert.match(schedule, /!isEffectiveDisplayActive\(\)[^]*lifecycleDiscardedDisplayDisabled: inputCount[^]*return;/);
+    assert.equal(isEffectiveDisplayActive({ userEnabled: false, nativeChatVisible: false }), false);
+    assert.equal(isMainContentPlaybackEligible(
+        { classList: { contains: () => false } },
+        { paused: false, ended: false, readyState: MIN_PLAYABLE_READY_STATE - 1 }
+    ), false);
+    assert.match(schedule, /media\.video\.readyState < 2[^]*'lifecycleDiscardedMediaNotReady'/);
+    assert.equal((schedule.match(/lifecycleDiscarded: inputCount/g) || []).length, 2,
+        'the two existing discard branches and their control flow remain unchanged');
 });
 
 test('renderer generation rejects stale timers across repeated transitions', () => {
@@ -460,15 +572,17 @@ test('renderer target accepts only the same current main video', () => {
 
 test('navigation invalidates renderer and cancels pending and active work', () => {
     assert.match(runtimeSource, /function cleanupOverlay\(\)\s*\{\s*rendererGeneration \+= 1;/);
-    assert.match(runtimeSource, /if \(rendererQueueTimer !== null\) window\.clearTimeout\(rendererQueueTimer\)/);
-    assert.match(runtimeSource, /rendererQueue\.length = 0/);
+    assert.match(runtimeSource, /phase3Runtime\?\.clear\(\)/);
+    assert.match(schedulerRuntimeSource, /scheduler\.stop\(\);\s*queue\.enforceHardCount\(0\)/);
     assert.match(runtimeSource, /activeDanmaku\.forEach\([^]*?animation\?\.cancel\(\)/);
     assert.match(runtimeSource, /addEventListener\('yt-navigate-start', handleNavigationStart\)/);
     assert.match(runtimeSource, /function handleNavigationStart\(\)[^]*?disconnectNativeChatObserver\(\)[^]*?cleanupOverlay\(\)/);
 });
 
 test('stale timer callback verifies generation and video before DOM insertion', () => {
-    assert.match(runtimeSource, /const entry = rendererQueue\[0\];[^]*?isRendererTargetCurrent\([^]*?entry\.generation[^]*?entry\.video[^]*?rendererQueue\.shift\(\)/);
+    assert.match(runtimeSource, /launch: \(entry, proof\) => renderDanmaku\(entry\.message, entry\.generation, entry\.video, proof\)/);
+    assert.match(runtimeSource, /scheduledGeneration,[^]*?currentGeneration: rendererGeneration[^]*?scheduledVideo/);
+    assert.match(schedulerStateSource, /generation\(\) !== expectedGeneration[^]*?OUTCOMES\.INVALIDATED/);
 });
 
 test('main-player lookup is scoped to the current watch root and rejects MiniPlayer', () => {
@@ -480,11 +594,11 @@ test('main-player lookup is scoped to the current watch root and rejects MiniPla
 
 test('renderer queue is bounded with one timer and cancelled during teardown and SPA cleanup', () => {
     assert.equal(DANMAKU_MAX_RENDER_QUEUE, 150);
-    assert.match(runtimeSource, /DANMAKU_MAX_RENDER_QUEUE - rendererQueue\.length/);
-    assert.match(runtimeSource, /visibleMessages\.slice\(0, availableSlots\)/);
-    assert.equal((runtimeSource.match(/let rendererQueueTimer = null/g) || []).length, 1);
-    assert.match(runtimeSource, /if \(rendererQueueTimer !== null\) window\.clearTimeout\(rendererQueueTimer\)/);
-    assert.match(runtimeSource, /rendererQueue\.length = 0/);
+    assert.match(runtimeSource, /maxPendingCount: overlayCore\.DANMAKU_MAX_RENDER_QUEUE/);
+    assert.match(schedulerRuntimeSource, /queue\.enforceHardCount\(config\.maxPendingCount\)/);
+    assert.match(schedulerStateSource, /let timerHandle = null/);
+    assert.match(schedulerStateSource, /cancelOneShot\(timerHandle\)/);
+    assert.match(schedulerRuntimeSource, /queue\.enforceHardCount\(0\)/);
     assert.match(runtimeSource, /function resetPageState\(\)[^]*?cleanupOverlay\(\)/);
 });
 
@@ -511,7 +625,7 @@ test('renderer refreshes the actual video rect for each new comment', () => {
     assert.match(runtimeSource, /calculateVideoSurfaceRect\(player\.getBoundingClientRect\(\), video\.getBoundingClientRect\(\)\)/);
     assert.match(runtimeSource, /overlaySurface\.style\.left/);
     assert.match(runtimeSource, /overlaySurface\.style\.width/);
-    assert.match(runtimeSource, /calculateLaneCount\(surfaceRect\.height\)/);
+    assert.match(runtimeSource, /calculateLaneCount\(surfaceRect\.height, phase5Tuning\.lineHeight, phase5Tuning\.laneGap\)/);
     assert.match(runtimeSource, /overlayWidth: surfaceRect\.width/);
 });
 
@@ -645,17 +759,37 @@ test('unknown frame geometry fails safe while a missing frame is treated as not 
     assert.match(runtimeSource, /catch \(error\) \{\s*return true;/);
 });
 
-test('display controller is memory-only and exposes future UI integration without persistence', () => {
+test('display controller persists only the user default while runtime state stays document-local', () => {
     assert.match(runtimeSource, /window\.LiveFlowDisplayState = Object\.freeze\(\{/);
     assert.match(runtimeSource, /setUserEnabled\(value\)/);
     assert.match(runtimeSource, /getUserEnabled\(\)/);
-    assert.doesNotMatch(runtimeSource, /chrome\.storage|localStorage|sessionStorage/);
+    assert.match(runtimeSource, /updateSettings\(storageArea, runtimeSettings, \{ displayEnabled: value \}\)/);
+    assert.match(runtimeSource, /if \(initializeDisplay\) userEnabled = normalized\.displayEnabled === true/);
+    assert.match(runtimeSource, /storage\?\.onChanged\?\.addListener[^]*?applyPersistentSettings\(changes\[settingsCore\.STORAGE_KEY\]\.newValue\)/);
+    assert.doesNotMatch(runtimeSource, /localStorage|sessionStorage/);
+});
+
+test('display OFF is presentation-only and re-enable does not restart acquisition', () => {
+    const action = runtimeSource.match(/function applyDisplayAction\(action\) \{[^]*?\n    \}/)?.[0] || '';
+    assert.match(action, /if \(transition\.cleanupRequired\) cleanupOverlay\(\)/);
+    assert.match(action, /if \(wasUserEnabled && !userEnabled\) \{\s*currentMessages = \[\]/);
+    assert.doesNotMatch(action, /LiveFlowStopReadLoop|acceptingReadResults\s*=\s*false|requestInitialContinuation|readRequestedRevision\s*=\s*-1/);
+    assert.match(runtimeSource, /function scheduleDanmakuBatch\(messages\)[^]*?if \(!isEffectiveDisplayActive\(\)\) \{[^]*?lifecycleDiscardedDisplayDisabled: inputCount[^]*?return;/);
+});
+
+test('persisted display default is applied before startup without cross-tab runtime broadcast', () => {
+    assert.match(runtimeSource, /initializePersistentSettings\(\)\.then\(\(\) => \{\s*if \(isYouTubeWatchPage\(\)\) detectPage\(\)/);
+    assert.match(runtimeSource, /function detectPage\(\) \{\s*if \(!persistentSettingsReady\) return;/);
+    const persistent = runtimeSource.match(/function applyPersistentSettings\(settings[^]*?\n    \}/)?.[0] || '';
+    assert.match(persistent, /if \(initializeDisplay\) userEnabled = normalized\.displayEnabled === true/);
+    const listener = runtimeSource.match(/storage\?\.onChanged\?\.addListener\([^]*?\n        \}\);/)?.[0] || '';
+    assert.doesNotMatch(listener, /set-user-enabled|userEnabled\s*=/);
 });
 
 test('inactive transitions clean pending and active danmaku without replay on re-enable', () => {
     assert.match(runtimeSource, /if \(transition\.cleanupRequired\) cleanupOverlay\(\)/);
-    assert.match(runtimeSource, /function scheduleDanmakuBatch\(messages\) \{\s*if \(!isEffectiveDisplayActive\(\)\) return;/);
-    assert.match(runtimeSource, /if \(!isEffectiveDisplayActive\(\)\) \{\s*clearRendererQueue\(\)/);
+    assert.match(runtimeSource, /function scheduleDanmakuBatch\(messages\)[^]*?if \(!isEffectiveDisplayActive\(\)\) \{[^]*?lifecycleDiscarded: inputCount[^]*?return;/);
+    assert.match(runtimeSource, /function cleanupOverlay\(\)[^]*?phase3Runtime\?\.clear\(\)/);
     assert.match(runtimeSource, /if \(media && isEffectiveDisplayActive\(\)\) attachOverlay\(media\.player\)/);
     assert.doesNotMatch(runtimeSource, /disabledMessages|displayBacklog|replayPending/);
 });
@@ -811,6 +945,73 @@ test('management bar view reflects enabled state without controlling READ timing
     assert.equal(getManagementBarViewModel({ userEnabled: false, disabledLabel: 'Disabled' }).toggleLabel, 'Disabled');
 });
 
+test('ads are not eligible for main-content rendering and class transitions clear the runtime', () => {
+    const playable = { paused: false, ended: false, readyState: MIN_PLAYABLE_READY_STATE };
+    const player = { classList: { contains: (name) => name === 'ad-showing' } };
+    assert.equal(isMainContentPlaybackEligible(player, playable), false);
+    assert.equal(isMainContentPlaybackEligible({ classList: { contains: () => false } }, playable), true);
+    assert.match(runtimeSource, /playbackContextObserver\.observe\(player, \{ attributes: true, attributeFilter: \['class'\] \}\)/);
+    assert.match(runtimeSource, /if \(adActive === playbackContextWasAd\) return;[^]*?cleanupOverlay\(\)/);
+});
+
+test('candidate collision proof measures rendered geometry instead of fixed maximum widths', () => {
+    assert.match(runtimeSource, /const probe = createDanmakuNode\(normalized\)[^]*?const measured = probe\.getBoundingClientRect\(\)/);
+    assert.match(runtimeSource, /const width = measured\.width;\s*const height = measured\.height/);
+    assert.doesNotMatch(runtimeSource, /const width = Math\.min\(surface\.width, special \? 520 : 720\)/);
+});
+
+test('candidate measurement applies connected video surface geometry before reading probe bounds', () => {
+    const applyIndex = runtimeSource.indexOf('if (!applyOverlaySurfaceRect(surface))');
+    const appendIndex = runtimeSource.indexOf('overlaySurface.appendChild(probe)', applyIndex);
+    const measureIndex = runtimeSource.indexOf('probe.getBoundingClientRect()', appendIndex);
+    assert.ok(applyIndex >= 0);
+    assert.ok(appendIndex > applyIndex);
+    assert.ok(measureIndex > appendIndex);
+    assert.match(runtimeSource, /function applyOverlaySurfaceRect[^]*overlayRoot\?\.isConnected[^]*overlaySurface\?\.isConnected[^]*surfaceRect\.width <= 0[^]*surfaceRect\.height <= 0[^]*overlaySurface\.style\.width[^]*overlaySurface\.style\.height/);
+});
+
+test('SPECIAL body preserves full one-line text and measured two-line footprint', () => {
+    assert.match(runtimeSource, /liveflow-danmaku-special \.liveflow-danmaku-message \{[^}]*overflow: visible;[^}]*text-overflow: clip;[^}]*white-space: nowrap/);
+    assert.match(runtimeSource, /function applySpecialFit\([^]*computeSpecialSingleLineFit/);
+    assert.match(runtimeSource, /message\.style\.fontSize = `\$\{fit\.bodyFontSize\}px`/);
+    assert.match(runtimeSource, /commentHeight: renderedRect\.height/);
+    assert.match(runtimeSource, /height: trajectory\.height/);
+    assert.match(runtimeSource, /const laneSpan = 1;/);
+    assert.match(runtimeSource, /commentHeight: renderedRect\.height/);
+    assert.match(runtimeSource, /visualFootprint: Object\.freeze\(\{ width: commentWidth, height: renderedRect\.height, anchorLane: launchProof\.lane, logicalLaneSpan: 1 \}\)/);
+    assert.match(runtimeSource, /trajectory: Object\.freeze\([^]*height: renderedRect\.height/);
+    assert.match(runtimeSource, /liveflow-danmaku-special \.liveflow-danmaku-author \{[^}]*overflow: visible;[^}]*text-overflow: clip;[^}]*white-space: nowrap/);
+    assert.doesNotMatch(runtimeSource, /liveflow-danmaku-special \.liveflow-danmaku-author \{[^}]*text-overflow: ellipsis/);
+});
+
+test('Normal comments preserve full natural-width one-line text without ellipsis', () => {
+    assert.match(runtimeSource, /\.liveflow-danmaku \{[^}]*max-width: none;[^}]*white-space: nowrap/);
+    assert.match(runtimeSource, /\.liveflow-danmaku-message \{[^}]*overflow: visible;[^}]*text-overflow: clip;[^}]*white-space: nowrap/);
+    assert.doesNotMatch(runtimeSource, /\.liveflow-danmaku-message \{[^}]*text-overflow: ellipsis/);
+});
+
+test('DENSE and MAX_READABLE add bounded half-pitch anchors without changing displayed comments', () => {
+    assert.match(runtimeSource, /interleavedAnchorStride\[densityPolicy\.density\]/);
+    assert.match(runtimeSource, /band\[lane\]\.lane \+ 0\.5/);
+    assert.match(runtimeSource, /anchorIndex: band\[lane\]\.anchorIndex \+ 1/);
+    assert.match(runtimeSource, /rankDensityRescuePlacements\(/);
+    assert.doesNotMatch(runtimeSource, /Math\.random/);
+});
+
+test('COMPACT adds limited subtitle-safe secondary anchors after primary placement', () => {
+    assert.match(runtimeSource, /const secondaryCandidates = \[\]/);
+    assert.match(runtimeSource, /rankDensityRescuePlacements\(\s*band, secondaryCandidates, activeComments, entry\.id, densityPolicy\.density/);
+    assert.match(runtimeSource, /if \(lane >= reservedBottomLaneStart\) continue;[^]*selectDensityLaneBand/);
+    assert.match(runtimeSource, /isOutsideHardExclusions\(candidateGeometry\.rectangle, geometryState\.exclusionRegions\)/);
+});
+
+test('captions enabled reserves the bottom two logical lanes before Density band selection', () => {
+    assert.match(runtimeSource, /\.ytp-subtitles-button\[aria-pressed="true"\]/);
+    assert.match(runtimeSource, /attributeFilter: \['class', 'style', 'hidden', 'aria-pressed'\]/);
+    assert.match(runtimeSource, /reservedBottomLaneStart = captionsEnabled \? Math\.max\(0, laneCount - 2\) : laneCount/);
+    assert.match(runtimeSource, /if \(lane >= reservedBottomLaneStart\) continue;[^]*selectDensityLaneBand/);
+});
+
 test('lane availability deterministically selects the earliest currently safe lane', () => {
     const busy = previousLaneState();
     const next = { startX: 800, speed: 120 };
@@ -818,11 +1019,11 @@ test('lane availability deterministically selects the earliest currently safe la
     assert.deepEqual(findNextLaneAvailability([busy, busy], 2, next, 800, 1000), { lane: -1, nextSafeAtMs: 3334 });
 });
 
-test('message metadata assigns one lane normally and two lanes to observed special cards', () => {
+test('message metadata keeps every renderer on one logical lane anchor', () => {
     assert.equal(getDanmakuLaneSpan({ messageType: 'text' }), 1);
-    assert.equal(getDanmakuLaneSpan({ messageType: 'superChat' }), 2);
-    assert.equal(getDanmakuLaneSpan({ messageType: 'superSticker' }), 2);
-    assert.equal(getDanmakuLaneSpan({ messageType: 'futureSpecial', laneSpan: 2 }), 2);
+    assert.equal(getDanmakuLaneSpan({ messageType: 'superChat' }), 1);
+    assert.equal(getDanmakuLaneSpan({ messageType: 'superSticker' }), 1);
+    assert.equal(getDanmakuLaneSpan({ messageType: 'futureSpecial', laneSpan: 2 }), 1);
     assert.equal(getDanmakuLaneSpan({ messageType: 'futureUnknown' }), 1);
 });
 
@@ -868,10 +1069,12 @@ test('management placement identifies narrow stacked Chat without viewport class
     assert.equal(isChatStackedBelowPlayer(player, { left: 0, top: 225, width: 0, height: 300 }), false);
 });
 
-test('management bar attaches before stacked Native Chat with below-player fallback', () => {
+test('management bar uses the stable primary below-player host and never Native Chat or playlist flow', () => {
     assert.match(runtimeSource, /const media = getCurrentMainMedia\(\);\s*if \(!media\) \{\s*cleanupManagementBar\(\)/);
-    assert.match(runtimeSource, /isChatStackedBelowPlayer\([^]*?return \{ parent: nativeChat\.parentElement, before: nativeChat \}/);
     assert.match(runtimeSource, /watchRoot\.querySelector\(PLAYER_SELECTORS\.belowPlayer\)/);
+    const placement = runtimeSource.match(/function getManagementBarPlacement\([^]*?\n    \}/)?.[0] || '';
+    assert.doesNotMatch(placement, /nativeChat|isChatStackedBelowPlayer/);
+    assert.match(placement, /return \{ parent: belowPlayer\.parentElement, before: belowPlayer \}/);
     assert.match(runtimeSource, /placement\.parent\.insertBefore\(bar, placement\.before\)/);
     assert.match(runtimeSource, /managementBar\.parentElement === placement\.parent && managementBar\.nextSibling === placement\.before/);
     assert.match(runtimeSource, /data-enabled="false"[^]*?\.liveflow-read-indicator[^]*?visibility: hidden/);
@@ -984,9 +1187,10 @@ test('SPA blocks old bridge results until a newer page revision is accepted', ()
 test('SPA lifecycle token covers READ request, bridge response, queue, and delayed rendering', () => {
     assert.match(runtimeSource, /pageLifecycleGeneration: currentPageLifecycleGeneration/);
     assert.match(runtimeSource, /event\.data\.pageLifecycleGeneration !== currentPageLifecycleGeneration/);
-    assert.match(runtimeSource, /entry\.pageLifecycleGeneration !== currentPageLifecycleGeneration/);
+    assert.match(runtimeSource, /pageLifecycleGeneration: currentPageLifecycleGeneration/);
     assert.match(runtimeSource, /type !== NAVIGATION_INVALIDATED_TYPE/);
-    assert.match(runtimeSource, /acceptingReadResults = false;[^]*?rendererQueue\.length = 0/);
+    assert.match(runtimeSource, /acceptingReadResults = false;[^]*?cleanupOverlay\(\)/);
+    assert.match(runtimeSource, /generation: \(\) => rendererGeneration/);
 });
 
 test('A to B to C navigation repeatedly invalidates every asynchronous renderer boundary', () => {
@@ -994,14 +1198,13 @@ test('A to B to C navigation repeatedly invalidates every asynchronous renderer 
     assert.match(runtimeSource, /function handleNavigationStart\(\)[^]*?cleanupOverlay\(\)/);
     assert.match(runtimeSource, /function cleanupOverlay\(\)[^]*?rendererGeneration \+= 1/);
     assert.match(runtimeSource, /function cleanupOverlay\(\)[^]*?activeDanmaku\.clear\(\)/);
-    assert.match(runtimeSource, /function cleanupOverlay\(\)[^]*?rendererQueue\.length = 0/);
+    assert.match(runtimeSource, /function cleanupOverlay\(\)[^]*?phase3Runtime\?\.clear\(\)/);
 });
 
-test('collision queue preserves FIFO order, drops newest only at its bound, and uses no polling', () => {
-    assert.match(runtimeSource, /const entry = rendererQueue\[0\]/);
-    assert.match(runtimeSource, /rendererQueue\.shift\(\)/);
-    assert.match(runtimeSource, /visibleMessages\.slice\(0, availableSlots\)/);
-    assert.match(runtimeSource, /Renderer queue overflow dropped: \$\{droppedCount\}/);
-    assert.match(runtimeSource, /scheduleRendererQueueDrain\(result\.resumeAtMs\)/);
-    assert.doesNotMatch(runtimeSource, /setInterval\s*\(|requestAnimationFrame\s*\(/);
+test('collision queue delegates FIFO, hard bounds, and one-shot pacing without polling', () => {
+    assert.match(runtimeSource, /schedulerRuntimeCore\.createSchedulerRuntime/);
+    assert.match(schedulerRuntimeSource, /pending\.createPendingQueue\(\)/);
+    assert.match(schedulerRuntimeSource, /queue\.enforceHardCount\(config\.maxPendingCount\)/);
+    assert.match(schedulerRuntimeSource, /foundations\.proveBoundedCollisionSafe/);
+    assert.doesNotMatch(runtimeSource + schedulerRuntimeSource, /setInterval\s*\(|requestAnimationFrame\s*\(/);
 });

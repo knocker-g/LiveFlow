@@ -26,7 +26,7 @@ function createStorage(initial) {
 test('v1 global settings defaults match the product model', () => {
     assert.equal(SETTINGS_VERSION, 1);
     assert.deepEqual(normalizeSettings(), DEFAULT_SETTINGS);
-    for (const key of ['showGuest', 'showMember', 'showModerator', 'showOwner', 'showYou', 'showSuperChat', 'showSuperSticker', 'showMembership', 'showAvatars', 'showPinnedComments', 'emojiImages', 'adaptiveDensity', 'avoidSubtitles', 'autoEnableLiveFlowWhenNativeChatClosed', 'autoOpenNativeChatWhenLiveFlowDisabled']) {
+    for (const key of ['displayEnabled', 'showGuest', 'showMember', 'showModerator', 'showOwner', 'showYou', 'showSuperChat', 'showSuperSticker', 'showMembership', 'showAvatars', 'showPinnedComments', 'emojiImages', 'adaptiveDensity', 'avoidSubtitles', 'autoEnableLiveFlowWhenNativeChatClosed', 'autoOpenNativeChatWhenLiveFlowDisabled']) {
         assert.equal(DEFAULT_SETTINGS[key], true);
     }
     assert.equal(DEFAULT_SETTINGS.opacityPercent, 80);
@@ -54,6 +54,12 @@ test('partial and malformed storage is merged, validated, and clamped', () => {
     assert.equal('unknownKey' in normalized, false);
 });
 
+test('legacy settings default display on and preserve an explicit display default', () => {
+    assert.equal(normalizeSettings({ showGuest: false }).displayEnabled, true);
+    assert.equal(normalizeSettings({ displayEnabled: false }).displayEnabled, false);
+    assert.equal(normalizeSettings({ displayEnabled: 'false' }).displayEnabled, true);
+});
+
 test('settings persistence, updates, and reset use one global storage key', async () => {
     const storage = createStorage({ autoEnableLiveFlowWhenNativeChatClosed: false });
     const loaded = await getStoredSettings(storage);
@@ -77,6 +83,7 @@ test('storage absence fails safely to defaults', async () => {
 
 test('only implemented rich chat, Guest, avatar, and linkage preferences are enabled capabilities', () => {
     assert.deepEqual(CAPABILITIES, {
+        displayEnabled: true,
         showGuest: true,
         showSuperChat: true,
         showSuperSticker: true,
@@ -87,7 +94,7 @@ test('only implemented rich chat, Guest, avatar, and linkage preferences are ena
     });
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
         if (key === 'version') continue;
-        if (['showGuest', 'showSuperChat', 'showSuperSticker', 'showAvatars', 'emojiImages', 'autoEnableLiveFlowWhenNativeChatClosed', 'autoOpenNativeChatWhenLiveFlowDisabled'].includes(key)) assert.equal(CAPABILITIES[key], true);
+        if (['displayEnabled', 'showGuest', 'showSuperChat', 'showSuperSticker', 'showAvatars', 'emojiImages', 'autoEnableLiveFlowWhenNativeChatClosed', 'autoOpenNativeChatWhenLiveFlowDisabled'].includes(key)) assert.equal(CAPABILITIES[key], true);
         else assert.notEqual(CAPABILITIES[key], true);
     }
 });

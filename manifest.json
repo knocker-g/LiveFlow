@@ -28,6 +28,7 @@
             ],
             "js": [
                 "src/schema-diagnostics-core.js",
+                "src/replay-control-plane-core.js",
                 "src/chat-read-core.js",
                 "src/page-state-main.js"
             ],
@@ -40,6 +41,8 @@
                 "https://youtube.com/*"
             ],
             "js": [
+                "src/chat-frame-role-core.js",
+                "src/chat-frame-role-main.js",
                 "src/replay-schema-probe-core.js",
                 "src/replay-schema-probe.js"
             ],
@@ -56,6 +59,12 @@
                 "src/settings-core.js",
                 "src/chat-read-core.js",
                 "src/overlay-core.js",
+                "src/scheduler-foundations.js",
+                "src/pending-selection.js",
+                "src/scheduler-state-machine.js",
+                "src/geometry-adapter.js",
+                "src/scheduler-runtime.js",
+                "src/phase5-tuning.js",
                 "src/youtube-chat.js"
             ],
             "world": "ISOLATED",
