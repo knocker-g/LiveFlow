@@ -8,6 +8,7 @@ const {
     DEFAULT_SETTINGS,
     CAPABILITIES,
     normalizeSettings,
+    createSettingsSnapshot,
     getStoredSettings,
     persistSettings,
     updateSettings,
@@ -45,7 +46,7 @@ test('partial and malformed storage is merged, validated, and clamped', () => {
         opacityPercent: Number.NaN,
         unknownKey: true
     });
-    assert.equal(normalized.showGuest, false);
+    assert.equal(normalized.showGuest, true);
     assert.equal(normalized.showMember, true);
     assert.equal(normalized.fontSizeMode, 'auto');
     assert.equal(normalized.fontScalePercent, 150);
@@ -54,8 +55,11 @@ test('partial and malformed storage is merged, validated, and clamped', () => {
     assert.equal('unknownKey' in normalized, false);
 });
 
-test('legacy settings default display on and preserve an explicit display default', () => {
+test('legacy semantic filters migrate to always-visible v1 behavior', () => {
     assert.equal(normalizeSettings({ showGuest: false }).displayEnabled, true);
+    assert.equal(normalizeSettings({ showGuest: false }).showGuest, true);
+    assert.equal(normalizeSettings({ showSuperChat: false }).showSuperChat, true);
+    assert.equal(normalizeSettings({ showSuperSticker: false }).showSuperSticker, true);
     assert.equal(normalizeSettings({ displayEnabled: false }).displayEnabled, false);
     assert.equal(normalizeSettings({ displayEnabled: 'false' }).displayEnabled, true);
 });
@@ -78,25 +82,35 @@ test('settings persistence, updates, and reset use one global storage key', asyn
 
 test('storage absence fails safely to defaults', async () => {
     assert.deepEqual(await getStoredSettings(undefined), DEFAULT_SETTINGS);
-    assert.deepEqual(await persistSettings(undefined, { showGuest: false }), { ...DEFAULT_SETTINGS, showGuest: false });
+    assert.deepEqual(await persistSettings(undefined, { showGuest: false }), DEFAULT_SETTINGS);
 });
 
-test('only implemented rich chat, Guest, avatar, and linkage preferences are enabled capabilities', () => {
+test('only the v1 product settings and retained layout linkage are enabled capabilities', () => {
     assert.deepEqual(CAPABILITIES, {
         displayEnabled: true,
-        showGuest: true,
-        showSuperChat: true,
-        showSuperSticker: true,
         showAvatars: true,
+        opacityPercent: true,
         emojiImages: true,
         autoEnableLiveFlowWhenNativeChatClosed: true,
         autoOpenNativeChatWhenLiveFlowDisabled: true
     });
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
         if (key === 'version') continue;
-        if (['displayEnabled', 'showGuest', 'showSuperChat', 'showSuperSticker', 'showAvatars', 'emojiImages', 'autoEnableLiveFlowWhenNativeChatClosed', 'autoOpenNativeChatWhenLiveFlowDisabled'].includes(key)) assert.equal(CAPABILITIES[key], true);
+        if (['displayEnabled', 'showAvatars', 'opacityPercent', 'emojiImages', 'autoEnableLiveFlowWhenNativeChatClosed', 'autoOpenNativeChatWhenLiveFlowDisabled'].includes(key)) assert.equal(CAPABILITIES[key], true);
         else assert.notEqual(CAPABILITIES[key], true);
     }
+});
+
+test('validated settings produce a deterministic immutable runtime snapshot without protocol state', () => {
+    const first = createSettingsSnapshot({ showGuest: false, opacityPercent: 65, fontSizeMode: 'manual',
+        fontScalePercent: 115, currentChatMode: 'replay', continuation: 'secret' });
+    const second = createSettingsSnapshot({ showGuest: true, opacityPercent: 65, fontSizeMode: 'manual', fontScalePercent: 115 });
+    assert.deepEqual(first, second);
+    assert.equal(Object.isFrozen(first), true);
+    assert.equal(first.schemaVersion, SETTINGS_VERSION);
+    assert.equal('showGuest' in first, false);
+    assert.equal('currentChatMode' in first, false);
+    assert.equal('continuation' in first, false);
 });
 
 test('popup is mobile-first, localized, and has no LiveFlow master switch', () => {
@@ -129,6 +143,8 @@ test('popup is mobile-first, localized, and has no LiveFlow master switch', () =
     assert.match(css, /\.reset-confirmation[^}]*min-height:\s*82px[^}]*visibility:\s*hidden/);
     assert.match(css, /\.reset-confirmation\[data-open="true"\][^}]*visibility:\s*visible/);
     assert.match(source, /core\.updateSettings\(storageArea/);
+    assert.doesNotMatch(source, /'showGuest'|'showMember'|'showModerator'|'showOwner'|'showYou'|'showSuperChat'|'showSuperSticker'|'showMembership'/);
+    assert.match(source, /control\.tagName === 'SELECT' \? control\.value/);
 });
 
 test('manifest loads settings only in the isolated runtime and exposes the popup', () => {
@@ -146,5 +162,11 @@ test('active runtime applies storage changes without reload or polling', () => {
     const source = fs.readFileSync(path.resolve(__dirname, '../src/youtube-chat.js'), 'utf8');
     assert.match(source, /chrome\?\.storage\?\.onChanged\?\.addListener/);
     assert.match(source, /applyPersistentSettings\(changes\[settingsCore\.STORAGE_KEY\]\.newValue\)/);
+    assert.match(source, /createSettingsSnapshot\?\.\(settings\)/);
+    assert.match(source, /settingsSnapshot: launchSettingsSnapshot/);
+    assert.match(source, /createDanmakuNode\(normalized, entry\.payload\.settingsSnapshot\)/);
+    assert.match(source, /overlaySurface\.style\.opacity = String\(snapshot\.opacityPercent \/ 100\)/);
+    const applySettings = source.match(/function applyPersistentSettings\(settings[^]*?\n    \}/)?.[0] || '';
+    assert.doesNotMatch(applySettings, /geometryRevision|markGeometryDirty|cleanupOverlay|activeDanmaku/);
     assert.doesNotMatch(source, /setInterval|location\.reload/);
 });

@@ -36,7 +36,7 @@
         autoEnableLiveFlowWhenNativeChatClosed: true,
         autoOpenNativeChatWhenLiveFlowDisabled: true
     });
-    let runtimeSettings = null;
+    let runtimeSettings = Object.freeze({});
     let persistentSettingsReady = false;
     const PLAYER_SELECTORS = Object.freeze({
         watchRoot: 'ytd-watch-flexy',
@@ -756,14 +756,15 @@
     }
 
     function applyPersistentSettings(settings, { initializeDisplay = false } = {}) {
-        const normalized = window.LiveFlowSettingsCore?.normalizeSettings?.(settings);
-        if (!normalized) return;
-        runtimeSettings = normalized;
-        if (initializeDisplay) userEnabled = normalized.displayEnabled === true;
+        const snapshot = window.LiveFlowSettingsCore?.createSettingsSnapshot?.(settings);
+        if (!snapshot) return;
+        runtimeSettings = snapshot;
+        if (initializeDisplay) userEnabled = snapshot.displayEnabled === true;
         displayLinkSettings = Object.freeze({
-            autoEnableLiveFlowWhenNativeChatClosed: normalized.autoEnableLiveFlowWhenNativeChatClosed,
-            autoOpenNativeChatWhenLiveFlowDisabled: normalized.autoOpenNativeChatWhenLiveFlowDisabled
+            autoEnableLiveFlowWhenNativeChatClosed: snapshot.autoEnableLiveFlowWhenNativeChatClosed,
+            autoOpenNativeChatWhenLiveFlowDisabled: snapshot.autoOpenNativeChatWhenLiveFlowDisabled
         });
+        if (overlaySurface) overlaySurface.style.opacity = String(snapshot.opacityPercent / 100);
     }
 
     function persistDisplayDefault(value) {
@@ -822,6 +823,7 @@
         overlaySurface = document.createElement('div');
         overlaySurface.id = 'liveflow-danmaku-surface';
         overlaySurface.style.cssText = 'position:absolute;pointer-events:none;overflow:hidden;contain:layout paint;';
+        overlaySurface.style.opacity = String((runtimeSettings.opacityPercent ?? 80) / 100);
         overlayRoot.appendChild(overlaySurface);
         player.appendChild(overlayRoot);
         ensureSubtitleGeometryObservers(player);
@@ -916,11 +918,14 @@
         playbackContextObserver.observe(player, { attributes: true, attributeFilter: ['class'] });
     }
 
-    function createDanmakuNode(normalized) {
+    function createDanmakuNode(normalized, settingsSnapshot = runtimeSettings) {
         const node = document.createElement('div');
         node.className = 'liveflow-danmaku';
         node.dataset.authorRole = normalized.authorRole;
-        node.style.cssText = `position:absolute;left:0;top:0;visibility:hidden;white-space:nowrap;font:${phase5Tuning.fontSize}px/${phase5Tuning.lineHeight}px sans-serif;font-weight:600;will-change:transform;pointer-events:none;`;
+        const fontScale = settingsSnapshot.fontSizeMode === 'manual' ? settingsSnapshot.fontScalePercent / 100 : 1;
+        const fontSize = phase5Tuning.fontSize * fontScale;
+        const lineHeight = phase5Tuning.lineHeight * fontScale;
+        node.style.cssText = `position:absolute;left:0;top:0;visibility:hidden;white-space:nowrap;font:${fontSize}px/${lineHeight}px sans-serif;font-weight:600;will-change:transform;pointer-events:none;`;
         const special = normalized.messageType === 'superChat' || normalized.messageType === 'superSticker';
         if (special) {
             node.classList.add('liveflow-danmaku-special');
@@ -938,7 +943,7 @@
         }
         const headerTarget = specialHeader || node;
         const bodyTarget = specialBody || node;
-        if (overlayCore.shouldRenderAvatar(normalized, runtimeSettings || {})) {
+        if (overlayCore.shouldRenderAvatar(normalized, settingsSnapshot)) {
             const avatar = document.createElement('img');
             avatar.className = 'liveflow-danmaku-avatar';
             avatar.alt = '';
@@ -971,7 +976,7 @@
         }
         const content = document.createElement('span');
         content.className = 'liveflow-danmaku-message';
-        for (const run of overlayCore.getRenderableMessageRuns(normalized, runtimeSettings || {})) {
+        for (const run of overlayCore.getRenderableMessageRuns(normalized, settingsSnapshot)) {
             if (run.type === 'text') content.appendChild(document.createTextNode(run.text));
             if (run.type === 'image') {
                 const image = document.createElement('img');
@@ -1021,7 +1026,7 @@
         if (!surface) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
         if (!attachOverlay(media.player) || !overlaySurface) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
         if (!applyOverlaySurfaceRect(surface)) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
-        const probe = createDanmakuNode(normalized);
+        const probe = createDanmakuNode(normalized, entry.payload.settingsSnapshot);
         overlaySurface.appendChild(probe);
         const specialFit = applySpecialFit(probe, surface.width);
         if (specialFit?.result === 'UNREPRESENTABLE_SPECIAL') {
@@ -1123,7 +1128,7 @@
             generation: () => rendererGeneration,
             geometryAdapter: subtitleGeometryAdapter,
             candidateProof: getCandidateProof,
-            launch: (entry, proof) => renderDanmaku(entry.message, entry.generation, entry.video, proof).status === 'rendered',
+            launch: (entry, proof) => renderDanmaku(entry.message, entry.generation, entry.video, proof, entry.settingsSnapshot).status === 'rendered',
             observe: observeReplayScheduler,
             config: {
                 maxPendingAge: overlayCore.DANMAKU_TARGET_DURATION_MS,
@@ -1150,7 +1155,8 @@
         return phase3Runtime;
     }
 
-    function renderDanmaku(message, scheduledGeneration = rendererGeneration, scheduledVideo = null, launchProof = null) {
+    function renderDanmaku(message, scheduledGeneration = rendererGeneration, scheduledVideo = null, launchProof = null,
+        settingsSnapshot = runtimeSettings) {
         if (!isEffectiveDisplayActive()) return { status: 'drop' };
         const media = getCurrentMainMedia();
         if (!media || !overlayCore?.isRendererTargetCurrent?.({
@@ -1186,7 +1192,7 @@
             return { status: resumeAtMs === null ? 'drop' : 'wait', resumeAtMs };
         }
 
-        const node = createDanmakuNode(normalized);
+        const node = createDanmakuNode(normalized, settingsSnapshot);
         const special = normalized.messageType === 'superChat' || normalized.messageType === 'superSticker';
         overlaySurface.appendChild(node);
         const specialFit = applySpecialFit(node, surfaceRect.width);
@@ -1329,8 +1335,9 @@
         ensurePlaybackContextObserver(media.player);
         const scheduledGeneration = rendererGeneration;
         const scheduledVideo = media.video;
+        const launchSettingsSnapshot = runtimeSettings;
         const visibleMessages = Array.isArray(messages)
-            ? messages.filter((message) => overlayCore.isMessageVisibleForSettings(message, runtimeSettings || {}))
+            ? messages.filter((message) => overlayCore.isMessageVisibleForSettings(message, launchSettingsSnapshot))
             : [];
         let enqueuedCount = 0;
         visibleMessages.forEach((message, index) => {
@@ -1338,7 +1345,8 @@
             message,
             generation: scheduledGeneration,
             pageLifecycleGeneration: currentPageLifecycleGeneration,
-            video: scheduledVideo
+            video: scheduledVideo,
+            settingsSnapshot: launchSettingsSnapshot
         }, {
             id: message.id || `${scheduledGeneration}:${performance.now()}:${index}`,
             enqueuedAt: performance.now(),

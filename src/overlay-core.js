@@ -99,12 +99,7 @@
 
     function isMessageVisibleForSettings(message, settings = {}) {
         if (!message) return false;
-        if (message.messageType === 'superChat') return settings.showSuperChat !== false;
-        if (message.messageType === 'superSticker') return settings.showSuperSticker !== false;
-        if (message.messageType !== 'text') return false;
-        const role = ['guest', 'member', 'moderator', 'owner'].includes(message.authorRole) ? message.authorRole : 'guest';
-        const key = { guest: 'showGuest', member: 'showMember', moderator: 'showModerator', owner: 'showOwner' }[role];
-        return settings[key] !== false;
+        return ['text', 'superChat', 'superSticker'].includes(message.messageType);
     }
 
     function shouldRenderAvatar(message, settings = {}) {

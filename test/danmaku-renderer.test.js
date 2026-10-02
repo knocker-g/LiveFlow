@@ -299,10 +299,10 @@ test('rich text normalization validates avatar URLs and role fallback', () => {
     assert.equal(normalizeImageUrl('not a url'), '');
 });
 
-test('implemented Guest visibility is settings-driven and unknown roles fail safe to Guest', () => {
+test('v1 semantic classes remain displayable regardless of legacy visibility flags', () => {
     assert.equal(isMessageVisibleForSettings({ messageType: 'text', authorRole: 'guest' }, { showGuest: true }), true);
-    assert.equal(isMessageVisibleForSettings({ messageType: 'text', authorRole: 'guest' }, { showGuest: false }), false);
-    assert.equal(isMessageVisibleForSettings({ messageType: 'text', authorRole: 'unknown' }, { showGuest: false }), false);
+    assert.equal(isMessageVisibleForSettings({ messageType: 'text', authorRole: 'guest' }, { showGuest: false }), true);
+    assert.equal(isMessageVisibleForSettings({ messageType: 'text', authorRole: 'unknown' }, { showGuest: false }), true);
     assert.equal(isMessageVisibleForSettings({ messageType: 'unknown' }, {}), false);
 });
 
@@ -330,11 +330,22 @@ test('emoji image setting switches validated image runs to safe alt text immedia
     assert.notEqual(normalizeDanmakuMessage({ messageType: 'text', message: '', messageRuns: [{ type: 'image', url: 'https://example.com/only.png', alt: '' }] }), null);
 });
 
-test('Super Chat and Super Sticker visibility follows enabled settings', () => {
+test('SPECIAL remains displayable regardless of legacy visibility flags', () => {
     assert.equal(isMessageVisibleForSettings({ messageType: 'superChat' }, { showSuperChat: true }), true);
-    assert.equal(isMessageVisibleForSettings({ messageType: 'superChat' }, { showSuperChat: false }), false);
+    assert.equal(isMessageVisibleForSettings({ messageType: 'superChat' }, { showSuperChat: false }), true);
     assert.equal(isMessageVisibleForSettings({ messageType: 'superSticker' }, { showSuperSticker: true }), true);
-    assert.equal(isMessageVisibleForSettings({ messageType: 'superSticker' }, { showSuperSticker: false }), false);
+    assert.equal(isMessageVisibleForSettings({ messageType: 'superSticker' }, { showSuperSticker: false }), true);
+});
+
+test('legacy false values do not change the displayable activity shape', () => {
+    const messages = [
+        { messageType: 'text', authorRole: 'guest' },
+        { messageType: 'text', authorRole: 'member' },
+        { messageType: 'superChat' },
+        { messageType: 'superSticker' }
+    ];
+    const legacyFalse = { showGuest: false, showMember: false, showSuperChat: false, showSuperSticker: false };
+    assert.equal(messages.filter((message) => isMessageVisibleForSettings(message, legacyFalse)).length, messages.length);
 });
 
 test('special messages normalize observed fields and malformed colors fall back safely', () => {
@@ -580,7 +591,7 @@ test('navigation invalidates renderer and cancels pending and active work', () =
 });
 
 test('stale timer callback verifies generation and video before DOM insertion', () => {
-    assert.match(runtimeSource, /launch: \(entry, proof\) => renderDanmaku\(entry\.message, entry\.generation, entry\.video, proof\)/);
+    assert.match(runtimeSource, /launch: \(entry, proof\) => renderDanmaku\(entry\.message, entry\.generation, entry\.video, proof, entry\.settingsSnapshot\)/);
     assert.match(runtimeSource, /scheduledGeneration,[^]*?currentGeneration: rendererGeneration[^]*?scheduledVideo/);
     assert.match(schedulerStateSource, /generation\(\) !== expectedGeneration[^]*?OUTCOMES\.INVALIDATED/);
 });
@@ -669,6 +680,11 @@ test('Native Chat visibility transitions do not disable or clean an enabled rend
 
     const userEnabled = getDisplayStateTransition(userDisabled, { userEnabled: true });
     assert.deepEqual(userEnabled, { userEnabled: true, nativeChatVisible: false, effectiveActive: true, cleanupRequired: false });
+});
+
+test('Native Chat linkage remains presentation-only and never starts or stops acquisition', () => {
+    const action = runtimeSource.match(/function applyDisplayAction\(action\) \{[^]*?\n    \}/)?.[0] || '';
+    assert.doesNotMatch(action, /requestReadOnce|STOP_READ_LOOP_TYPE|RESUME_READ_LOOP_TYPE|acceptingReadResults|currentPageRevision/);
 });
 
 test('closing Native Chat auto-enables LiveFlow only on a known open-to-closed edge', () => {
@@ -764,7 +780,7 @@ test('display controller persists only the user default while runtime state stay
     assert.match(runtimeSource, /setUserEnabled\(value\)/);
     assert.match(runtimeSource, /getUserEnabled\(\)/);
     assert.match(runtimeSource, /updateSettings\(storageArea, runtimeSettings, \{ displayEnabled: value \}\)/);
-    assert.match(runtimeSource, /if \(initializeDisplay\) userEnabled = normalized\.displayEnabled === true/);
+    assert.match(runtimeSource, /if \(initializeDisplay\) userEnabled = snapshot\.displayEnabled === true/);
     assert.match(runtimeSource, /storage\?\.onChanged\?\.addListener[^]*?applyPersistentSettings\(changes\[settingsCore\.STORAGE_KEY\]\.newValue\)/);
     assert.doesNotMatch(runtimeSource, /localStorage|sessionStorage/);
 });
@@ -781,7 +797,7 @@ test('persisted display default is applied before startup without cross-tab runt
     assert.match(runtimeSource, /initializePersistentSettings\(\)\.then\(\(\) => \{\s*if \(isYouTubeWatchPage\(\)\) detectPage\(\)/);
     assert.match(runtimeSource, /function detectPage\(\) \{\s*if \(!persistentSettingsReady\) return;/);
     const persistent = runtimeSource.match(/function applyPersistentSettings\(settings[^]*?\n    \}/)?.[0] || '';
-    assert.match(persistent, /if \(initializeDisplay\) userEnabled = normalized\.displayEnabled === true/);
+    assert.match(persistent, /if \(initializeDisplay\) userEnabled = snapshot\.displayEnabled === true/);
     const listener = runtimeSource.match(/storage\?\.onChanged\?\.addListener\([^]*?\n        \}\);/)?.[0] || '';
     assert.doesNotMatch(listener, /set-user-enabled|userEnabled\s*=/);
 });
@@ -955,7 +971,7 @@ test('ads are not eligible for main-content rendering and class transitions clea
 });
 
 test('candidate collision proof measures rendered geometry instead of fixed maximum widths', () => {
-    assert.match(runtimeSource, /const probe = createDanmakuNode\(normalized\)[^]*?const measured = probe\.getBoundingClientRect\(\)/);
+    assert.match(runtimeSource, /const probe = createDanmakuNode\(normalized, entry\.payload\.settingsSnapshot\)[^]*?const measured = probe\.getBoundingClientRect\(\)/);
     assert.match(runtimeSource, /const width = measured\.width;\s*const height = measured\.height/);
     assert.doesNotMatch(runtimeSource, /const width = Math\.min\(surface\.width, special \? 520 : 720\)/);
 });

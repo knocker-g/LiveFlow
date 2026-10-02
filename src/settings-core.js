@@ -26,14 +26,16 @@
     });
     const CAPABILITIES = Object.freeze({
         displayEnabled: true,
-        showGuest: true,
-        showSuperChat: true,
-        showSuperSticker: true,
         showAvatars: true,
+        opacityPercent: true,
         emojiImages: true,
         autoEnableLiveFlowWhenNativeChatClosed: true,
         autoOpenNativeChatWhenLiveFlowDisabled: true
     });
+    const LEGACY_SEMANTIC_KEYS = Object.freeze([
+        'showGuest', 'showMember', 'showModerator', 'showOwner', 'showYou',
+        'showSuperChat', 'showSuperSticker', 'showMembership'
+    ]);
     const BOOLEAN_KEYS = Object.freeze([
         'displayEnabled', 'showGuest', 'showMember', 'showModerator', 'showOwner', 'showYou',
         'showSuperChat', 'showSuperSticker', 'showMembership', 'showAvatars',
@@ -53,12 +55,31 @@
         for (const key of BOOLEAN_KEYS) {
             normalized[key] = typeof source[key] === 'boolean' ? source[key] : DEFAULT_SETTINGS[key];
         }
+        // v1 preserves these fields for storage compatibility, but semantic classes are never user-filtered.
+        for (const key of LEGACY_SEMANTIC_KEYS) normalized[key] = true;
         normalized.fontSizeMode = source.fontSizeMode === 'manual' ? 'manual' : 'auto';
         normalized.fontScalePercent = clampNumber(source.fontScalePercent, 70, 150, DEFAULT_SETTINGS.fontScalePercent);
         normalized.commentDurationMs = clampNumber(source.commentDurationMs, 4000, 12000, DEFAULT_SETTINGS.commentDurationMs);
         normalized.opacityPercent = clampNumber(source.opacityPercent, 0, 100, DEFAULT_SETTINGS.opacityPercent);
         normalized.version = SETTINGS_VERSION;
         return normalized;
+    }
+
+    function createSettingsSnapshot(value) {
+        const normalized = normalizeSettings(value);
+        return Object.freeze({
+            schemaVersion: SETTINGS_VERSION,
+            displayEnabled: normalized.displayEnabled,
+            showAvatars: normalized.showAvatars,
+            showPinnedComments: normalized.showPinnedComments,
+            fontSizeMode: normalized.fontSizeMode,
+            fontScalePercent: normalized.fontScalePercent,
+            opacityPercent: normalized.opacityPercent,
+            emojiImages: normalized.emojiImages,
+            avoidSubtitles: normalized.avoidSubtitles,
+            autoEnableLiveFlowWhenNativeChatClosed: normalized.autoEnableLiveFlowWhenNativeChatClosed,
+            autoOpenNativeChatWhenLiveFlowDisabled: normalized.autoOpenNativeChatWhenLiveFlowDisabled
+        });
     }
 
     function getStoredSettings(storageArea) {
@@ -98,6 +119,7 @@
         DEFAULT_SETTINGS,
         CAPABILITIES,
         normalizeSettings,
+        createSettingsSnapshot,
         getStoredSettings,
         persistSettings,
         updateSettings,

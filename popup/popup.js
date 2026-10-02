@@ -2,21 +2,11 @@
     const core = globalThis.LiveFlowSettingsCore;
     const storageArea = globalThis.chrome?.storage?.local;
     const definitions = [
-        ['comments-controls', 'showGuest', 'guestComments', 'checkbox'],
-        ['comments-controls', 'showMember', 'memberComments', 'checkbox'],
-        ['comments-controls', 'showModerator', 'moderatorComments', 'checkbox'],
-        ['comments-controls', 'showOwner', 'ownerComments', 'checkbox'],
-        ['comments-controls', 'showYou', 'yourComments', 'checkbox'],
-        ['comments-controls', 'showSuperChat', 'superChatComments', 'checkbox'],
-        ['comments-controls', 'showSuperSticker', 'superStickerComments', 'checkbox'],
-        ['comments-controls', 'showMembership', 'membershipComments', 'checkbox'],
         ['comments-controls', 'showAvatars', 'showAvatars', 'checkbox'],
         ['comments-controls', 'showPinnedComments', 'showPinnedComments', 'checkbox'],
         ['appearance-controls', 'fontSizeMode', 'fontSize', 'select'],
-        ['appearance-controls', 'commentDurationMs', 'commentSpeed', 'range'],
         ['appearance-controls', 'opacityPercent', 'opacity', 'range'],
         ['appearance-controls', 'emojiImages', 'emojiImages', 'checkbox'],
-        ['adaptive-controls', 'adaptiveDensity', 'adaptiveDensity', 'checkbox'],
         ['adaptive-controls', 'avoidSubtitles', 'avoidSubtitles', 'checkbox'],
         ['native-chat-controls', 'autoEnableLiveFlowWhenNativeChatClosed', 'chatClosedEnablesLiveFlow', 'checkbox'],
         ['native-chat-controls', 'autoOpenNativeChatWhenLiveFlowDisabled', 'liveFlowOffOpensChat', 'checkbox']
@@ -48,7 +38,6 @@
             control.append(option);
         } else {
             control.type = type;
-            if (key === 'commentDurationMs') { control.min = '4000'; control.max = '12000'; control.step = '1000'; }
             if (key === 'opacityPercent') { control.min = '0'; control.max = '100'; control.step = '5'; }
         }
         control.disabled = core.CAPABILITIES[key] !== true;
@@ -73,7 +62,8 @@
     async function handleChange(event) {
         const control = event.currentTarget;
         if (control.disabled) return;
-        const value = control.type === 'checkbox' ? control.checked : Number(control.value);
+        const value = control.type === 'checkbox' ? control.checked
+            : control.tagName === 'SELECT' ? control.value : Number(control.value);
         settings = await core.updateSettings(storageArea, settings, { [control.dataset.setting]: value });
         render();
         showStatus('settingsSaved');
