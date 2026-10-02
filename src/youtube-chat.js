@@ -758,6 +758,8 @@
     function applyPersistentSettings(settings, { initializeDisplay = false } = {}) {
         const snapshot = window.LiveFlowSettingsCore?.createSettingsSnapshot?.(settings);
         if (!snapshot) return;
+        const fontMetricsChanged = runtimeSettings.fontSizeMode !== snapshot.fontSizeMode ||
+            runtimeSettings.fontScalePercent !== snapshot.fontScalePercent;
         runtimeSettings = snapshot;
         if (initializeDisplay) userEnabled = snapshot.displayEnabled === true;
         displayLinkSettings = Object.freeze({
@@ -765,6 +767,7 @@
             autoOpenNativeChatWhenLiveFlowDisabled: snapshot.autoOpenNativeChatWhenLiveFlowDisabled
         });
         if (overlaySurface) overlaySurface.style.opacity = String(snapshot.opacityPercent / 100);
+        if (fontMetricsChanged) phase3Runtime?.markGeometryDirty(geometryCore.DIRTY_SIGNALS.FONT_METRICS);
     }
 
     function persistDisplayDefault(value) {
@@ -1020,6 +1023,7 @@
         if (!media || !overlayCore.isMainContentPlaybackEligible(media.player, media.video)) return { blockedReason: 'OTHER' };
         const normalized = overlayCore.normalizeDanmakuMessage(entry.payload.message);
         if (!normalized) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
+        entry.payload.settingsSnapshot = runtimeSettings;
         const playerRect = media.player.getBoundingClientRect();
         const videoRect = media.video.getBoundingClientRect();
         const surface = overlayCore.calculateVideoSurfaceRect(playerRect, videoRect);
@@ -1039,7 +1043,8 @@
         }
         const measured = probe.getBoundingClientRect();
         probe.remove();
-        const width = measured.width;
+        const metrics = overlayCore.createRenderedTextMetrics(normalized.text, measured.width);
+        const width = metrics?.renderedWidth;
         const height = measured.height;
         if (![width, height].every(Number.isFinite) || width <= 0 || height <= 0) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
         const laneSpan = 1;
@@ -1201,7 +1206,8 @@
             return { status: 'drop' };
         }
         const renderedRect = node.getBoundingClientRect();
-        const commentWidth = renderedRect.width;
+        const metrics = overlayCore.createRenderedTextMetrics(normalized.text, renderedRect.width);
+        const commentWidth = metrics?.renderedWidth;
         const baseDurationMs = overlayCore.calculateCompensatedDanmakuDuration(surfaceRect.width, commentWidth);
         const playbackRate = currentChatMode === 'replay' ? video.playbackRate : 1;
         const replayFactor = currentChatMode === 'replay' ? overlayCore.calculateReplayPlaybackRateFactor(playbackRate) : 1;

@@ -167,6 +167,8 @@ test('active runtime applies storage changes without reload or polling', () => {
     assert.match(source, /createDanmakuNode\(normalized, entry\.payload\.settingsSnapshot\)/);
     assert.match(source, /overlaySurface\.style\.opacity = String\(snapshot\.opacityPercent \/ 100\)/);
     const applySettings = source.match(/function applyPersistentSettings\(settings[^]*?\n    \}/)?.[0] || '';
-    assert.doesNotMatch(applySettings, /geometryRevision|markGeometryDirty|cleanupOverlay|activeDanmaku/);
+    assert.match(applySettings, /fontMetricsChanged[^]*?markGeometryDirty\(geometryCore\.DIRTY_SIGNALS\.FONT_METRICS\)/);
+    assert.doesNotMatch(applySettings, /cleanupOverlay|activeDanmaku/);
+    assert.match(source, /entry\.payload\.settingsSnapshot = runtimeSettings/);
     assert.doesNotMatch(source, /setInterval|location\.reload/);
 });

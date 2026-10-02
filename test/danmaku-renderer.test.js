@@ -10,6 +10,8 @@ const {
     calculateDanmakuMotion,
     canRenderDanmaku,
     normalizeDanmakuMessage,
+    segmentGraphemes,
+    createRenderedTextMetrics,
     getDanmakuLaneSpan,
     normalizeImageUrl,
     isMessageVisibleForSettings,
@@ -195,13 +197,26 @@ test('motion rejects zero and invalid dimensions', () => {
     assert.equal(calculateDanmakuMotion({ overlayWidth: 100, commentWidth: 20, speed: Number.NaN, startTimeMs: 0 }), null);
 });
 
-test('empty, unknown, and excessively long messages are ignored safely', () => {
+test('normalization preserves source text and applies a grapheme-safe safety bound', () => {
     assert.equal(normalizeDanmakuMessage({ messageType: 'text', message: '   ' }), null);
     assert.equal(normalizeDanmakuMessage({ messageType: 'unknown', message: 'hello' }), null);
     assert.equal(normalizeDanmakuMessage({ messageType: 'text', message: 'x'.repeat(DANMAKU_MAX_MESSAGE_LENGTH + 1) }), null);
+    assert.notEqual(normalizeDanmakuMessage({ messageType: 'text', message: '👩‍💻'.repeat(200) }), null);
     assert.deepEqual(normalizeDanmakuMessage({ id: 'a', authorName: 'Alice', messageType: 'text', message: ' hello ' }), {
-        id: 'a', text: 'hello', authorName: 'Alice', authorPhoto: '', authorRole: 'guest', timestampUsec: '', laneSpan: 1, messageRuns: [{ type: 'text', text: 'hello' }]
+        id: 'a', text: ' hello ', authorName: 'Alice', authorPhoto: '', authorRole: 'guest', timestampUsec: '', laneSpan: 1, messageRuns: [{ type: 'text', text: ' hello ' }]
     });
+});
+
+test('Unicode-safe metrics preserve text and use rendered width as horizontal authority', () => {
+    const samples = [
+        ['ASCII', 5], ['日本語', 3], ['ＡB１', 3], ['👩‍💻', 1], ['e\u0301', 1], ['✈️', 1]
+    ];
+    for (const [text, count] of samples) assert.equal(segmentGraphemes(text).length, count);
+    const text = '  日本語👩‍💻e\u0301  ';
+    const metrics = createRenderedTextMetrics(text, 812.5);
+    assert.deepEqual(metrics, { text, graphemeCount: 9, renderedWidth: 812.5 });
+    assert.equal(Object.isFrozen(metrics), true);
+    assert.equal(createRenderedTextMetrics(text, 0), null);
 });
 
 test('continuous launch planning preserves order and state across response batches', () => {
@@ -276,7 +291,7 @@ test('rich text uses sharp strokes and special cards keep opaque white flexible 
     assert.match(runtimeSource, /liveflow-danmaku-amount \{ flex: 0 0 auto; white-space: nowrap/);
     assert.doesNotMatch(runtimeSource, /liveflow-danmaku-amount[^}]*text-overflow:\s*ellipsis/);
     assert.match(runtimeSource, /liveflow-danmaku-special \.liveflow-danmaku-author[^}]*overflow: visible[^}]*text-overflow: clip[^}]*white-space: nowrap/);
-    assert.match(runtimeSource, /const renderedRect = node\.getBoundingClientRect\(\)[^]*?const commentWidth = renderedRect\.width[^]*?calculateCompensatedDanmakuDuration\(surfaceRect\.width, commentWidth\)/);
+    assert.match(runtimeSource, /const renderedRect = node\.getBoundingClientRect\(\)[^]*?createRenderedTextMetrics\(normalized\.text, renderedRect\.width\)[^]*?const commentWidth = metrics\?\.renderedWidth[^]*?calculateCompensatedDanmakuDuration\(surfaceRect\.width, commentWidth\)/);
 });
 
 test('runtime smoothing uses one-shot Phase 3 pacing without response-boundary reset or burst credit', () => {
@@ -650,6 +665,13 @@ test('renderer uses browser animation and removes completed or torn-down comment
     assert.doesNotMatch(runtimeSource, /setInterval\s*\(|innerHTML|requestAnimationFrame/);
 });
 
+test('launch freezes measured footprint and velocity without per-frame remeasurement', () => {
+    assert.match(runtimeSource, /visualFootprint: Object\.freeze\(\{ width: commentWidth, height: renderedRect\.height/);
+    assert.match(runtimeSource, /trajectory: Object\.freeze\([^]*?width: commentWidth[^]*?velocity: speed/);
+    assert.match(runtimeSource, /duration: motion\.durationMs/);
+    assert.doesNotMatch(runtimeSource, /requestAnimationFrame[^]*getBoundingClientRect/);
+});
+
 test('overlay root is reused and remains non-interactive', () => {
     assert.match(runtimeSource, /overlayRoot\?\.isConnected && overlayRoot\.parentElement === player/);
     assert.match(runtimeSource, /pointer-events:none/);
@@ -972,7 +994,7 @@ test('ads are not eligible for main-content rendering and class transitions clea
 
 test('candidate collision proof measures rendered geometry instead of fixed maximum widths', () => {
     assert.match(runtimeSource, /const probe = createDanmakuNode\(normalized, entry\.payload\.settingsSnapshot\)[^]*?const measured = probe\.getBoundingClientRect\(\)/);
-    assert.match(runtimeSource, /const width = measured\.width;\s*const height = measured\.height/);
+    assert.match(runtimeSource, /createRenderedTextMetrics\(normalized\.text, measured\.width\);\s*const width = metrics\?\.renderedWidth;\s*const height = measured\.height/);
     assert.doesNotMatch(runtimeSource, /const width = Math\.min\(surface\.width, special \? 520 : 720\)/);
 });
 

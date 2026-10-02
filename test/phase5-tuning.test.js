@@ -23,6 +23,7 @@ test('length-aware velocity is measured-width based, bounded, and launch-time im
     const widths = [160, 360, 720, 1400];
     const speeds = widths.map((width) => applyLengthAwareVelocity(150, width, 1280, CURRENT.lengthVelocity, CURRENT.maximumSpeed));
     assert.ok(speeds[0] <= speeds[1] && speeds[1] <= speeds[2] && speeds[2] <= speeds[3]);
+    assert.ok(speeds.at(-1) > speeds[0]);
     assert.ok(speeds.every((speed) => speed <= CURRENT.maximumSpeed));
     assert.ok(applyLengthAwareVelocity(150, 160, 1280, CURRENT.lengthVelocity, CURRENT.maximumSpeed) > 150);
 });

@@ -23,6 +23,21 @@
     const DANMAKU_MAX_TIMESTAMP_GAP_MS = 450;
     const DANMAKU_MIN_TARGET_DURATION_MS = 6400;
 
+    function segmentGraphemes(value) {
+        if (typeof value !== 'string' || value.length === 0) return Object.freeze([]);
+        if (typeof Intl?.Segmenter === 'function') {
+            const segmenter = new Intl.Segmenter('und', { granularity: 'grapheme' });
+            return Object.freeze(Array.from(segmenter.segment(value), ({ segment }) => segment));
+        }
+        // Chrome supports Intl.Segmenter; this fallback keeps code points intact without UTF-16 splitting.
+        return Object.freeze(Array.from(value));
+    }
+
+    function createRenderedTextMetrics(text, renderedWidth) {
+        if (typeof text !== 'string' || !Number.isFinite(renderedWidth) || renderedWidth <= 0) return null;
+        return Object.freeze({ text, graphemeCount: segmentGraphemes(text).length, renderedWidth });
+    }
+
     function mergeMessagesById(currentMessages, incomingMessages, maxMessages = 500) {
         const messages = Array.isArray(currentMessages) ? currentMessages.slice() : [];
         const ids = new Set(messages.map((message) => message?.id).filter(Boolean));
@@ -49,7 +64,8 @@
 
     function normalizeDanmakuMessage(message) {
         if (!message || !['text', 'superChat', 'superSticker'].includes(message.messageType) || typeof message.message !== 'string') return null;
-        const text = message.message.trim();
+        const text = message.message;
+        const visibleText = text.trim();
         const purchaseAmountText = typeof message.purchaseAmountText === 'string' ? message.purchaseAmountText.trim() : '';
         const sticker = message.messageType === 'superSticker' && message.sticker
             ? { url: normalizeImageUrl(message.sticker.url), alt: typeof message.sticker.alt === 'string' ? message.sticker.alt : '' }
@@ -62,8 +78,9 @@
                 const url = normalizeImageUrl(run.url);
                 return url ? [{ type: 'image', url, alt: typeof run.alt === 'string' ? run.alt : '', isCustomEmoji: run.isCustomEmoji === true }] : [];
             })
-            : text ? [{ type: 'text', text }] : [];
-        if ((!text && messageRuns.length === 0 && !purchaseAmountText && !sticker?.url) || text.length > DANMAKU_MAX_MESSAGE_LENGTH) return null;
+            : visibleText ? [{ type: 'text', text }] : [];
+        if ((!visibleText && messageRuns.length === 0 && !purchaseAmountText && !sticker?.url) ||
+            segmentGraphemes(text).length > DANMAKU_MAX_MESSAGE_LENGTH) return null;
         const normalized = {
             id: typeof message.id === 'string' ? message.id : '',
             text,
@@ -636,6 +653,8 @@
         getVisibleMessages,
         formatMessageText,
         normalizeDanmakuMessage,
+        segmentGraphemes,
+        createRenderedTextMetrics,
         getDanmakuLaneSpan,
         normalizeImageUrl,
         isMessageVisibleForSettings,

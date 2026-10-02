@@ -124,6 +124,19 @@ test('SUB-18 fullscreen and observer signals mark dirty without making launch de
     assert.equal(adapter.status().geometry.state, GEOMETRY_STATES.KNOWN_EMPTY);
 });
 
+test('font metrics dirty signal advances geometry revision after current geometry is refreshed', () => {
+    const authority = createGeometryAuthority({ epsilon: 1 });
+    const adapter = createSubtitleGeometryAdapter({ authority, readGeometry: () => compute([]) });
+    adapter.refresh();
+    const before = adapter.status().revision;
+    assert.equal(adapter.markDirty(DIRTY_SIGNALS.FONT_METRICS), true);
+    assert.equal(adapter.status().revision, before);
+    const refreshed = adapter.refresh();
+    assert.equal(refreshed.changed, true);
+    assert.equal(refreshed.revision, before + 1);
+    assert.equal(adapter.refresh().revision, before + 1);
+});
+
 test('SUB-19 capability failure disables avoidance without requesting global stop', () => {
     const authority = createGeometryAuthority({ epsilon: 1 });
     const adapter = createSubtitleGeometryAdapter({

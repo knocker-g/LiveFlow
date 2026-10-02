@@ -8,7 +8,8 @@
         MUTATION: 'MUTATION',
         RESIZE: 'RESIZE',
         FULLSCREEN: 'FULLSCREEN',
-        VIDEO_GEOMETRY: 'VIDEO_GEOMETRY'
+        VIDEO_GEOMETRY: 'VIDEO_GEOMETRY',
+        FONT_METRICS: 'FONT_METRICS'
     });
 
     function validRect(rect) {
@@ -121,6 +122,10 @@
         }
         return Object.freeze({
             update,
+            advanceRevision() {
+                revision += 1;
+                return revision;
+            },
             snapshot: () => Object.freeze({ revision, geometry }),
             revision: () => revision
         });
@@ -130,16 +135,23 @@
         if (!authority || typeof authority.update !== 'function' || typeof authority.snapshot !== 'function' || typeof readGeometry !== 'function') return null;
         let dirty = true;
         let lastDirtySignal = null;
+        let forceRevision = false;
         function markDirty(signal) {
             if (!Object.values(DIRTY_SIGNALS).includes(signal)) return false;
             dirty = true;
             lastDirtySignal = signal;
+            if (signal === DIRTY_SIGNALS.FONT_METRICS) forceRevision = true;
             return true;
         }
         function refresh() {
             if (!dirty) return Object.freeze({ refreshed: false, changed: false, ...authority.snapshot() });
             const next = readGeometry();
-            const changed = authority.update(next);
+            let changed = authority.update(next);
+            if (forceRevision && !changed && typeof authority.advanceRevision === 'function') {
+                authority.advanceRevision();
+                changed = true;
+            }
+            forceRevision = false;
             dirty = false;
             return Object.freeze({ refreshed: true, changed, ...authority.snapshot() });
         }
