@@ -642,7 +642,7 @@
             .liveflow-danmaku-author { flex: 0 0 auto; font-weight: 700; }
             .liveflow-danmaku-message { flex: 0 0 auto; min-width: 0; overflow: visible; text-overflow: clip; white-space: nowrap; }
             .liveflow-danmaku-emoji { width: 1.2em; height: 1.2em; object-fit: contain; vertical-align: middle; }
-            .liveflow-danmaku-special { box-sizing: border-box; display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: max-content; min-width: 180px; min-height: 68px; height: auto; padding: 4px 8px; overflow: visible; border-radius: 8px; background: rgba(24,24,24,.8); color: #fff; -webkit-text-stroke: .35px rgba(0,0,0,.85); }
+            .liveflow-danmaku-special { box-sizing: border-box; display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: max-content; min-width: 180px; min-height: 68px; height: auto; padding: 4px 8px; overflow: visible; border-radius: 8px; background: rgba(24,24,24,.8); color: #fff; }
             .liveflow-danmaku-special-header, .liveflow-danmaku-special-body { display: flex; min-width: 0; align-items: center; gap: 6px; }
             .liveflow-danmaku-special-header { flex: 0 0 28px; white-space: nowrap; }
             .liveflow-danmaku-special-body { flex: 1 1 28px; overflow: visible; white-space: nowrap; }
@@ -650,10 +650,11 @@
             .liveflow-danmaku-special .liveflow-danmaku-author { flex: 0 0 auto; min-width: 0; overflow: visible; text-overflow: clip; white-space: nowrap; color: #fff; }
             .liveflow-danmaku-amount { flex: 0 0 auto; white-space: nowrap; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.25); color: #fff; font-weight: 700; }
             .liveflow-danmaku-sticker { flex: 0 0 32px; width: 32px; height: 32px; object-fit: contain; }
-            .liveflow-danmaku[data-author-role="guest"] { color: #fff; -webkit-text-stroke: .45px #202020; }
+            .liveflow-danmaku[data-author-role="guest"] { color: #fff; -webkit-text-stroke: 1.1px #202020; paint-order: stroke fill; }
             .liveflow-danmaku[data-author-role="member"] { color: #66e08a; -webkit-text-stroke: .45px #12381d; }
             .liveflow-danmaku[data-author-role="moderator"] { color: #70b7ff; -webkit-text-stroke: .45px #183b5c; }
             .liveflow-danmaku[data-author-role="owner"] { color: #ffd75e; -webkit-text-stroke: .45px #564813; }
+            .liveflow-danmaku.liveflow-danmaku-special { -webkit-text-stroke: .8px rgba(0,0,0,.85); paint-order: stroke fill; }
             .liveflow-danmaku img { -webkit-text-stroke: 0; }
             @keyframes liveflow-read-indicator { from { opacity: .35; } to { opacity: 1; } }
             @media (prefers-reduced-motion: reduce) {

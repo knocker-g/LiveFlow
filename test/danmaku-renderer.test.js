@@ -284,7 +284,11 @@ test('special card color alpha is bounded and invalid colors fail closed', () =>
 
 test('rich text uses sharp strokes and special cards keep opaque white flexible headers', () => {
     assert.doesNotMatch(runtimeSource, /text-shadow\s*:/);
-    assert.match(runtimeSource, /-webkit-text-stroke/);
+    assert.match(runtimeSource, /liveflow-danmaku\[data-author-role="guest"\][^}]*-webkit-text-stroke:\s*1\.1px #202020;[^}]*paint-order:\s*stroke fill/);
+    assert.match(runtimeSource, /liveflow-danmaku\.liveflow-danmaku-special[^}]*-webkit-text-stroke:\s*\.8px rgba\(0,0,0,\.85\);[^}]*paint-order:\s*stroke fill/);
+    assert.match(runtimeSource, /liveflow-danmaku\[data-author-role="member"\][^}]*-webkit-text-stroke:\s*\.45px #12381d/);
+    assert.match(runtimeSource, /liveflow-danmaku\[data-author-role="moderator"\][^}]*-webkit-text-stroke:\s*\.45px #183b5c/);
+    assert.match(runtimeSource, /liveflow-danmaku\[data-author-role="owner"\][^}]*-webkit-text-stroke:\s*\.45px #564813/);
     assert.match(runtimeSource, /\.liveflow-danmaku img \{ -webkit-text-stroke: 0/);
     assert.match(runtimeSource, /withCssColorAlpha\(backgroundColor, 0\.8\)/);
     assert.match(runtimeSource, /node\.style\.color = '#FFFFFF'/);
