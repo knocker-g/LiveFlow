@@ -1445,10 +1445,15 @@
         activeLoopGeneration = 0;
         if (activeAbortController) activeAbortController.abort();
         activeAbortController = null;
-        replayPausedSequentialAuthority = replayObservedSequentialAuthority;
+        replayPausedSequentialAuthority = replayControlPlaneCore?.retainSequentialAuthorityForMediaPause?.(
+            replayPausedSequentialAuthority, replayObservedSequentialAuthority
+        ) || replayPausedSequentialAuthority || replayObservedSequentialAuthority;
         replayObservedSequentialAuthority = null;
         replayAcquisitionPausedForBuffer = Boolean(replayPausedSequentialAuthority);
         replaySequentialResumeHandoff = Boolean(replayPausedSequentialAuthority);
+        const retainedDiagnostic = savedSequentialDiagnostic();
+        replayPipelineDiagnostic.bufferSavedContinuationState = retainedDiagnostic?.authorityState || 'NONE';
+        replayPipelineDiagnostic.unreadSequentialAuthorityAvailable = retainedDiagnostic?.authorityState === 'OBSERVED_UNUSED';
         readStopReason = 'playback-paused';
         replayRestartDiagnostic.lastStopReason = 'PAUSED';
         return true;

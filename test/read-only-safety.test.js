@@ -543,7 +543,9 @@ test('Replay media pause preserves pending and the observed unused sequential au
     const suspend = pageStateSource.match(/function suspendReplayForMediaPause\(\) \{[^]*?\n    \}/)?.[0] || '';
     const pauseHandler = pageStateSource.match(/addEventListener\('pause'[^]*?\}, true\);/)?.[0] || '';
     const resumePath = pageStateSource.match(/restartReason === 'RESUME' && readStopReason === 'playback-paused'[^]*?return;/)?.[0] || '';
-    assert.match(suspend, /replayPausedSequentialAuthority = replayObservedSequentialAuthority/);
+    assert.match(suspend, /retainSequentialAuthorityForMediaPause\?\.\([^]*replayPausedSequentialAuthority, replayObservedSequentialAuthority/);
+    assert.match(suspend, /bufferSavedContinuationState = retainedDiagnostic\?\.authorityState/);
+    assert.match(suspend, /unreadSequentialAuthorityAvailable = retainedDiagnostic\?\.authorityState === 'OBSERVED_UNUSED'/);
     assert.match(suspend, /replayAcquisitionPausedForBuffer = Boolean\(replayPausedSequentialAuthority\)/);
     assert.doesNotMatch(suspend, /replayPending\s*=\s*\[\]/);
     assert.doesNotMatch(pauseHandler, /stopReadLoop|stopReplayContext/);

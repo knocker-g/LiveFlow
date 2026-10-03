@@ -394,6 +394,10 @@
         return Object.freeze({ action: 'ALIGN_ONCE', reason: coverage });
     }
 
+    function retainSequentialAuthorityForMediaPause(savedAuthority, observedAuthority) {
+        return savedAuthority || observedAuthority || null;
+    }
+
     function createShadowController(initialState = createReplayState(ReplayPhase.STOPPED)) {
         let state = initialState || createReplayState(ReplayPhase.STOPPED);
         let transitionCount = 0;
@@ -442,7 +446,8 @@
         createCapabilitySnapshot, canUseCapabilityPath, classifyForegroundHiddenDurationMs,
         evaluateForegroundRetainedDiagnosticEligibility,
         evaluateForegroundRecoveryEligibility,
-        createReplayState, reduceReplayControlState, evaluateInitialReplayAlignment, createShadowController
+        createReplayState, reduceReplayControlState, evaluateInitialReplayAlignment,
+        retainSequentialAuthorityForMediaPause, createShadowController
     });
 
     if (typeof module !== 'undefined' && module.exports) module.exports = api;

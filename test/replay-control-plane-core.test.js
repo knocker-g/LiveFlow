@@ -450,6 +450,18 @@ test('reducer models suspend precedence and media pause resume targets', () => {
     assert.equal(failed.requestIntent, 'NONE');
 });
 
+test('media pause preserves an already saved sequential authority while buffer paused', () => {
+    const saved = { identity: 'saved-sequential' };
+    const observed = { identity: 'observed-sequential' };
+
+    assert.equal(core.retainSequentialAuthorityForMediaPause(saved, null), saved,
+        'BUFFER_PAUSED owns the saved unused authority even when no loop-local candidate exists');
+    assert.equal(core.retainSequentialAuthorityForMediaPause(null, observed), observed,
+        'READING transfers the loop-local observed authority into pause storage');
+    assert.equal(core.retainSequentialAuthorityForMediaPause(null, null), null,
+        'no authority is invented when neither owner has one');
+});
+
 test('seek precedence, failure closure, and rate change are explicit', () => {
     for (const state of [
         core.createReplayState('READING'),
