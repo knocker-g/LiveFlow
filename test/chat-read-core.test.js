@@ -1110,6 +1110,39 @@ test('observed next Replay continuation remains unused until it becomes request 
     assert.equal(classifySequentialContinuationProgress('C1', c2.info.continuation, consumed), 'ADVANCED');
 });
 
+test('Replay SINGLE_UNUSED candidate advances before local presentation runway expires', () => {
+    const { validateReplayChatReadResponse, getReplayCoverageAwareReadDelayMs } = require('../src/chat-read-core.js');
+    const response = { continuationContents: { liveChatContinuation: {
+        actions: [],
+        continuations: [{ liveChatReplayContinuationData: {
+            continuation: 'C1', timeUntilLastMessageMsec: 188000
+        } }]
+    } } };
+    const validation = validateReplayChatReadResponse(response, {
+        requestContinuation: 'C0', consumedContinuations: new Set(['C0'])
+    });
+
+    assert.equal(validation.ok, true);
+    assert.equal(validation.continuationCandidateState, 'SINGLE_UNUSED');
+    assert.equal(validation.continuationInfo.continuation, 'C1');
+    assert.equal(validation.effectiveDelayMs, 188000);
+    assert.equal(getReplayCoverageAwareReadDelayMs(validation.effectiveDelayMs, [
+        { replayOffsetMsec: 105000 }, { replayOffsetMsec: 110000 }
+    ], 100), 9000);
+    assert.match(pageStateSource, /getReplayCoverageAwareReadDelayMs\?\.\([^]*replayPending[^]*getCurrentMainVideo\(\)\?\.currentTime/);
+    assert.match(pageStateSource, /waitForNextRead\(nextReadDelayMs, generation\)/);
+});
+
+test('Replay coverage-aware cadence is bounded, fail-closed, and does not alter due timing', () => {
+    const { getReplayCoverageAwareReadDelayMs, selectReplayDueMessages } = require('../src/chat-read-core.js');
+    const future = [{ id: 'future', replayOffsetMsec: 110000 }];
+    assert.equal(getReplayCoverageAwareReadDelayMs(5000, future, 100), 5000);
+    assert.equal(getReplayCoverageAwareReadDelayMs(188000, [], 100), LIVEFLOW_MIN_READ_DELAY_MS);
+    assert.equal(getReplayCoverageAwareReadDelayMs(188000, [{ replayOffsetMsec: Number.NaN }], 100), null);
+    assert.equal(getReplayCoverageAwareReadDelayMs(188000, future, Number.NaN), null);
+    assert.deepEqual(selectReplayDueMessages(future, 100, 100), { due: [], pending: future });
+});
+
 test('Replay validation advances C0 through C3 and rejects ambiguous unused candidates', () => {
     const { validateReplayChatReadResponse } = require('../src/chat-read-core.js');
     const response = (...next) => ({ continuationContents: { liveChatContinuation: {

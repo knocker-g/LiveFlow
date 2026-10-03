@@ -2296,7 +2296,18 @@
             if (mode === 'replay' && ['REPEATED', 'RETURNED_TO_SEEN', 'MISSING'].includes(replayPipelineDiagnostic.sequentialContinuationProgress)) break;
             if (mode !== 'replay') continuation = continuationInfo.continuation;
             if (mode === 'replay') continuationSource = 'SEQUENTIAL_RESPONSE';
-            if (!await waitForNextRead(result.effectiveDelayMs, generation)) break;
+            let nextReadDelayMs = result.effectiveDelayMs;
+            if (mode === 'replay') {
+                nextReadDelayMs = core?.getReplayCoverageAwareReadDelayMs?.(
+                    result.effectiveDelayMs, replayPending, getCurrentMainVideo()?.currentTime
+                );
+                if (!Number.isFinite(nextReadDelayMs)) {
+                    observeReplayControlShadow('AUTHORITY_FAILURE');
+                    setReplayRestartStage('FAILED_CLOSED', 'OTHER', diagnosticSequence);
+                    break;
+                }
+            }
+            if (!await waitForNextRead(nextReadDelayMs, generation)) break;
         }
 
         if (activeLoopGeneration === generation) {

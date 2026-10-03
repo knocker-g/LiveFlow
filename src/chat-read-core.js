@@ -601,6 +601,22 @@
         return Math.max(timeoutMs, LIVEFLOW_MIN_READ_DELAY_MS);
     }
 
+    function getReplayCoverageAwareReadDelayMs(serverDelayMs, messages, currentTimeSeconds) {
+        const advisoryDelayMs = getReadDelayMs(serverDelayMs);
+        if (advisoryDelayMs === null || !Array.isArray(messages) || !Number.isFinite(currentTimeSeconds) || currentTimeSeconds < 0) {
+            return null;
+        }
+        const currentOffsetMsec = currentTimeSeconds * 1000;
+        let latestFutureOffsetMsec = currentOffsetMsec;
+        for (const message of messages) {
+            if (!Number.isFinite(message?.replayOffsetMsec)) return null;
+            if (message.replayOffsetMsec > latestFutureOffsetMsec) latestFutureOffsetMsec = message.replayOffsetMsec;
+        }
+        const runwayMs = Math.max(0, latestFutureOffsetMsec - currentOffsetMsec);
+        const runwayReadDelayMs = Math.max(LIVEFLOW_MIN_READ_DELAY_MS, runwayMs - LIVEFLOW_MIN_READ_DELAY_MS);
+        return Math.min(advisoryDelayMs, runwayReadDelayMs);
+    }
+
     function validateLiveChatReadResponse(response) {
         if (!response || typeof response !== 'object' || Array.isArray(response)) {
             return { ok: false, errorType: 'unexpected_response_shape' };
@@ -1543,6 +1559,7 @@
         getPageRevisionState,
         canIssueSecondRead,
         getReadDelayMs,
+        getReplayCoverageAwareReadDelayMs,
         validateLiveChatReadResponse,
         isSuccessfulHttpStatus,
         canStartReadLoop,
