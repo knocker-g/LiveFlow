@@ -1042,7 +1042,8 @@ test('DENSE and MAX_READABLE add bounded half-pitch anchors without changing dis
 
 test('COMPACT adds limited subtitle-safe secondary anchors after primary placement', () => {
     assert.match(runtimeSource, /const secondaryCandidates = \[\]/);
-    assert.match(runtimeSource, /rankDensityRescuePlacements\(\s*band, secondaryCandidates, activeComments, entry\.id, densityPolicy\.density/);
+    assert.match(runtimeSource, /selectDensityRescueLaneExpansion\(\s*primaryCandidates, densityPolicy, phase5Tuning\.laneBandFractions/);
+    assert.match(runtimeSource, /rankDensityRescuePlacements\(\s*band, secondaryCandidates, expansionCandidates, activeComments, entry\.id, densityPolicy\.density/);
     assert.match(runtimeSource, /if \(lane >= reservedBottomLaneStart\) continue;[^]*selectDensityLaneBand/);
     assert.match(runtimeSource, /isOutsideHardExclusions\(candidateGeometry\.rectangle, geometryState\.exclusionRegions\)/);
 });

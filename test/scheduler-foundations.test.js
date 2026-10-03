@@ -6,6 +6,8 @@ const {
     createDensityState,
     transitionDensity,
     getDensityVisualPolicy,
+    selectDensityLaneBand,
+    selectDensityRescueLaneExpansion,
     rotatingModularStride,
     proveCollisionSafe,
     proveBoundedCollisionSafe,
@@ -14,6 +16,17 @@ const {
     temporalCohort,
     simulateClosedLoop
 } = require('../src/scheduler-foundations.js');
+
+test('COMPACT collision rescue expands exactly one existing density band while NORMAL stays bounded', () => {
+    const lanes = Array.from({ length: 10 }, (_, lane) => ({ lane }));
+    const fractions = { UPPER: 0.25, UPPER_TO_MID: 0.55, BROAD: 0.95, FULL_SAFE: 1 };
+    const compact = getDensityVisualPolicy('COMPACT');
+    const band = selectDensityLaneBand(lanes, compact, fractions);
+    const expansion = selectDensityRescueLaneExpansion(lanes, compact, fractions);
+    assert.deepEqual(band.map(({ lane }) => lane), [0, 1, 2, 3, 4, 5]);
+    assert.deepEqual(expansion.map(({ lane }) => lane), [6, 7, 8, 9]);
+    assert.deepEqual(selectDensityRescueLaneExpansion(lanes, getDensityVisualPolicy('NORMAL'), fractions), []);
+});
 
 const boundedAllowance = Object.freeze({
     nominalGap: 80,

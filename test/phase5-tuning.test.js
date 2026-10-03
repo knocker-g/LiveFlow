@@ -49,10 +49,18 @@ test('COMPACT rescue exhausts ranked primary fill-behind before deterministic se
     const primary = [0, 2].map((anchorIndex) => ({ anchorIndex, interleaved: false, rectangle: { x: 1000, width: 100 } }));
     const secondary = [{ anchorIndex: 1, interleaved: true, rectangle: { x: 1000, width: 100 } }];
     const active = [{ anchorIndex: 2, x: 700, width: 100 }];
-    const ranked = rankDensityRescuePlacements(primary, secondary, active, 'stable', 'COMPACT');
+    const ranked = rankDensityRescuePlacements(primary, secondary, [], active, 'stable', 'COMPACT');
     assert.equal(ranked[0].anchorIndex, 2);
     assert.equal(ranked.at(-1).interleaved, true);
-    assert.deepEqual(ranked, rankDensityRescuePlacements(primary, secondary, active, 'stable', 'COMPACT'));
+    assert.deepEqual(ranked, rankDensityRescuePlacements(primary, secondary, [], active, 'stable', 'COMPACT'));
+});
+
+test('COMPACT rescue preserves primary and secondary priority before expanded lanes', () => {
+    const primary = [{ anchorIndex: 0, rectangle: { x: 1000, width: 100 } }];
+    const secondary = [{ anchorIndex: 1, interleaved: true, rectangle: { x: 1000, width: 100 } }];
+    const expansion = [{ anchorIndex: 4, expanded: true, rectangle: { x: 1000, width: 100 } }];
+    const ranked = rankDensityRescuePlacements(primary, secondary, expansion, [], 'stable', 'COMPACT');
+    assert.deepEqual(ranked.map(({ anchorIndex }) => anchorIndex), [0, 1, 4]);
 });
 
 test('COMPACT bounded rescue grows without changing NORMAL or the readability hard floor', () => {

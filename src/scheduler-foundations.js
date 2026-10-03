@@ -69,6 +69,17 @@
         return Object.freeze(safeLanes.slice(0, Math.max(1, Math.ceil(safeLanes.length * fraction))));
     }
 
+    function selectDensityRescueLaneExpansion(safeLanes, densityPolicy, bandFractions) {
+        if (!Array.isArray(safeLanes) || !densityPolicy || !DENSITY_LEVELS.includes(densityPolicy.density) ||
+            !bandFractions) return Object.freeze([]);
+        const densityIndex = DENSITY_LEVELS.indexOf(densityPolicy.density);
+        if (densityIndex <= 0 || densityIndex >= DENSITY_LEVELS.length - 1) return Object.freeze([]);
+        const currentBand = selectDensityLaneBand(safeLanes, densityPolicy, bandFractions);
+        const expandedPolicy = getDensityVisualPolicy(DENSITY_LEVELS[densityIndex + 1]);
+        const expandedBand = selectDensityLaneBand(safeLanes, expandedPolicy, bandFractions);
+        return Object.freeze(expandedBand.slice(currentBand.length));
+    }
+
     function greatestCommonDivisor(a, b) {
         let left = Math.abs(a);
         let right = Math.abs(b);
@@ -283,6 +294,7 @@
         transitionDensity,
         getDensityVisualPolicy,
         selectDensityLaneBand,
+        selectDensityRescueLaneExpansion,
         rotatingModularStride,
         proveCollisionSafe,
         proveBoundedCollisionSafe,

@@ -66,11 +66,12 @@
             .map(({ candidate }) => candidate));
     }
 
-    function rankDensityRescuePlacements(primaryCandidates, secondaryCandidates, activeComments, preferredSeed, density) {
+    function rankDensityRescuePlacements(primaryCandidates, secondaryCandidates, expansionCandidates, activeComments, preferredSeed, density) {
         const primary = rankLanePlacements(primaryCandidates, activeComments, preferredSeed);
         const secondary = rankLanePlacements(secondaryCandidates, activeComments, preferredSeed);
-        if (density === 'COMPACT') return Object.freeze([...primary, ...secondary]);
-        return rankLanePlacements([...primaryCandidates, ...secondaryCandidates], activeComments, preferredSeed);
+        const expansion = rankLanePlacements(expansionCandidates, activeComments, preferredSeed);
+        if (density === 'COMPACT' || density === 'DENSE') return Object.freeze([...primary, ...secondary, ...expansion]);
+        return rankLanePlacements([...primaryCandidates, ...secondaryCandidates, ...expansionCandidates], activeComments, preferredSeed);
     }
 
     function buildSyntheticTuningMatrix(config, { surfaceWidth = 1280, surfaceHeight = 360, captionReserve = 2 } = {}) {

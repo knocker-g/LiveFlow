@@ -1096,6 +1096,9 @@
         }
         if (primaryCandidates.length === 0) return { blockedReason: geometryState.exclusionRegions.length ? 'SUBTITLE_EXCLUSION' : 'CANDIDATE_GEOMETRY_INVALID' };
         const band = schedulerFoundations.selectDensityLaneBand(primaryCandidates, densityPolicy, phase5Tuning.laneBandFractions);
+        const expansionCandidates = schedulerFoundations.selectDensityRescueLaneExpansion(
+            primaryCandidates, densityPolicy, phase5Tuning.laneBandFractions
+        );
         const secondaryCandidates = [];
         const stride = phase5Tuning.interleavedAnchorStride[densityPolicy.density] || 0;
         if (stride > 0) {
@@ -1114,7 +1117,7 @@
             }
         }
         return { candidates: window.LiveFlowPhase5Tuning.rankDensityRescuePlacements(
-            band, secondaryCandidates, activeComments, entry.id, densityPolicy.density
+            band, secondaryCandidates, expansionCandidates, activeComments, entry.id, densityPolicy.density
         ), activeComments };
     }
 

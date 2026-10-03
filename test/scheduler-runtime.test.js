@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { GEOMETRY_STATES, createGeometryAuthority, createSubtitleGeometryAdapter } = require('../src/geometry-adapter.js');
 const { createSchedulerRuntime, classifyLaunchGapClass, classifyLaunchGapCause } = require('../src/scheduler-runtime.js');
 
-function harness({ geometryState = GEOMETRY_STATES.KNOWN_EMPTY, safe = true, observe, candidateProof } = {}) {
+function harness({ geometryState = GEOMETRY_STATES.KNOWN_EMPTY, safe = true, observe, candidateProof, config: configOverride = {} } = {}) {
     let now = 100;
     let generation = 1;
     const timers = [];
@@ -32,7 +32,8 @@ function harness({ geometryState = GEOMETRY_STATES.KNOWN_EMPTY, safe = true, obs
             collisionAllowances: Object.fromEntries(['CONSERVATIVE', 'LIMITED_CATCH_UP', 'BOUNDED_OVERLAP', 'MAXIMUM_READABLE_RESCUE'].map((name) => [name, {
                 nominalGap: 20, hardMinimumSeparation: -10, maxCatchUpRatio: 0.5,
                 maxOverlapDuration: 1, maxOverlapDepthRatio: 0.2, minimumVisibleFraction: 0.8
-            }]))
+            }])),
+            ...configOverride
         }
     });
     function fire() { const timer = timers.find((entry) => !entry.fired && !entry.cancelled); if (timer) { timer.fired = true; timer.callback(); } }
@@ -89,6 +90,54 @@ test('stale diagnostic attributes collision-blocked and already-stale items with
     old.enqueue('old', 'liveChatTextMessageRenderer', -2000);
     old.fire();
     assert.equal(oldEvents.find((event) => event.type === 'STALE_PRUNED').staleReasons.alreadyStaleOnEnqueue, 1);
+});
+
+test('source-active collision blank reaches stale without lane expansion and launches through bounded expansion', () => {
+    function run(includeExpansion) {
+        const events = [];
+        const h = harness({
+            observe: (event) => events.push(event),
+            config: { density: { attackThresholds: [0, 0.7, 0.9], releaseThresholds: [0.2, 0.3, 0.4], minimumAttackResidence: 1, releaseDwell: 3 } },
+            candidateProof: (_item, _geometry, policy) => {
+                assert.ok(['COMPACT', 'DENSE'].includes(policy.density));
+                const candidates = [
+                    { rectangle: { x: 100, y: 0, width: 50, height: 20, velocity: 200 }, lane: 0, laneSpan: 1 }
+                ];
+                if (includeExpansion) candidates.push(
+                    { rectangle: { x: 100, y: 40, width: 50, height: 20, velocity: 200 }, lane: 2, laneSpan: 1, expanded: true }
+                );
+                return { candidates, activeComments: [{ x: 80, y: 0, width: 50, height: 20, velocity: 100 }] };
+            }
+        });
+        h.runtime.clear();
+        h.runtime.queue.enforceHardCount(0);
+        h.enqueue('source-active');
+        h.fire();
+        if (!includeExpansion) {
+            h.setNow(500); h.fire();
+            h.setNow(900); h.fire();
+            h.setNow(1200); h.fire();
+        }
+        return { h, events };
+    }
+
+    const baseline = run(false);
+    assert.deepEqual(baseline.h.launched, []);
+    assert.ok(baseline.events.filter(({ type }) => type === 'COLLISION_BLOCKED').length >= 3);
+    assert.ok(baseline.events.filter(({ type }) => type === 'SELECTION_NONE').length >= 3);
+    assert.equal(baseline.events.find(({ type }) => type === 'STALE_PRUNED').staleReasons.collisionBlocked, 1);
+    assert.equal(baseline.h.runtime.status().pendingCount, 0);
+    assert.equal(baseline.h.launched.length + 1 + baseline.h.runtime.status().pendingCount, 1,
+        'one input is explicitly stale-dropped with zero unaccounted loss');
+
+    const rescued = run(true);
+    assert.deepEqual(rescued.h.launched, ['source-active']);
+    assert.equal(rescued.events.filter(({ type }) => type === 'LAUNCH_COMMITTED').length, 1);
+    assert.equal(rescued.events.filter(({ type }) => type === 'SELECTION_NONE').length, 0);
+    assert.equal(rescued.events.filter(({ type }) => type === 'STALE_PRUNED').length, 0);
+    assert.equal(rescued.h.runtime.status().pendingCount, 0);
+    assert.equal(rescued.h.launched.length + rescued.h.runtime.status().pendingCount, 1,
+        'one input is launched with zero unaccounted loss');
 });
 
 test('arrival while armed leaves the one-shot timer unchanged', () => {
