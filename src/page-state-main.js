@@ -83,6 +83,8 @@
     let replaySequentialResumeHandoff = false;
     let replayEarlyResumeSuppressionState = 'CLEAR';
     let replayRunwayDepletionEpisodeState = 'UNKNOWN';
+    let replayTemporalWakeTimer = null;
+    let replayTemporalWakeSequence = 0;
     let replayPreviousSequentialMessages = null;
     let replayForegroundRetainedDiagnostic = createReplayForegroundRetainedDiagnostic();
     let replayForegroundRetainedAbortController = null;
@@ -1415,6 +1417,7 @@
         activeAbortController = null;
         if (activeWaitTimer !== null) window.clearTimeout(activeWaitTimer);
         activeWaitTimer = null;
+        cancelReplayTemporalWakeup();
         deferredReadStartGeneration = null;
         deferredVisibilityResumeGeneration = null;
         readStopReason = reason;
@@ -1470,6 +1473,49 @@
 
     function getCurrentMainVideo() {
         return document.querySelector('ytd-watch-flexy')?.querySelector('#movie_player video.html5-main-video, #movie_player video') || null;
+    }
+
+    function cancelReplayTemporalWakeup() {
+        replayTemporalWakeSequence += 1;
+        if (replayTemporalWakeTimer !== null) window.clearTimeout(replayTemporalWakeTimer);
+        replayTemporalWakeTimer = null;
+    }
+
+    function armReplayTemporalWakeup(generation, revision, lifecycleGeneration, video) {
+        cancelReplayTemporalWakeup();
+        if (replayPending.length === 0 || pageState.mode !== 'replay' || document.hidden || navigationPending ||
+            replayAdActive || replaySeekInProgress || replayReanchorLock || replayPlayerSeekDiagnosticLock ||
+            !video || video !== getCurrentMainVideo() || video.paused || video.ended || video.seeking ||
+            !Number.isFinite(video.currentTime) || !Number.isFinite(video.playbackRate) || video.playbackRate <= 0) return false;
+        const delayMs = window.LiveFlowChatReadCore?.getReplayTemporalWakeDelayMs?.(
+            replayPending, video.currentTime, replayStartTimeSeconds, video.playbackRate
+        );
+        if (!Number.isFinite(delayMs)) return false;
+        const sequence = replayTemporalWakeSequence;
+        const targetIdentity = pageState.targetIdentity;
+        const armedCurrentTime = video.currentTime;
+        replayTemporalWakeTimer = window.setTimeout(() => {
+            replayTemporalWakeTimer = null;
+            const currentVideo = getCurrentMainVideo();
+            const current = window.LiveFlowChatReadCore?.canRunReplayTemporalWakeup?.({
+                sequenceCurrent: sequence === replayTemporalWakeSequence,
+                generationCurrent: generation === currentLoopGeneration,
+                revisionCurrent: revision === pageRevision,
+                lifecycleCurrent: lifecycleGeneration === pageLifecycleGeneration,
+                targetCurrent: targetIdentity === pageState.targetIdentity && isCurrentPageStateTarget(),
+                modeReplay: pageState.mode === 'replay', visible: !document.hidden,
+                navigationPending, adActive: replayAdActive, seekActive: replaySeekInProgress,
+                reanchorActive: replayReanchorLock, diagnosticLock: replayPlayerSeekDiagnosticLock,
+                controlSuspended: replayProductionControlState?.phase === 'SUSPENDED',
+                videoCurrent: currentVideo === video, mediaPaused: video?.paused === true,
+                mediaEnded: video?.ended === true, mediaSeeking: video?.seeking === true,
+                playerTimingValid: Number.isFinite(video?.currentTime),
+                mediaTimeAdvanced: Number.isFinite(video?.currentTime) && video.currentTime > armedCurrentTime
+            }) === true;
+            if (!current) return;
+            flushReplayPending(generation, revision, lifecycleGeneration, replayRestartDiagnostic.sequence, 'temporal-wakeup');
+        }, delayMs);
+        return true;
     }
 
     function flushReplayPending(generation, revision, lifecycleGeneration, diagnosticSequence = replayRestartDiagnostic.sequence, source = 'response') {
@@ -1541,6 +1587,8 @@
             postReadResult({ ok: true, status: 200, readNumber: readCount, revision, generation, messages: selection.due, summary: {}, continuationInfo: null }, lifecycleGeneration);
             setReplayRestartStage('LAUNCH_READY', 'NONE', diagnosticSequence);
         }
+        armReplayTemporalWakeup(generation, revision, lifecycleGeneration, video);
+        if (source === 'temporal-wakeup') return;
         const lowWatermarkReached = replayPending.length <= Math.floor(REPLAY_MAX_PENDING / 2);
         if (lowWatermarkReached && replayEarlyResumeSuppressionState === 'USED_WAITING_FOR_LOW_WATERMARK') {
             replayEarlyResumeSuppressionState = window.LiveFlowChatReadCore?.transitionReplayEarlyResumeSuppression?.(
@@ -2342,6 +2390,7 @@
         if (reason === 'SEEK' && epoch === replayLastAttemptedSeekEpoch) return false;
         if (reason === 'INITIAL_ALIGNMENT' && (epoch !== pageLifecycleGeneration ||
             replayInitialAlignmentAttemptedLifecycleId !== pageLifecycleGeneration)) return false;
+        cancelReplayTemporalWakeup();
         replayReanchorIntent = {
             reason,
             epoch,
@@ -2671,8 +2720,12 @@
     }, true);
     window.addEventListener('pause', (event) => {
         if (event.target !== getCurrentMainVideo()) return;
+        cancelReplayTemporalWakeup();
         observeReplayControlShadow('MEDIA_PAUSE');
         suspendReplayForMediaPause();
+    }, true);
+    for (const type of ['waiting', 'stalled']) window.addEventListener(type, (event) => {
+        if (event.target === getCurrentMainVideo()) cancelReplayTemporalWakeup();
     }, true);
     window.addEventListener('seeking', (event) => {
         if (event.target !== getCurrentMainVideo()) return;
@@ -2752,6 +2805,15 @@
     window.addEventListener('seeked', restartReplayFromCurrentPosition, true);
     window.addEventListener('playing', settleReplayAdExit, true);
     window.addEventListener('canplay', settleReplayAdExit, true);
+    function resumeReplayTemporalWakeup(event) {
+        if (event.target === getCurrentMainVideo() && pageState.mode === 'replay' && replayPending.length > 0 &&
+            !replayAdActive && !replaySeekInProgress && !navigationPending) {
+            flushReplayPending(currentLoopGeneration, pageRevision, pageLifecycleGeneration,
+                replayRestartDiagnostic.sequence, 'temporal-wakeup');
+        }
+    }
+    window.addEventListener('playing', resumeReplayTemporalWakeup, true);
+    window.addEventListener('canplay', resumeReplayTemporalWakeup, true);
     window.addEventListener('loadeddata', settleReplayAdExit, true);
     window.addEventListener('ratechange', (event) => {
         if (event.target !== getCurrentMainVideo() || !stopReplayContext('playback-rate-change')) return;

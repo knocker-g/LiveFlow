@@ -1177,6 +1177,31 @@
         return 'VERY_LONG_GAP';
     }
 
+    function getReplayTemporalWakeDelayMs(messages, currentTimeSeconds, startTimeSeconds, playbackRate = 1, toleranceMsec = 250) {
+        if (!Array.isArray(messages) || !Number.isFinite(currentTimeSeconds) || !Number.isFinite(startTimeSeconds) ||
+            !Number.isFinite(playbackRate) || playbackRate <= 0 || !Number.isFinite(toleranceMsec) || toleranceMsec < 0) return null;
+        const startMsec = startTimeSeconds * 1000;
+        const currentMsec = currentTimeSeconds * 1000;
+        let earliestFuture = Infinity;
+        for (const message of messages) {
+            const offset = message?.replayOffsetMsec;
+            if (!Number.isFinite(offset) || offset < startMsec - toleranceMsec) continue;
+            if (offset > currentMsec + toleranceMsec) earliestFuture = Math.min(earliestFuture, offset);
+        }
+        if (!Number.isFinite(earliestFuture)) return null;
+        return Math.max(0, Math.ceil((earliestFuture - currentMsec - toleranceMsec) / playbackRate));
+    }
+
+    function canRunReplayTemporalWakeup(input = {}) {
+        return input.sequenceCurrent === true && input.generationCurrent === true && input.revisionCurrent === true &&
+            input.lifecycleCurrent === true && input.targetCurrent === true && input.modeReplay === true &&
+            input.visible === true && input.navigationPending === false && input.adActive === false &&
+            input.seekActive === false && input.reanchorActive === false && input.diagnosticLock === false &&
+            input.controlSuspended === false && input.videoCurrent === true && input.mediaPaused === false &&
+            input.mediaEnded === false && input.mediaSeeking === false && input.playerTimingValid === true &&
+            input.mediaTimeAdvanced === true;
+    }
+
     function classifyReplayBufferPauseState({ paused, pendingCount, nearestFutureClass, maximumPending = 100 } = {}) {
         const validClass = ['NONE', 'IMMEDIATE', 'SHORT_GAP', 'MEDIUM_GAP', 'LONG_GAP', 'VERY_LONG_GAP', 'UNKNOWN']
             .includes(nearestFutureClass);
@@ -1529,6 +1554,8 @@
         summarizeReplayGapOrigin,
         isNearestReplayFuturePreserved,
         classifyNearestReplayFuture,
+        getReplayTemporalWakeDelayMs,
+        canRunReplayTemporalWakeup,
         classifyReplayBufferPauseState,
         evaluateReplayBufferEarlyResume,
         evaluateReplayNormalResume,

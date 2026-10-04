@@ -1041,6 +1041,94 @@ test('re-anchor short-gap future survives merge with a later long-gap sequential
     assert.equal(promoted.pending.length, 47);
 });
 
+test('BUFFER_PAUSED immediate future retains a temporal reevaluation path without a new response', () => {
+    const flushBody = pageStateSource.match(/function flushReplayPending\([^]*?\n    \}/)?.[0] || '';
+    const timeupdateBody = pageStateSource.match(/window\.addEventListener\('timeupdate'[^]*?\n    \}, true\);/)?.[0] || '';
+    assert.match(timeupdateBody, /event\.target !== getCurrentMainVideo\(\)[^]*return;[^]*flushReplayPending/);
+    assert.doesNotMatch(flushBody, /setTimeout|requestAnimationFrame/,
+        'Temporal promotion has no independent wakeup once Acquisition is BUFFER_PAUSED');
+
+    const item = { id: 'future-becomes-due', replayOffsetMsec: 57000 };
+    const initial = selectBoundedReplayDueMessages([item], 55, 0, 100);
+    assert.equal(core.classifyNearestReplayFuture(initial.pending, 55), 'IMMEDIATE');
+
+    const wakeDelayMs = core.getReplayTemporalWakeDelayMs(initial.pending, 55, 0, 1);
+    assert.equal(wakeDelayMs, 1750);
+    let retained = initial.pending;
+    let promoted = [];
+    if (Number.isFinite(wakeDelayMs)) {
+        const reevaluated = selectBoundedReplayDueMessages(retained, 58, 0, 100);
+        retained = reevaluated.pending;
+        promoted = reevaluated.due;
+    }
+
+    assert.equal(promoted.length, 1,
+        'advancing playback must eventually promote an IMMEDIATE pending item without requiring a new Acquisition response');
+    assert.equal(retained.length, 0);
+});
+
+test('Replay Temporal wake delay targets the earliest due boundary with existing tolerance', () => {
+    const messages = [
+        { id: 'later', replayOffsetMsec: 9000 },
+        { id: 'earliest', replayOffsetMsec: 6000 },
+        { id: 'before-start', replayOffsetMsec: 500 }
+    ];
+    assert.equal(core.getReplayTemporalWakeDelayMs(messages, 5, 1, 1), 750);
+    assert.equal(core.getReplayTemporalWakeDelayMs(messages, 5, 1, 2), 375);
+    assert.equal(core.getReplayTemporalWakeDelayMs([], 5, 1, 1), null);
+    assert.equal(core.getReplayTemporalWakeDelayMs(messages, 5, 1, 0), null);
+});
+
+test('Replay Temporal wake-up is single, binding-current, cancellable, and local-only', () => {
+    const arm = pageStateSource.match(/function armReplayTemporalWakeup\([^]*?\n    \}/)?.[0] || '';
+    const cancel = pageStateSource.match(/function cancelReplayTemporalWakeup\([^]*?\n    \}/)?.[0] || '';
+    const flush = pageStateSource.match(/function flushReplayPending\([^]*?\n    \}/)?.[0] || '';
+    assert.match(arm, /cancelReplayTemporalWakeup\(\)/);
+    assert.match(arm, /replayTemporalWakeTimer = window\.setTimeout/);
+    assert.equal((arm.match(/window\.setTimeout/g) || []).length, 1);
+    assert.match(arm, /canRunReplayTemporalWakeup/);
+    assert.match(arm, /sequenceCurrent: sequence === replayTemporalWakeSequence/);
+    assert.match(arm, /generationCurrent: generation === currentLoopGeneration[^]*revisionCurrent: revision === pageRevision[^]*lifecycleCurrent: lifecycleGeneration === pageLifecycleGeneration/);
+    assert.match(arm, /targetCurrent: targetIdentity === pageState\.targetIdentity && isCurrentPageStateTarget\(\)/);
+    assert.match(arm, /mediaTimeAdvanced:[^]*video\.currentTime > armedCurrentTime/);
+    assert.match(arm, /flushReplayPending\([^]*'temporal-wakeup'/);
+    assert.match(cancel, /replayTemporalWakeSequence \+= 1[^]*clearTimeout/);
+    assert.match(flush, /armReplayTemporalWakeup\([^]*if \(source === 'temporal-wakeup'\) return;[^]*evaluateReplayNormalResume/);
+    assert.doesNotMatch(arm, /fetch|performRead|startReadLoop|authorize|authority|continuation|queueReplayReanchor/i);
+    assert.doesNotMatch(cancel, /fetch|performRead|startReadLoop|authorize|authority|continuation/i);
+});
+
+test('Replay Temporal wake currentness fails closed for every stale or unsafe fact', () => {
+    const valid = {
+        sequenceCurrent: true, generationCurrent: true, revisionCurrent: true, lifecycleCurrent: true,
+        targetCurrent: true, modeReplay: true, visible: true, navigationPending: false, adActive: false,
+        seekActive: false, reanchorActive: false, diagnosticLock: false, controlSuspended: false,
+        videoCurrent: true, mediaPaused: false, mediaEnded: false, mediaSeeking: false,
+        playerTimingValid: true, mediaTimeAdvanced: true
+    };
+    assert.equal(core.canRunReplayTemporalWakeup(valid), true);
+    for (const key of ['sequenceCurrent', 'generationCurrent', 'revisionCurrent', 'lifecycleCurrent', 'targetCurrent',
+        'modeReplay', 'visible', 'videoCurrent', 'playerTimingValid', 'mediaTimeAdvanced']) {
+        assert.equal(core.canRunReplayTemporalWakeup({ ...valid, [key]: false }), false, key);
+    }
+    for (const key of ['navigationPending', 'adActive', 'seekActive', 'reanchorActive', 'diagnosticLock',
+        'controlSuspended', 'mediaPaused', 'mediaEnded', 'mediaSeeking']) {
+        assert.equal(core.canRunReplayTemporalWakeup({ ...valid, [key]: true }), false, key);
+    }
+});
+
+test('Replay Temporal wake-up cancellation covers lifecycle and media invalidation', () => {
+    const stop = pageStateSource.match(/function stopReadLoop\([^]*?\n    \}/)?.[0] || '';
+    const reanchor = pageStateSource.match(/function queueReplayReanchor\([^]*?\n    \}/)?.[0] || '';
+    assert.match(stop, /cancelReplayTemporalWakeup\(\)/);
+    assert.match(reanchor, /cancelReplayTemporalWakeup\(\)/);
+    assert.match(pageStateSource, /addEventListener\('pause'[^]*cancelReplayTemporalWakeup\(\)[^]*suspendReplayForMediaPause/);
+    assert.match(pageStateSource, /\['waiting', 'stalled'\][^]*cancelReplayTemporalWakeup/);
+    assert.match(pageStateSource, /function resumeReplayTemporalWakeup[^]*flushReplayPending\([^]*'temporal-wakeup'/);
+    assert.match(pageStateSource, /addEventListener\('playing', resumeReplayTemporalWakeup, true\)/);
+    assert.match(pageStateSource, /addEventListener\('canplay', resumeReplayTemporalWakeup, true\)/);
+});
+
 test('Replay pending merge keeps nearest one hundred and drops only farthest future items', () => {
     const near = Array.from({ length: 80 }, (_, index) => ({ id: `near-${index}`, replayOffsetMsec: 101000 + index }));
     const far = Array.from({ length: 70 }, (_, index) => ({ id: `far-${index}`, replayOffsetMsec: 200000 + index }));
