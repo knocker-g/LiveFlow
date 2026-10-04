@@ -1365,6 +1365,94 @@ test('Replay buffer early resume suppression survives re-pause until the low wat
     assert.equal(transition('UNKNOWN', 'LOW_WATERMARK_REACHED'), 'UNKNOWN');
 });
 
+test('one-shot suppression structurally leaves a source-active far-future buffer without current-window supply', () => {
+    const evaluateEarly = core.evaluateReplayBufferEarlyResume;
+    const evaluateNormal = core.evaluateReplayNormalResume;
+    const transition = core.transitionReplayEarlyResumeSuppression;
+    const initial = Array.from({ length: 67 }, (_, index) => ({ id: `initial-${index}`, replayOffsetMsec: 70000 + index * 1000 }));
+    const first = evaluateEarly({
+        paused: true, pauseReason: 'COUNT_PRESSURE', pendingCount: initial.length, maximumPending: 100,
+        dueCount: 0, schedulerPendingCount: 0, nearestFutureClass: 'LONG_GAP',
+        authorityAvailable: true, authorityCurrent: true, authorityUnused: true,
+        requestInFlight: false, activeLoop: false, locked: false, suppressed: false
+    });
+    assert.deepEqual(first, { eligible: true, decision: 'ELIGIBLE' });
+
+    let suppression = transition('CLEAR', 'EARLY_RESUME_STARTED');
+    const incoming = Array.from({ length: 17 }, (_, index) => ({ id: `incoming-${index}`, replayOffsetMsec: 140000 + index * 1000 }));
+    const sourceIngressDelta = incoming.length;
+    const atElevenSeconds = selectBoundedReplayDueMessages([...initial, ...incoming], 11, 0, 100);
+    const nearestFutureClass = core.classifyNearestReplayFuture(atElevenSeconds.pending, 11);
+    assert.equal(sourceIngressDelta, 17);
+    assert.equal(atElevenSeconds.pending.length, 84);
+    assert.equal(atElevenSeconds.due.length, 0);
+    assert.equal(nearestFutureClass, 'LONG_GAP');
+    assert.deepEqual(evaluateNormal({
+        paused: true, pendingCount: atElevenSeconds.pending.length, maximumPending: 100,
+        authorityAvailable: true, authorityCurrent: true, authorityUnused: true
+    }), { eligible: false, reason: 'ABOVE_LOW_WATERMARK' });
+    assert.deepEqual(evaluateEarly({
+        paused: true, pauseReason: 'COUNT_PRESSURE', pendingCount: atElevenSeconds.pending.length, maximumPending: 100,
+        dueCount: atElevenSeconds.due.length, schedulerPendingCount: 0, nearestFutureClass,
+        authorityAvailable: true, authorityCurrent: true, authorityUnused: true,
+        requestInFlight: false, activeLoop: false, locked: false, suppressed: suppression !== 'CLEAR'
+    }), { eligible: false, decision: 'SUPPRESSED' });
+    suppression = transition(suppression, 'COUNT_PRESSURE_PAUSED');
+    assert.equal(suppression, 'USED_WAITING_FOR_LOW_WATERMARK');
+    const presentationProgress = { enqueued: atElevenSeconds.due.length, selected: 0, launched: 0, displayed: 0 };
+    assert.deepEqual(presentationProgress, { enqueued: 0, selected: 0, launched: 0, displayed: 0 });
+});
+
+test('runway depletion episodes rearm only after canonical current-window recovery', () => {
+    const transition = core.transitionReplayRunwayDepletionEpisode;
+    const evaluate = core.evaluateReplayBufferEarlyResume;
+    const eligibleInput = {
+        paused: true, pauseReason: 'COUNT_PRESSURE', pendingCount: 84, maximumPending: 100,
+        dueCount: 0, schedulerPendingCount: 0, nearestFutureClass: 'LONG_GAP',
+        authorityAvailable: true, authorityCurrent: true, authorityUnused: true,
+        requestInFlight: false, activeLoop: false, locked: false
+    };
+    let state = transition('UNKNOWN', 'RUNWAY_POSITIVE');
+    state = transition(state, 'RUNWAY_DEPLETED');
+    assert.equal(state, 'DEPLETED_AVAILABLE');
+    let authorizedRequests = 0;
+    const firstDepletion = evaluate({ ...eligibleInput, suppressed: state !== 'DEPLETED_AVAILABLE' });
+    assert.deepEqual(firstDepletion, { eligible: true, decision: 'ELIGIBLE' });
+    if (firstDepletion.eligible) authorizedRequests += 1;
+
+    state = transition(state, 'EARLY_RESUME_STARTED');
+    assert.equal(state, 'DEPLETED_SPENT');
+    for (const event of ['RUNWAY_DEPLETED', 'RUNWAY_DEPLETED']) {
+        state = transition(state, event);
+        assert.equal(state, 'DEPLETED_SPENT', 'future-only ingress and response progress do not rearm');
+        assert.equal(evaluate({ ...eligibleInput, suppressed: state !== 'DEPLETED_AVAILABLE' }).decision, 'SUPPRESSED');
+    }
+    assert.equal(authorizedRequests, 1);
+
+    state = transition(state, 'RUNWAY_POSITIVE');
+    assert.equal(state, 'POSITIVE');
+    state = transition(state, 'RUNWAY_DEPLETED');
+    assert.equal(state, 'DEPLETED_AVAILABLE');
+    const laterDepletion = evaluate({ ...eligibleInput, suppressed: state !== 'DEPLETED_AVAILABLE' });
+    assert.equal(laterDepletion.eligible, true);
+    if (laterDepletion.eligible) authorizedRequests += 1;
+    assert.equal(authorizedRequests, 2, 'one request per distinct positive-to-depleted episode');
+    assert.equal(evaluate({ ...eligibleInput, authorityAvailable: false, suppressed: false }).decision, 'AUTHORITY_UNAVAILABLE');
+    assert.equal(evaluate({ ...eligibleInput, authorityCurrent: false, suppressed: false }).decision, 'AUTHORITY_INVALID');
+    assert.equal(evaluate({ ...eligibleInput, requestInFlight: true, suppressed: false }).decision, 'REQUEST_IN_FLIGHT');
+    assert.equal(transition(state, 'INVALIDATE'), 'UNKNOWN');
+    const accounting = { input: eligibleInput.pendingCount, retained: eligibleInput.pendingCount, explicitRemoval: 0 };
+    const lostUnaccounted = accounting.input - accounting.retained - accounting.explicitRemoval;
+    assert.equal(lostUnaccounted, 0);
+});
+
+test('runway depletion episode leaves normal low-watermark resume unchanged', () => {
+    assert.deepEqual(core.evaluateReplayNormalResume({
+        paused: true, pendingCount: 50, maximumPending: 100,
+        authorityAvailable: true, authorityCurrent: true, authorityUnused: true
+    }), { eligible: true, reason: 'ELIGIBLE' });
+});
+
 test('Temporal starvation diagnostic classifies pending distribution without raw timing output', () => {
     const summary = core.summarizeReplayTemporalAvailability([
         { replayOffsetMsec: 12000 }, { replayOffsetMsec: 15000 }, { replayOffsetMsec: 45000 }

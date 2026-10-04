@@ -754,13 +754,18 @@ test('Production temporal rescue is rolled back and one-shot early resume remain
     assert.equal(core.ReplayEvent.TEMPORAL_RESCUE_ELIGIBLE, undefined);
 });
 
-test('existing early resume remains one response within the pressure episode', () => {
+test('early resume remains one response within a runway depletion episode', () => {
     const reading = core.createReplayState('READING');
     const result = core.reduceReplayControlState(reading, 'EARLY_RESUME_COMPLETED');
     assert.equal(result.nextState.phase, 'BUFFER_PAUSED');
     assert.equal(result.authorityAction, 'SAVE_SEQUENTIAL');
     const source = fs.readFileSync(path.join(__dirname, '../src/page-state-main.js'), 'utf8');
     assert.match(source, /continuationSource === 'BUFFER_EARLY_RESUME' && replayPressureEpisodeActive[^]*replayPausedSequentialAuthority = nextSequentialAuthority[^]*nextSequentialAuthority = null[^]*break;/);
+    assert.match(source, /runwayPositive = selection\.due\.length > 0 \|\| replayPipelineDiagnostic\.pendingCurrent > 0/);
+    assert.match(source, /suppressed: replayRunwayDepletionEpisodeState !== 'DEPLETED_AVAILABLE'/);
+    assert.match(source, /transitionReplayRunwayDepletionEpisode[^]*'EARLY_RESUME_STARTED'/);
+    assert.match(source, /canUseCapabilityPath\?\.\(\s*'EARLY_RESUME', capabilitySnapshot, currentReplayAuthorityBinding\(\)/);
+    assert.match(source, /authorityAvailable: Boolean\(authority\) && earlyResumeCapabilityAllowed/);
 });
 
 test('capability evidence remains shadow-only outside scheduler and presentation boundaries', () => {

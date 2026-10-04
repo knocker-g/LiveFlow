@@ -82,6 +82,7 @@
     let replayObservedSequentialAuthority = null;
     let replaySequentialResumeHandoff = false;
     let replayEarlyResumeSuppressionState = 'CLEAR';
+    let replayRunwayDepletionEpisodeState = 'UNKNOWN';
     let replayPreviousSequentialMessages = null;
     let replayForegroundRetainedDiagnostic = createReplayForegroundRetainedDiagnostic();
     let replayForegroundRetainedAbortController = null;
@@ -1180,6 +1181,7 @@
         replayPressureEpisodeActive = false;
         replayEpisodeAdvancedBudgetUsed = 0;
         replayEarlyResumeCompleted = false;
+        replayRunwayDepletionEpisodeState = 'UNKNOWN';
         replayTimingDiagnosticSeen = createReplayTimingDiagnosticSeen();
         replayAwaitingFirstFreshSequentialResponse = false;
         pageRevision += 1;
@@ -1423,6 +1425,7 @@
         replayObservedSequentialAuthority = null;
         replaySequentialResumeHandoff = false;
         replayEarlyResumeSuppressionState = 'CLEAR';
+        replayRunwayDepletionEpisodeState = 'UNKNOWN';
         replayPipelineDiagnostic.earlyResumeEligible = false;
         replayPipelineDiagnostic.earlyResumeSuppressed = false;
         replayPipelineDiagnostic.earlyResumeSuppressionState = 'CLEAR';
@@ -1525,6 +1528,10 @@
         replayPipelineDiagnostic.futureGapWhileBufferPaused = bufferState?.futureGapWhilePaused === true;
         replayPipelineDiagnostic.bufferResumeBlockedByCount = bufferState?.resumeBlockedByCount === true;
         replayPipelineDiagnostic.unreadSequentialAuthorityAvailable = savedSequentialDiagnostic()?.authorityState === 'OBSERVED_UNUSED';
+        const runwayPositive = selection.due.length > 0 || replayPipelineDiagnostic.pendingCurrent > 0;
+        replayRunwayDepletionEpisodeState = window.LiveFlowChatReadCore?.transitionReplayRunwayDepletionEpisode?.(
+            replayRunwayDepletionEpisodeState, runwayPositive ? 'RUNWAY_POSITIVE' : 'RUNWAY_DEPLETED'
+        ) || 'UNKNOWN';
         updateReplayTemporalStarvationDiagnostic(selection.due.length);
         updateReplayTemporalLeadShadowDiagnostic();
         replayRestartDiagnostic.currentWindowMessagePresent = selection.due.length > 0;
@@ -1579,6 +1586,9 @@
         if (capabilitySnapshot) replayControlShadow?.compareCapability?.(
             'BUFFER_RESUME', capabilitySnapshot, currentReplayAuthorityBinding(), legacyCapabilityAvailable
         );
+        const earlyResumeCapabilityAllowed = replayControlPlaneCore?.canUseCapabilityPath?.(
+            'EARLY_RESUME', capabilitySnapshot, currentReplayAuthorityBinding()
+        )?.allowed === true;
         if (normalResume?.eligible === true) {
             const requestGrant = authorizeSavedSequentialResume();
             if (!requestGrant) {
@@ -1607,13 +1617,13 @@
             dueCount: selection.due.length,
             schedulerPendingCount: replayPipelineDiagnostic.pendingCurrent,
             nearestFutureClass: replayPipelineDiagnostic.nearestFutureClass,
-            authorityAvailable: Boolean(authority),
+            authorityAvailable: Boolean(authority) && earlyResumeCapabilityAllowed,
             authorityCurrent,
             authorityUnused,
             requestInFlight: readRequestInFlight,
             activeLoop: activeLoopGeneration !== 0,
             locked: replayReanchorLock || replayPlayerSeekDiagnosticLock,
-            suppressed: replayEarlyResumeSuppressionState !== 'CLEAR'
+            suppressed: replayRunwayDepletionEpisodeState !== 'DEPLETED_AVAILABLE'
         });
         replayPipelineDiagnostic.earlyResumeEligible = earlyResume?.eligible === true;
         replayPipelineDiagnostic.earlyResumeDecision = earlyResume?.decision || 'UNKNOWN';
@@ -1637,6 +1647,9 @@
             replayPausedSequentialAuthority = null;
             replayEarlyResumeSuppressionState = window.LiveFlowChatReadCore?.transitionReplayEarlyResumeSuppression?.(
                 replayEarlyResumeSuppressionState, 'EARLY_RESUME_STARTED'
+            ) || 'UNKNOWN';
+            replayRunwayDepletionEpisodeState = window.LiveFlowChatReadCore?.transitionReplayRunwayDepletionEpisode?.(
+                replayRunwayDepletionEpisodeState, 'EARLY_RESUME_STARTED'
             ) || 'UNKNOWN';
             replayAcquisitionPausedForBuffer = false;
             replaySequentialResumeHandoff = true;

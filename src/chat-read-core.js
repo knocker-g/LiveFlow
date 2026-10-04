@@ -1251,6 +1251,21 @@
         return 'UNKNOWN';
     }
 
+    function transitionReplayRunwayDepletionEpisode(state = 'UNKNOWN', event) {
+        const states = ['UNKNOWN', 'POSITIVE', 'DEPLETED_AVAILABLE', 'DEPLETED_SPENT'];
+        if (!states.includes(state)) return 'UNKNOWN';
+        if (event === 'INVALIDATE') return 'UNKNOWN';
+        if (event === 'RUNWAY_POSITIVE') return 'POSITIVE';
+        if (event === 'RUNWAY_DEPLETED') {
+            if (state === 'POSITIVE') return 'DEPLETED_AVAILABLE';
+            return state;
+        }
+        if (event === 'EARLY_RESUME_STARTED') {
+            return state === 'DEPLETED_AVAILABLE' ? 'DEPLETED_SPENT' : state;
+        }
+        return 'UNKNOWN';
+    }
+
     function classifyReplayDiagnosticCount(count, kind = 'TOTAL', maximumPending = 100) {
         if (!Number.isInteger(count) || count < 0 || !Number.isInteger(maximumPending) || maximumPending <= 0) return 'UNKNOWN';
         if (kind === 'TOTAL') {
@@ -1518,6 +1533,7 @@
         evaluateReplayBufferEarlyResume,
         evaluateReplayNormalResume,
         transitionReplayEarlyResumeSuppression,
+        transitionReplayRunwayDepletionEpisode,
         classifyReplayDiagnosticCount,
         summarizeReplayTemporalAvailability,
         compareReplayTemporalCoverage,
