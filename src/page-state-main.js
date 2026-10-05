@@ -80,6 +80,7 @@
     let replayAwaitingFirstFreshSequentialResponse = false;
     let replayPausedSequentialAuthority = null;
     let replayObservedSequentialAuthority = null;
+    let replayReadAheadDeferred = false;
     let replaySequentialResumeHandoff = false;
     let replayEarlyResumeSuppressionState = 'CLEAR';
     let replayRunwayDepletionEpisodeState = 'UNKNOWN';
@@ -404,6 +405,8 @@
             earlyResumeSuppressed: false, earlyResumeAttemptedCount: 0, earlyResumeStartedCount: 0,
             earlyResumeSuppressedCount: 0, bufferPauseEpochCount: 0,
             earlyResumeSuppressionState: 'CLEAR', earlyResumeDecision: 'NOT_PAUSED',
+            readAheadDecision: 'ALLOW', readAheadDeferred: false,
+            readAheadDeferredCount: 0, readAheadResumedCount: 0,
             maxObservedSequentialInFlight: 0,
             reanchorTimestampedActionsObserved: false, reanchorReplayContinuationObserved: false,
             reanchorPlayerSeekContinuationObserved: false,
@@ -1426,6 +1429,9 @@
         replayPausedSequentialAuthority = null;
         invalidateAuthorityHandle(replayObservedSequentialAuthority);
         replayObservedSequentialAuthority = null;
+        replayReadAheadDeferred = false;
+        replayPipelineDiagnostic.readAheadDeferred = false;
+        replayPipelineDiagnostic.readAheadDecision = 'ALLOW';
         replaySequentialResumeHandoff = false;
         replayEarlyResumeSuppressionState = 'CLEAR';
         replayRunwayDepletionEpisodeState = 'UNKNOWN';
@@ -1455,6 +1461,7 @@
             replayPausedSequentialAuthority, replayObservedSequentialAuthority
         ) || replayPausedSequentialAuthority || replayObservedSequentialAuthority;
         replayObservedSequentialAuthority = null;
+        replayReadAheadDeferred = false;
         replayAcquisitionPausedForBuffer = Boolean(replayPausedSequentialAuthority);
         replaySequentialResumeHandoff = Boolean(replayPausedSequentialAuthority);
         const retainedDiagnostic = savedSequentialDiagnostic();
@@ -1714,6 +1721,56 @@
             replayEarlyResumeCompleted = false;
             window.queueMicrotask(() => startReadLoop(pageLifecycleGeneration, 'BUFFER_EARLY_RESUME', requestGrant));
             return;
+        }
+        if (replayReadAheadDeferred) {
+            const deferredAuthority = replayObservedSequentialAuthority;
+            const deferredDiagnostic = deferredAuthority?.diagnostic?.(currentReplayAuthorityBinding());
+            const deferredCurrent = deferredDiagnostic?.authorityCurrent === true;
+            const deferredUnused = deferredDiagnostic?.authorityKind === 'SEQUENTIAL' &&
+                deferredDiagnostic?.authorityState === 'OBSERVED_UNUSED';
+            const deferredCapabilitySnapshot = replayControlPlaneCore?.createCapabilitySnapshot?.({
+                binding: currentReplayAuthorityBinding(), evidenceEpoch: pageRevision,
+                capabilities: {
+                    sequentialRead: deferredAuthority ? 'SUPPORTED' : 'UNKNOWN',
+                    targetIdentity: isCurrentPageStateTarget() ? 'SUPPORTED' : 'UNKNOWN',
+                    mainContentOwnership: ownedVideoCurrent ? 'SUPPORTED' : 'UNKNOWN',
+                    playerTiming: Number.isFinite(video.currentTime) ? 'SUPPORTED' : 'UNKNOWN'
+                }
+            })?.snapshot;
+            const deferredCapabilityAllowed = replayControlPlaneCore?.canUseCapabilityPath?.(
+                'SEQUENTIAL', deferredCapabilitySnapshot, currentReplayAuthorityBinding()
+            )?.allowed === true;
+            const horizon = window.LiveFlowChatReadCore?.classifyReplayReadAheadHorizon?.(
+                replayPending, video.currentTime
+            ) || 'UNKNOWN';
+            const readAheadDecision = window.LiveFlowChatReadCore?.evaluateReplayReadAheadCadence?.({
+                deferred: true, horizon,
+                authorityAvailable: Boolean(deferredAuthority), authorityCurrent: deferredCurrent,
+                authorityUnused: deferredUnused, capabilityAllowed: deferredCapabilityAllowed,
+                requestInFlight: readRequestInFlight, activeLoop: activeLoopGeneration !== 0,
+                lifecycleCurrent: lifecycleGeneration === pageLifecycleGeneration,
+                targetCurrent: isCurrentPageStateTarget(), videoCurrent: ownedVideoCurrent,
+                visible: !document.hidden, adActive: replayAdActive, seekActive: replaySeekInProgress,
+                navigationPending
+            });
+            replayPipelineDiagnostic.readAheadDecision = readAheadDecision?.reason || 'UNKNOWN';
+            if (readAheadDecision?.action === 'RESUME') {
+                const requestGrant = authorizeSequentialAuthority(
+                    deferredAuthority, currentReplayAuthorityBinding(), 0
+                );
+                if (!requestGrant) {
+                    replayPipelineDiagnostic.readAheadDecision = 'AUTHORIZATION_FAILED';
+                    return;
+                }
+                replayObservedSequentialAuthority = null;
+                replayReadAheadDeferred = false;
+                replaySequentialResumeHandoff = true;
+                replayPipelineDiagnostic.readAheadDeferred = false;
+                replayPipelineDiagnostic.readAheadResumedCount += 1;
+                replayPipelineDiagnostic.readAheadDecision = 'RESUMED';
+                window.queueMicrotask(() => startReadLoop(pageLifecycleGeneration, 'READ_AHEAD_RESUME', requestGrant));
+                return;
+            }
         }
         const availability = window.LiveFlowChatReadCore?.summarizeReplayTemporalAvailability?.(
             replayPending, video.currentTime, selection.due.length, REPLAY_MAX_PENDING
@@ -2350,6 +2407,28 @@
                     replayPipelineDiagnostic.bufferResumeBlockedByCount = pausedState?.resumeBlockedByCount === true;
                     updateReplayTemporalStarvationDiagnostic(0);
                     replayRestartDiagnostic.lastStopReason = 'BUFFER_BOUND';
+                    break;
+                }
+                const readAheadHorizon = core?.classifyReplayReadAheadHorizon?.(
+                    replayPending, getCurrentMainVideo()?.currentTime
+                ) || 'UNKNOWN';
+                const readAheadDecision = core?.evaluateReplayReadAheadCadence?.({
+                    deferred: false, horizon: readAheadHorizon,
+                    authorityAvailable: Boolean(nextSequentialAuthority), authorityCurrent: true, authorityUnused: true,
+                    capabilityAllowed: true, requestInFlight: readRequestInFlight,
+                    activeLoop: activeLoopGeneration !== 0,
+                    lifecycleCurrent: lifecycleGeneration === pageLifecycleGeneration,
+                    targetCurrent: isCurrentPageStateTarget(), videoCurrent: Boolean(getCurrentMainVideo()),
+                    visible: !document.hidden, adActive: replayAdActive, seekActive: replaySeekInProgress,
+                    navigationPending
+                });
+                if (readAheadDecision?.action === 'DEFER' || readAheadHorizon === 'UNKNOWN') {
+                    replayReadAheadDeferred = true;
+                    replayPipelineDiagnostic.readAheadDeferred = true;
+                    replayPipelineDiagnostic.readAheadDeferredCount += 1;
+                    replayPipelineDiagnostic.readAheadDecision = readAheadDecision?.reason || 'UNKNOWN';
+                    nextSequentialAuthority = null;
+                    replayRestartDiagnostic.lastStopReason = 'READ_AHEAD_DEFERRED';
                     break;
                 }
             } else postReadResult(result, lifecycleGeneration);

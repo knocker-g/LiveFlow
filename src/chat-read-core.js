@@ -996,6 +996,40 @@
         return 'FAR_FUTURE';
     }
 
+    function classifyReplayReadAheadHorizon(messages, currentTimeSeconds) {
+        if (!Array.isArray(messages) || !Number.isFinite(currentTimeSeconds) || currentTimeSeconds < 0) return 'UNKNOWN';
+        const offsets = messages.map((message) => message?.replayOffsetMsec);
+        if (offsets.some((offset) => !Number.isFinite(offset))) return 'UNKNOWN';
+        if (offsets.length === 0) return 'RESUME_WATER';
+        const relation = classifyReplayMessageRelation(Math.max(...offsets), currentTimeSeconds);
+        if (relation === 'FAR_FUTURE') return 'HIGH_WATER';
+        if (['BEFORE_CURRENT', 'CURRENT_WINDOW', 'NEAR_FUTURE'].includes(relation)) return 'RESUME_WATER';
+        return 'UNKNOWN';
+    }
+
+    function evaluateReplayReadAheadCadence(input = {}) {
+        const required = ['deferred', 'authorityAvailable', 'authorityCurrent', 'authorityUnused', 'capabilityAllowed',
+            'requestInFlight', 'activeLoop', 'lifecycleCurrent', 'targetCurrent', 'videoCurrent', 'visible',
+            'adActive', 'seekActive', 'navigationPending'];
+        if (required.some((key) => typeof input[key] !== 'boolean') ||
+            !['HIGH_WATER', 'RESUME_WATER'].includes(input.horizon)) {
+            return Object.freeze({ action: 'HOLD', reason: 'UNKNOWN' });
+        }
+        if (input.deferred !== true) return Object.freeze(input.horizon === 'HIGH_WATER'
+            ? { action: 'DEFER', reason: 'HIGH_WATER' }
+            : { action: 'ALLOW', reason: 'BELOW_HIGH_WATER' });
+        if (input.horizon === 'HIGH_WATER') return Object.freeze({ action: 'WAIT', reason: 'HIGH_WATER' });
+        const reason = !input.authorityAvailable ? 'AUTHORITY_MISSING' :
+            (!input.authorityCurrent || !input.authorityUnused) ? 'AUTHORITY_INVALID' :
+            !input.capabilityAllowed ? 'CAPABILITY' : input.requestInFlight || input.activeLoop ? 'REQUEST_ACTIVE' :
+            !input.lifecycleCurrent ? 'LIFECYCLE' : !input.targetCurrent ? 'TARGET' : !input.videoCurrent ? 'OWNERSHIP' :
+            !input.visible ? 'HIDDEN' : input.adActive ? 'AD' : input.seekActive ? 'SEEK' :
+            input.navigationPending ? 'NAVIGATION' : 'HORIZON_RECOVERED';
+        return Object.freeze(reason === 'HORIZON_RECOVERED'
+            ? { action: 'RESUME', reason }
+            : { action: 'HOLD', reason });
+    }
+
     function summarizeReplayResponseTemporalShape(messages, currentTimeSeconds, previousMessages = null) {
         if (!Array.isArray(messages) || !Number.isFinite(currentTimeSeconds)) return Object.freeze({
             responseFirstMessageRelation: 'UNKNOWN', responseLastMessageRelation: 'UNKNOWN',
@@ -1545,6 +1579,8 @@
         classifySequentialContinuationProgress,
         classifyReplayTemporalProgress,
         classifyReplayMessageRelation,
+        classifyReplayReadAheadHorizon,
+        evaluateReplayReadAheadCadence,
         summarizeReplayResponseTemporalShape,
         createReplayGapEvidenceState,
         createReplayGapPersistenceState,
