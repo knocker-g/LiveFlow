@@ -92,7 +92,11 @@
             authorityState: record.state,
             authorityProvenance: record.provenance,
             authorityCurrent: currentBinding ? authorityBindingsEqual(record.binding, currentBinding) : false,
-            authorityBindingValid: isAuthorityBinding(record.binding)
+            authorityBindingValid: isAuthorityBinding(record.binding),
+            lifecycleCurrent: Boolean(currentBinding && record.binding.lifecycleId === currentBinding.lifecycleId),
+            revisionCurrent: Boolean(currentBinding && record.binding.revision === currentBinding.revision),
+            subjectCurrent: Boolean(currentBinding && record.binding.targetId === currentBinding.targetId),
+            generationCurrent: Boolean(currentBinding && record.binding.generation === currentBinding.generation)
         });
     }
 
@@ -335,7 +339,8 @@
             if (event === ReplayEvent.BUFFER_HIGH_WATERMARK) return result(createReplayState(ReplayPhase.BUFFER_PAUSED), AuthorityAction.SAVE_SEQUENTIAL, PendingAction.KEEP);
             if (event === ReplayEvent.EARLY_RESUME_COMPLETED) return result(createReplayState(ReplayPhase.BUFFER_PAUSED), AuthorityAction.SAVE_SEQUENTIAL, PendingAction.KEEP);
             if (['SEEK_STARTED', 'SEEK_COMPLETED'].includes(event)) return result(createReplayState(ReplayPhase.REANCHORING), AuthorityAction.INVALIDATE_ACTIVE, PendingAction.CLEAR);
-            if (event === ReplayEvent.REANCHOR_AUTHORIZED) return result(createReplayState(ReplayPhase.REANCHORING), AuthorityAction.INVALIDATE_ACTIVE, PendingAction.CLEAR, RequestIntent.REQUEST_REANCHOR);
+            if (event === ReplayEvent.REANCHOR_AUTHORIZED) return result(createReplayState(ReplayPhase.REANCHORING), AuthorityAction.INVALIDATE_ACTIVE,
+                facts.preservePending === true ? PendingAction.KEEP : PendingAction.CLEAR, RequestIntent.REQUEST_REANCHOR);
             if (event === ReplayEvent.MEDIA_PAUSE) return result(createReplayState(ReplayPhase.SUSPENDED, SuspendedReason.MEDIA_PAUSED, ReplayPhase.READING), AuthorityAction.KEEP, PendingAction.KEEP);
             if (event === ReplayEvent.SEQUENTIAL_FAILED) return stopped();
             break;

@@ -1030,6 +1030,40 @@
             : { action: 'HOLD', reason });
     }
 
+    function evaluateReplayCoverageHoleRepair(input = {}) {
+        const required = ['semanticHole', 'episodeSpent', 'authorityAvailable', 'authorityCurrent', 'authorityUnused',
+            'capabilityAllowed', 'requestInFlight', 'reanchorActive', 'lifecycleCurrent', 'revisionCurrent',
+            'targetCurrent', 'generationCurrent', 'playerTimingValid', 'mainContentOwnershipValid', 'visible',
+            'seekActive', 'adActive', 'navigationPending'];
+        if (required.some((key) => typeof input[key] !== 'boolean'))
+            return Object.freeze({ eligible: false, decision: 'UNKNOWN' });
+        const decision = !input.semanticHole ? 'NO_HOLE' : input.episodeSpent ? 'SPENT' :
+            !input.authorityAvailable ? 'AUTHORITY_MISSING' : (!input.authorityCurrent || !input.authorityUnused) ? 'AUTHORITY_INVALID' :
+            !input.capabilityAllowed ? 'CAPABILITY' : (input.requestInFlight || input.reanchorActive) ? 'REQUEST_ACTIVE' :
+            !input.lifecycleCurrent ? 'LIFECYCLE' : !input.revisionCurrent ? 'REVISION' : !input.targetCurrent ? 'TARGET' :
+            !input.generationCurrent ? 'GENERATION' : !input.playerTimingValid ? 'PLAYER_TIMING' :
+            !input.mainContentOwnershipValid ? 'OWNERSHIP' : !input.visible ? 'HIDDEN' : input.seekActive ? 'SEEK' :
+            input.adActive ? 'AD' : input.navigationPending ? 'NAVIGATION' : 'AUTHORIZE';
+        return Object.freeze({ eligible: decision === 'AUTHORIZE', decision });
+    }
+
+    function transitionReplayCoverageHoleEpisode(state, event) {
+        const current = state && typeof state.active === 'boolean' && typeof state.spent === 'boolean'
+            ? state : { active: false, spent: false };
+        if (event === 'HOLE_CLEARED' || event === 'INVALIDATED') return Object.freeze({ active: false, spent: false });
+        if (event === 'HOLE_OBSERVED') return Object.freeze({ active: true, spent: current.active ? current.spent : false });
+        if (event === 'AUTHORIZED' && current.active && !current.spent) return Object.freeze({ active: true, spent: true });
+        return Object.freeze({ active: current.active, spent: current.spent });
+    }
+
+    function classifyReplayCoverageHoleRepairResult(messages, currentTimeSeconds) {
+        if (!Array.isArray(messages) || messages.length === 0 || !Number.isFinite(currentTimeSeconds)) return 'INVALID';
+        const relations = messages.map((message) => classifyReplayMessageRelation(message?.replayOffsetMsec, currentTimeSeconds));
+        if (relations.some((relation) => relation === 'CURRENT_WINDOW' || relation === 'NEAR_FUTURE')) return 'SUCCESS';
+        if (relations.every((relation) => relation === 'FAR_FUTURE')) return 'NO_PROGRESS';
+        return 'INVALID';
+    }
+
     function summarizeReplayResponseTemporalShape(messages, currentTimeSeconds, previousMessages = null) {
         if (!Array.isArray(messages) || !Number.isFinite(currentTimeSeconds)) return Object.freeze({
             responseFirstMessageRelation: 'UNKNOWN', responseLastMessageRelation: 'UNKNOWN',
@@ -1581,6 +1615,9 @@
         classifyReplayMessageRelation,
         classifyReplayReadAheadHorizon,
         evaluateReplayReadAheadCadence,
+        evaluateReplayCoverageHoleRepair,
+        transitionReplayCoverageHoleEpisode,
+        classifyReplayCoverageHoleRepairResult,
         summarizeReplayResponseTemporalShape,
         createReplayGapEvidenceState,
         createReplayGapPersistenceState,

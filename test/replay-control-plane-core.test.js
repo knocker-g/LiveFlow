@@ -42,7 +42,8 @@ test('authority facade is single-use and raw token is not serialized or diagnose
     assert.doesNotMatch(JSON.stringify(created.authority), /private-token|target/);
     assert.deepEqual(created.authority.diagnostic(binding), {
         authorityKind: 'SEQUENTIAL', authorityState: 'OBSERVED_UNUSED', authorityProvenance: 'ADAPTER_SEQUENTIAL',
-        authorityCurrent: true, authorityBindingValid: true
+        authorityCurrent: true, authorityBindingValid: true, lifecycleCurrent: true,
+        revisionCurrent: true, subjectCurrent: true, generationCurrent: true
     });
     assert.equal(core.transitionAuthority(created.authority, 'CONSUME', binding).ok, true);
     assert.equal(core.transitionAuthority(created.authority, 'CONSUME', binding).reason, 'AUTHORITY_CONSUMED');
@@ -236,6 +237,29 @@ test('REANCHOR grant is single-use and hands off to a distinct fresh SEQUENTIAL 
     }).grant;
     assert.equal(core.claimAuthorityRequestGrant(sequentialGrant, 'SEQUENTIAL').opaqueToken, 'fresh-B');
     assert.equal(registry.diagnostic().consumedCount, 2);
+});
+
+test('normal-playback coverage repair enters REANCHORING without clearing retained pending', () => {
+    const transition = core.reduceReplayControlState(core.createReplayState('READING'), 'REANCHOR_AUTHORIZED', {
+        preservePending: true
+    });
+    assert.equal(transition.nextState.phase, 'REANCHORING');
+    assert.equal(transition.pendingAction, 'KEEP');
+    assert.equal(transition.requestIntent, 'REQUEST_REANCHOR');
+});
+
+test('Production coverage-hole repair is bounded, pending-preserving, and uses the existing REANCHOR path', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../src/page-state-main.js'), 'utf8');
+    const gate = source.match(/function maybeQueueReplayCoverageHoleRepair\([^]*?\n    \}/)?.[0] || '';
+    const executor = source.match(/async function runQueuedReplayReanchor\([^]*?\n    \}/)?.[0] || '';
+    assert.match(gate, /evaluateReplayCoverageHoleRepair/);
+    assert.match(gate, /transitionReplayCoverageHoleEpisode[^]*'AUTHORIZED'/);
+    assert.match(gate, /queueReplayReanchor\('COVERAGE_HOLE'/);
+    assert.match(executor, /preservePending: intent\.reason === 'COVERAGE_HOLE'/);
+    assert.match(executor, /invalidateAuthorityHandle\(replayObservedSequentialAuthority\)/);
+    assert.match(executor, /replayPending\.concat\(result\.messages\)/);
+    assert.match(executor, /classifyReplayCoverageHoleRepairResult/);
+    assert.doesNotMatch(gate, /setTimeout|setInterval|requestAnimationFrame|fetch/);
 });
 
 test('CapabilitySnapshot is immutable, fills missing entries with UNKNOWN, and never infers capabilities', () => {

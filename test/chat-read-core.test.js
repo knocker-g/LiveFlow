@@ -1284,6 +1284,64 @@ test('Replay gap diagnostic classifies response edges, coverage progress, and ac
     assert.equal(core.classifyReplayMessageRelation(15000, 10), 'NEAR_FUTURE');
 });
 
+test('Replay response shape can advance continuously while leaving current-window supply empty', () => {
+    const currentTimeSeconds = 58;
+    const previous = [{ replayOffsetMsec: 129807 }];
+    const incoming = Array.from({ length: 26 }, (_, index) => ({
+        id: `shape-${index}`,
+        replayOffsetMsec: 130186 + Math.round((2018 * index) / 25)
+    }));
+
+    assert.deepEqual(core.summarizeReplayResponseTemporalShape(incoming, currentTimeSeconds, previous), {
+        responseFirstMessageRelation: 'FAR_FUTURE',
+        responseLastMessageRelation: 'FAR_FUTURE',
+        responseCoverageProgress: 'NEWER',
+        acquisitionLeadClass: 'LONG_GAP'
+    });
+    assert.equal(incoming[0].replayOffsetMsec - previous[0].replayOffsetMsec, 379);
+    const selection = selectBoundedReplayDueMessages(incoming, currentTimeSeconds, 0, 100);
+    assert.equal(selection.due.length, 0);
+    assert.equal(selection.pending.length, 26);
+});
+
+test('Replay coverage-hole repair is single-shot and classifies current, near, and far-only results', () => {
+    const input = {
+        semanticHole: true, episodeSpent: false, authorityAvailable: true, authorityCurrent: true,
+        authorityUnused: true, capabilityAllowed: true, requestInFlight: false, reanchorActive: false,
+        lifecycleCurrent: true, revisionCurrent: true, targetCurrent: true, generationCurrent: true,
+        playerTimingValid: true, mainContentOwnershipValid: true, visible: true,
+        seekActive: false, adActive: false, navigationPending: false
+    };
+    const eligible = core.evaluateReplayCoverageHoleRepair(input);
+    assert.deepEqual(eligible, { eligible: true, decision: 'AUTHORIZE' });
+    assert.deepEqual(core.evaluateReplayCoverageHoleRepair({ ...input, episodeSpent: true }), { eligible: false, decision: 'SPENT' });
+    for (const change of [{ requestInFlight: true }, { capabilityAllowed: false }, { targetCurrent: false }, { adActive: true }])
+        assert.equal(core.evaluateReplayCoverageHoleRepair({ ...input, ...change }).eligible, false);
+    assert.equal(core.classifyReplayCoverageHoleRepairResult([{ replayOffsetMsec: 50000 }], 50), 'SUCCESS');
+    assert.equal(core.classifyReplayCoverageHoleRepairResult([{ replayOffsetMsec: 55000 }], 50), 'SUCCESS');
+    assert.equal(core.classifyReplayCoverageHoleRepairResult([{ replayOffsetMsec: 70000 }], 50), 'NO_PROGRESS');
+    let episode = core.transitionReplayCoverageHoleEpisode(null, 'HOLE_OBSERVED');
+    episode = core.transitionReplayCoverageHoleEpisode(episode, 'AUTHORIZED');
+    assert.deepEqual(episode, { active: true, spent: true });
+    assert.deepEqual(core.transitionReplayCoverageHoleEpisode(episode, 'HOLE_CLEARED'), { active: false, spent: false });
+});
+
+test('Replay coverage-hole repair merge preserves valid future pending with exact dedupe and no early display', () => {
+    const prior = [
+        { id: 'near', replayOffsetMsec: 55000 },
+        { id: 'far', replayOffsetMsec: 80000 }
+    ];
+    const repair = [
+        { id: 'near', replayOffsetMsec: 55000 },
+        { id: 'current', replayOffsetMsec: 50000 }
+    ];
+    const merged = core.selectBoundedReplayDueMessages([...prior, ...repair], 50, 0, 100);
+    assert.deepEqual(merged.due.map(({ id }) => id), ['current']);
+    assert.deepEqual(merged.pending.map(({ id }) => id), ['near', 'far']);
+    assert.equal(merged.deduplicatedCount, 1);
+    assert.equal(merged.capacityDropped, 0);
+});
+
 test('Replay gap evidence classifies every disposition without retaining raw observations', () => {
     const dispositions = [
         ['FILTERED_BEFORE_START', 'FILTERED'], ['BRIDGED_DUE', 'ALREADY_BRIDGED'],

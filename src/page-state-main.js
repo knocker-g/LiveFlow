@@ -81,6 +81,7 @@
     let replayPausedSequentialAuthority = null;
     let replayObservedSequentialAuthority = null;
     let replayReadAheadDeferred = false;
+    let replayCoverageHoleEpisodeState = Object.freeze({ active: false, spent: false });
     let replaySequentialResumeHandoff = false;
     let replayEarlyResumeSuppressionState = 'CLEAR';
     let replayRunwayDepletionEpisodeState = 'UNKNOWN';
@@ -1430,6 +1431,9 @@
         invalidateAuthorityHandle(replayObservedSequentialAuthority);
         replayObservedSequentialAuthority = null;
         replayReadAheadDeferred = false;
+        replayCoverageHoleEpisodeState = window.LiveFlowChatReadCore?.transitionReplayCoverageHoleEpisode?.(
+            replayCoverageHoleEpisodeState, 'INVALIDATED'
+        ) || Object.freeze({ active: false, spent: false });
         replayPipelineDiagnostic.readAheadDeferred = false;
         replayPipelineDiagnostic.readAheadDecision = 'ALLOW';
         replaySequentialResumeHandoff = false;
@@ -2334,7 +2338,9 @@
                     replayAwaitingFirstFreshSequentialResponse = false;
                 }
                 replayPending = replayPending.concat(result.messages);
+                const dueObservedBeforeFlush = replayPipelineDiagnostic.timingDueObserved;
                 flushReplayPending(generation, revision, lifecycleGeneration, diagnosticSequence);
+                const dueObservedDuringFlush = replayPipelineDiagnostic.timingDueObserved - dueObservedBeforeFlush;
                 if (continuationSource === 'BUFFER_EARLY_RESUME') {
                     const currentVideo = getCurrentMainVideo();
                     const after = window.LiveFlowChatReadCore?.summarizeReplayTemporalAvailability?.(
@@ -2352,6 +2358,12 @@
                     replayPipelineDiagnostic.firstFreshSequentialPriorPendingRetained = replayPipelineDiagnostic.replayPendingRetainedFromPriorResponse;
                     replayPipelineDiagnostic.firstFreshSequentialPendingAdded = replayPipelineDiagnostic.replayPendingAddedFromCurrentResponse;
                     replayPipelineDiagnostic.firstFreshSequentialCapacityDropped = replayPipelineDiagnostic.replayPendingCapacityDroppedCurrentMerge;
+                }
+                if (maybeQueueReplayCoverageHoleRepair(
+                    result.messages, generation, revision, lifecycleGeneration, dueObservedDuringFlush
+                )) {
+                    nextSequentialAuthority = null;
+                    break;
                 }
                 if (continuationSource === 'BUFFER_EARLY_RESUME' && replayPressureEpisodeActive &&
                     replayEpisodeAdvancedBudgetUsed === 1) {
@@ -2460,8 +2472,56 @@
         }
     }
 
+    function maybeQueueReplayCoverageHoleRepair(messages, generation, revision, lifecycleGeneration, dueObservedDuringFlush = 0) {
+        const core = window.LiveFlowChatReadCore;
+        const video = getCurrentMainVideo();
+        const relations = Array.isArray(messages)
+            ? messages.map((message) => core?.classifyReplayMessageRelation?.(message?.replayOffsetMsec, video?.currentTime)) : [];
+        const retainedRelations = replayPending.map((message) =>
+            core?.classifyReplayMessageRelation?.(message?.replayOffsetMsec, video?.currentTime)
+        );
+        const semanticHole = relations.length > 0 && relations.every((relation) => relation === 'FAR_FUTURE') &&
+            retainedRelations.length > 0 && retainedRelations.every((relation) => relation === 'FAR_FUTURE') &&
+            dueObservedDuringFlush === 0 && replayPipelineDiagnostic.pendingCurrent === 0;
+        replayCoverageHoleEpisodeState = core?.transitionReplayCoverageHoleEpisode?.(
+            replayCoverageHoleEpisodeState, semanticHole ? 'HOLE_OBSERVED' : 'HOLE_CLEARED'
+        ) || replayCoverageHoleEpisodeState;
+        if (!semanticHole || replayProductionControlState?.phase !== 'READING' ||
+            replayAcquisitionPausedForBuffer || replayPending.length >= REPLAY_MAX_PENDING) return false;
+        const binding = currentReplayAuthorityBinding(generation);
+        const authorityDiagnostic = replaySeekAuthority?.diagnostic?.(binding);
+        const capabilitySnapshot = replayControlPlaneCore?.createCapabilitySnapshot?.({
+            binding, evidenceEpoch: pageRevision,
+            capabilities: {
+                reanchorRead: replaySeekAuthorityIsCurrent() ? 'SUPPORTED' : 'UNKNOWN',
+                targetIdentity: isCurrentPageStateTarget() ? 'SUPPORTED' : 'UNKNOWN',
+                mainContentOwnership: video && video === getCurrentMainVideo() ? 'SUPPORTED' : 'UNKNOWN',
+                playerTiming: Number.isFinite(video?.currentTime) ? 'SUPPORTED' : 'UNKNOWN'
+            }
+        })?.snapshot;
+        const capabilityAllowed = replayControlPlaneCore?.canUseCapabilityPath?.('REANCHOR', capabilitySnapshot, binding)?.allowed === true;
+        const decision = core?.evaluateReplayCoverageHoleRepair?.({
+            semanticHole, episodeSpent: replayCoverageHoleEpisodeState.spent === true,
+            authorityAvailable: Boolean(replaySeekAuthority), authorityCurrent: authorityDiagnostic?.authorityCurrent === true,
+            authorityUnused: authorityDiagnostic?.authorityState === 'OBSERVED_UNUSED', capabilityAllowed,
+            requestInFlight: readRequestInFlight, reanchorActive: replayReanchorLock || replayPlayerSeekDiagnosticLock,
+            lifecycleCurrent: lifecycleGeneration === pageLifecycleGeneration,
+            revisionCurrent: revision === pageRevision, targetCurrent: isCurrentPageStateTarget(),
+            generationCurrent: generation === currentLoopGeneration, playerTimingValid: Number.isFinite(video?.currentTime),
+            mainContentOwnershipValid: Boolean(video && video === getCurrentMainVideo()), visible: !document.hidden,
+            seekActive: replaySeekInProgress || video?.seeking === true, adActive: replayAdActive || replayAdIsActive(),
+            navigationPending
+        });
+        if (decision?.eligible !== true) return false;
+        const queued = queueReplayReanchor('COVERAGE_HOLE', lifecycleGeneration, video);
+        if (queued) replayCoverageHoleEpisodeState = core.transitionReplayCoverageHoleEpisode(
+            replayCoverageHoleEpisodeState, 'AUTHORIZED'
+        );
+        return queued;
+    }
+
     function queueReplayReanchor(reason, epoch, video, waitForMediaEvent = false) {
-        if (!['SEEK', 'AD_EXIT', 'FOREGROUND', 'INITIAL_ALIGNMENT'].includes(reason) || !video || replayReanchorLock || replayPlayerSeekDiagnosticLock) return false;
+        if (!['SEEK', 'AD_EXIT', 'FOREGROUND', 'INITIAL_ALIGNMENT', 'COVERAGE_HOLE'].includes(reason) || !video || replayReanchorLock || replayPlayerSeekDiagnosticLock) return false;
         if (!replaySeekAuthorityIsCurrent()) {
             replayProductionReanchorReason = replaySeekAuthority ? 'AUTHORITY_STALE' : 'NO_AUTHORITY';
             return false;
@@ -2524,12 +2584,17 @@
             observeReplayControlShadow('AUTHORITY_FAILURE');
             return false;
         }
-        observeReplayControlShadow('REANCHOR_AUTHORIZED');
+        observeReplayControlShadow('REANCHOR_AUTHORIZED', { preservePending: intent.reason === 'COVERAGE_HOLE' });
         intent.attempted = true;
         if (intent.reason === 'SEEK') replayLastAttemptedSeekEpoch = intent.epoch;
         if (intent.reason === 'AD_EXIT') replayAdExitNeedsReanchor = false;
         replayReanchorIntent = null;
         replayReanchorLock = true;
+        if (intent.reason === 'COVERAGE_HOLE') {
+            invalidateAuthorityHandle(replayObservedSequentialAuthority);
+            replayObservedSequentialAuthority = null;
+            replayReadAheadDeferred = false;
+        }
         if (intent.reason === 'FOREGROUND') replayForegroundRecoveryDiagnostic.foregroundRecoveryResult = 'REQUEST_STARTED';
         replayProductionReanchorReason = 'NONE';
         const generation = ++currentLoopGeneration;
@@ -2540,6 +2605,7 @@
         readRequestInFlight = true;
         const timeoutId = window.setTimeout(() => controller.abort(), REPLAY_REQUEST_TIMEOUT_MS);
         let freshSequentialAuthority = null;
+        let coverageRepairResult = 'INVALID';
         try {
             const claimed = replayControlPlaneCore?.claimAuthorityRequestGrant?.(reanchorGrant, 'REANCHOR');
             if (claimed?.ok !== true) {
@@ -2563,6 +2629,12 @@
                 intent.revision === pageRevision && intent.targetIdentity === pageState.targetIdentity && !controller.signal.aborted;
             if (result?.ok && completionCurrent &&
                 !document.hidden && replayProductionControlState?.phase === 'REANCHORING') {
+                if (intent.reason === 'COVERAGE_HOLE') {
+                    const completionVideo = getCurrentMainVideo();
+                    coverageRepairResult = window.LiveFlowChatReadCore?.classifyReplayCoverageHoleRepairResult?.(
+                        result.messages, completionVideo === intent.video ? completionVideo.currentTime : Number.NaN
+                    ) || 'INVALID';
+                }
                 observeReplayPipelineResponse(result);
                 replayPipelineDiagnostic.reanchorTemporalCoverage = result.reanchorTemporalCoverage || 'UNKNOWN';
                 replayPipelineDiagnostic.reanchorAccepted = true;
@@ -2589,19 +2661,26 @@
                 replayPipelineDiagnostic.reanchorDisplayableFuture = displayableAccounting?.future || 0;
                 replayPipelineDiagnostic.reanchorProductionState = replayPipelineDiagnostic.transportTemporalCoverageConfirmed
                     ? 'REANCHOR_CONFIRMED' : 'SPARSE_UNCONFIRMED';
+                if (intent.reason === 'COVERAGE_HOLE') replayPipelineDiagnostic.reanchorProductionState =
+                    coverageRepairResult === 'SUCCESS' ? 'COVERAGE_REPAIR_SUCCESS' :
+                        coverageRepairResult === 'NO_PROGRESS' ? 'COVERAGE_REPAIR_NO_PROGRESS' : 'COVERAGE_REPAIR_INVALID';
                 replayPipelineDiagnostic.reanchorTimestampedActionsObserved = result.reanchorTemporalCoverage !== 'NO_TIMESTAMPED_ACTIONS' &&
                     result.reanchorTemporalCoverage !== 'UNKNOWN';
                 replayPipelineDiagnostic.reanchorReplayContinuationObserved = Boolean(result.continuationInfo?.continuation);
                 replayPipelineDiagnostic.reanchorPlayerSeekContinuationObserved = result.playerSeekContinuationObserved === true;
-                replayStartTimeSeconds = playerOffsetMs / 1000;
-                replayPending = result.messages;
+                const priorPending = intent.reason === 'COVERAGE_HOLE' ? replayPending.slice() : [];
+                if (intent.reason !== 'COVERAGE_HOLE') replayStartTimeSeconds = playerOffsetMs / 1000;
+                replayPending = intent.reason === 'COVERAGE_HOLE'
+                    ? replayPending.concat(result.messages) : result.messages;
                 const capacityDroppedBefore = replayPipelineDiagnostic.timingCapacityDropped;
                 flushReplayPending(generation, pageRevision, pageLifecycleGeneration);
-                observeReplayPendingMerge([], result.messages, capacityDroppedBefore);
+                observeReplayPendingMerge(priorPending, result.messages, capacityDroppedBefore);
                 const freshBinding = currentReplayAuthorityBinding(generation);
-                freshSequentialAuthority = createSequentialAuthorityCandidate(
-                    result.continuationInfo?.continuation || '', freshBinding
-                );
+                if (intent.reason !== 'COVERAGE_HOLE' || ['SUCCESS', 'NO_PROGRESS'].includes(coverageRepairResult)) {
+                    freshSequentialAuthority = createSequentialAuthorityCandidate(
+                        result.continuationInfo?.continuation || '', freshBinding
+                    );
+                }
                 const responseCapabilitySnapshot = replayControlPlaneCore?.createCapabilitySnapshot?.({
                     binding: freshBinding, evidenceEpoch: pageRevision,
                     capabilities: { replayMessages: 'SUPPORTED', sequentialRead: freshSequentialAuthority ? 'SUPPORTED' : 'UNKNOWN' }
@@ -2930,8 +3009,28 @@
     });
     window.LiveFlowReplayProductionReanchorDiagnostic = Object.freeze({
         status() {
+            const binding = currentReplayAuthorityBinding(pageLifecycleGeneration);
+            const authority = replaySeekAuthority?.diagnostic?.(binding) || null;
+            const video = getCurrentMainVideo();
+            const authorityAvailable = replaySeekAuthorityIsCurrent();
             return Object.freeze({
-                authorityAvailable: replaySeekAuthorityIsCurrent(),
+                authorityAvailable,
+                authorityState: authority?.authorityState || 'INVALID',
+                authorityProvenance: authority?.authorityProvenance || 'UNKNOWN',
+                authorityCurrent: authority?.authorityCurrent === true,
+                lifecycleCurrent: authority?.lifecycleCurrent === true,
+                revisionCurrent: authority?.revisionCurrent === true,
+                targetCurrent: authority?.subjectCurrent === true,
+                generationCurrent: authority?.generationCurrent === true,
+                reanchorRead: authorityAvailable ? 'SUPPORTED' : 'UNKNOWN',
+                playerTimingValid: Boolean(video && Number.isFinite(video.currentTime)),
+                mainContentOwnershipValid: Boolean(video && video === getCurrentMainVideo()),
+                requestInFlight: readRequestInFlight === true,
+                visibility: document.hidden ? 'HIDDEN' : 'VISIBLE',
+                seekActive: replaySeekInProgress === true || video?.seeking === true,
+                adActive: replayAdActive === true || replayAdIsActive(),
+                navigationPending: navigationPending === true,
+                controlPhase: replayProductionControlState?.phase || 'STOPPED',
                 inFlight: replayReanchorLock === true,
                 reason: REPLAY_REANCHOR_FAILURE_REASONS.has(replayProductionReanchorReason)
                     ? replayProductionReanchorReason : 'OTHER'
