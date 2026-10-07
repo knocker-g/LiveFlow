@@ -1030,6 +1030,17 @@
             : { action: 'HOLD', reason });
     }
 
+    function hasReplayCurrentWindowCoverageHole(input = {}) {
+        const messages = input.pendingMessages;
+        if (!Array.isArray(messages) || messages.length === 0 || !Number.isFinite(input.currentTimeSeconds) ||
+            !Number.isInteger(input.dueCount) || input.dueCount < 0 ||
+            !Number.isInteger(input.schedulerPendingCount) || input.schedulerPendingCount < 0) return false;
+        if (input.dueCount > 0 || input.schedulerPendingCount > 0) return false;
+        return messages.every((message) =>
+            classifyReplayMessageRelation(message?.replayOffsetMsec, input.currentTimeSeconds) === 'FAR_FUTURE'
+        );
+    }
+
     function evaluateReplayCoverageHoleRepair(input = {}) {
         const required = ['semanticHole', 'episodeSpent', 'authorityAvailable', 'authorityCurrent', 'authorityUnused',
             'capabilityAllowed', 'requestInFlight', 'reanchorActive', 'lifecycleCurrent', 'revisionCurrent',
@@ -1615,6 +1626,7 @@
         classifyReplayMessageRelation,
         classifyReplayReadAheadHorizon,
         evaluateReplayReadAheadCadence,
+        hasReplayCurrentWindowCoverageHole,
         evaluateReplayCoverageHoleRepair,
         transitionReplayCoverageHoleEpisode,
         classifyReplayCoverageHoleRepairResult,

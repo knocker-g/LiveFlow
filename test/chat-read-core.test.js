@@ -1315,7 +1315,13 @@ test('Replay coverage-hole repair is single-shot and classifies current, near, a
     const eligible = core.evaluateReplayCoverageHoleRepair(input);
     assert.deepEqual(eligible, { eligible: true, decision: 'AUTHORIZE' });
     assert.deepEqual(core.evaluateReplayCoverageHoleRepair({ ...input, episodeSpent: true }), { eligible: false, decision: 'SPENT' });
-    for (const change of [{ requestInFlight: true }, { capabilityAllowed: false }, { targetCurrent: false }, { adActive: true }])
+    for (const change of [
+        { authorityAvailable: false }, { authorityCurrent: false }, { authorityUnused: false },
+        { capabilityAllowed: false }, { requestInFlight: true }, { reanchorActive: true },
+        { lifecycleCurrent: false }, { revisionCurrent: false }, { targetCurrent: false },
+        { generationCurrent: false }, { playerTimingValid: false }, { mainContentOwnershipValid: false },
+        { visible: false }, { seekActive: true }, { adActive: true }, { navigationPending: true }
+    ])
         assert.equal(core.evaluateReplayCoverageHoleRepair({ ...input, ...change }).eligible, false);
     assert.equal(core.classifyReplayCoverageHoleRepairResult([{ replayOffsetMsec: 50000 }], 50), 'SUCCESS');
     assert.equal(core.classifyReplayCoverageHoleRepairResult([{ replayOffsetMsec: 55000 }], 50), 'SUCCESS');
@@ -1340,6 +1346,43 @@ test('Replay coverage-hole repair merge preserves valid future pending with exac
     assert.deepEqual(merged.pending.map(({ id }) => id), ['near', 'far']);
     assert.equal(merged.deduplicatedCount, 1);
     assert.equal(merged.capacityDropped, 0);
+});
+
+test('Replay coverage hole can become eligible on player progression without a new response', () => {
+    const responsePending = [
+        { id: 'near-at-response', replayOffsetMsec: 55000 },
+        { id: 'far-retained', replayOffsetMsec: 80000 }
+    ];
+    const responseSelection = core.selectBoundedReplayDueMessages(responsePending, 50, 0, 100);
+    assert.equal(core.hasReplayCurrentWindowCoverageHole({
+        pendingMessages: responseSelection.pending,
+        currentTimeSeconds: 50,
+        dueCount: responseSelection.due.length,
+        schedulerPendingCount: 0
+    }), false);
+
+    const crossingSelection = core.selectBoundedReplayDueMessages(responseSelection.pending, 55, 0, 100);
+    assert.deepEqual(crossingSelection.due.map(({ id }) => id), ['near-at-response']);
+    const progressedSelection = core.selectBoundedReplayDueMessages(crossingSelection.pending, 61, 0, 100);
+    assert.deepEqual(progressedSelection.pending.map(({ id }) => id), ['far-retained']);
+    assert.equal(core.hasReplayCurrentWindowCoverageHole({
+        pendingMessages: progressedSelection.pending,
+        currentTimeSeconds: 61,
+        dueCount: progressedSelection.due.length,
+        schedulerPendingCount: 0
+    }), true);
+
+    const eligibility = {
+        semanticHole: true, episodeSpent: false, authorityAvailable: true, authorityCurrent: true,
+        authorityUnused: true, capabilityAllowed: true, requestInFlight: false, reanchorActive: false,
+        lifecycleCurrent: true, revisionCurrent: true, targetCurrent: true, generationCurrent: true,
+        playerTimingValid: true, mainContentOwnershipValid: true, visible: true,
+        seekActive: false, adActive: false, navigationPending: false
+    };
+    let episode = core.transitionReplayCoverageHoleEpisode(null, 'HOLE_OBSERVED');
+    assert.equal(core.evaluateReplayCoverageHoleRepair({ ...eligibility, episodeSpent: episode.spent }).eligible, true);
+    episode = core.transitionReplayCoverageHoleEpisode(episode, 'AUTHORIZED');
+    assert.equal(core.evaluateReplayCoverageHoleRepair({ ...eligibility, episodeSpent: episode.spent }).eligible, false);
 });
 
 test('Replay gap evidence classifies every disposition without retaining raw observations', () => {

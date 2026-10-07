@@ -1599,6 +1599,9 @@
             setReplayRestartStage('LAUNCH_READY', 'NONE', diagnosticSequence);
         }
         armReplayTemporalWakeup(generation, revision, lifecycleGeneration, video);
+        if (maybeQueueReplayCoverageHoleRepair(
+            generation, revision, lifecycleGeneration, selection.due.length
+        )) return 'COVERAGE_REPAIR_QUEUED';
         if (source === 'temporal-wakeup') return;
         const lowWatermarkReached = replayPending.length <= Math.floor(REPLAY_MAX_PENDING / 2);
         if (lowWatermarkReached && replayEarlyResumeSuppressionState === 'USED_WAITING_FOR_LOW_WATERMARK') {
@@ -2338,9 +2341,7 @@
                     replayAwaitingFirstFreshSequentialResponse = false;
                 }
                 replayPending = replayPending.concat(result.messages);
-                const dueObservedBeforeFlush = replayPipelineDiagnostic.timingDueObserved;
-                flushReplayPending(generation, revision, lifecycleGeneration, diagnosticSequence);
-                const dueObservedDuringFlush = replayPipelineDiagnostic.timingDueObserved - dueObservedBeforeFlush;
+                const flushResult = flushReplayPending(generation, revision, lifecycleGeneration, diagnosticSequence);
                 if (continuationSource === 'BUFFER_EARLY_RESUME') {
                     const currentVideo = getCurrentMainVideo();
                     const after = window.LiveFlowChatReadCore?.summarizeReplayTemporalAvailability?.(
@@ -2359,9 +2360,7 @@
                     replayPipelineDiagnostic.firstFreshSequentialPendingAdded = replayPipelineDiagnostic.replayPendingAddedFromCurrentResponse;
                     replayPipelineDiagnostic.firstFreshSequentialCapacityDropped = replayPipelineDiagnostic.replayPendingCapacityDroppedCurrentMerge;
                 }
-                if (maybeQueueReplayCoverageHoleRepair(
-                    result.messages, generation, revision, lifecycleGeneration, dueObservedDuringFlush
-                )) {
+                if (flushResult === 'COVERAGE_REPAIR_QUEUED') {
                     nextSequentialAuthority = null;
                     break;
                 }
@@ -2472,17 +2471,13 @@
         }
     }
 
-    function maybeQueueReplayCoverageHoleRepair(messages, generation, revision, lifecycleGeneration, dueObservedDuringFlush = 0) {
+    function maybeQueueReplayCoverageHoleRepair(generation, revision, lifecycleGeneration, dueCount = 0) {
         const core = window.LiveFlowChatReadCore;
         const video = getCurrentMainVideo();
-        const relations = Array.isArray(messages)
-            ? messages.map((message) => core?.classifyReplayMessageRelation?.(message?.replayOffsetMsec, video?.currentTime)) : [];
-        const retainedRelations = replayPending.map((message) =>
-            core?.classifyReplayMessageRelation?.(message?.replayOffsetMsec, video?.currentTime)
-        );
-        const semanticHole = relations.length > 0 && relations.every((relation) => relation === 'FAR_FUTURE') &&
-            retainedRelations.length > 0 && retainedRelations.every((relation) => relation === 'FAR_FUTURE') &&
-            dueObservedDuringFlush === 0 && replayPipelineDiagnostic.pendingCurrent === 0;
+        const semanticHole = core?.hasReplayCurrentWindowCoverageHole?.({
+            pendingMessages: replayPending, currentTimeSeconds: video?.currentTime,
+            dueCount, schedulerPendingCount: replayPipelineDiagnostic.pendingCurrent
+        }) === true;
         replayCoverageHoleEpisodeState = core?.transitionReplayCoverageHoleEpisode?.(
             replayCoverageHoleEpisodeState, semanticHole ? 'HOLE_OBSERVED' : 'HOLE_CLEARED'
         ) || replayCoverageHoleEpisodeState;

@@ -252,9 +252,12 @@ test('Production coverage-hole repair is bounded, pending-preserving, and uses t
     const source = fs.readFileSync(path.join(__dirname, '../src/page-state-main.js'), 'utf8');
     const gate = source.match(/function maybeQueueReplayCoverageHoleRepair\([^]*?\n    \}/)?.[0] || '';
     const executor = source.match(/async function runQueuedReplayReanchor\([^]*?\n    \}/)?.[0] || '';
+    const flush = source.match(/function flushReplayPending\([^]*?\n    \}/)?.[0] || '';
     assert.match(gate, /evaluateReplayCoverageHoleRepair/);
+    assert.match(gate, /hasReplayCurrentWindowCoverageHole/);
     assert.match(gate, /transitionReplayCoverageHoleEpisode[^]*'AUTHORIZED'/);
     assert.match(gate, /queueReplayReanchor\('COVERAGE_HOLE'/);
+    assert.match(flush, /maybeQueueReplayCoverageHoleRepair/);
     assert.match(executor, /preservePending: intent\.reason === 'COVERAGE_HOLE'/);
     assert.match(executor, /invalidateAuthorityHandle\(replayObservedSequentialAuthority\)/);
     assert.match(executor, /replayPending\.concat\(result\.messages\)/);
