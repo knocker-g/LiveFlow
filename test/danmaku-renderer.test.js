@@ -1126,6 +1126,8 @@ test('management bar uses the stable primary below-player host and never Native 
 test('management bar uses touch-friendly sizing and CSS-only status shapes', () => {
     assert.match(runtimeSource, /min-height: 52px/);
     assert.match(runtimeSource, /padding: 4px 12px/);
+    assert.match(runtimeSource, /max-width: calc\(100vw - 16px\)/);
+    assert.match(runtimeSource, /margin-inline: auto/);
     assert.match(runtimeSource, /min-width: 44px/);
     assert.match(runtimeSource, /min-height: 44px/);
     assert.match(runtimeSource, /liveflow-status-icon::before/);

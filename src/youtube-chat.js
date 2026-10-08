@@ -572,6 +572,8 @@
                 gap: clamp(4px, 2vw, 10px);
                 box-sizing: border-box;
                 width: 100%;
+                max-width: calc(100vw - 16px);
+                margin-inline: auto;
                 min-height: 52px;
                 padding: 4px 12px;
                 border-top: 1px solid var(--yt-spec-10-percent-layer, rgba(255,255,255,.1));
