@@ -591,19 +591,22 @@
                 min-width: 44px;
                 min-height: 44px;
                 border: 0;
-                border-radius: 5px;
-                padding: 0 10px;
+                border-radius: 4px;
+                padding: 0 6px;
                 color: inherit;
-                background: var(--yt-spec-badge-chip-background, rgba(255,255,255,.1));
+                background: transparent;
                 font: inherit;
                 cursor: pointer;
             }
             #${MANAGEMENT_BAR_ID} .liveflow-toggle-button {
                 display: inline-flex;
                 align-items: center;
-                gap: 8px;
+                gap: 6px;
                 max-width: 100%;
                 white-space: nowrap;
+            }
+            #${MANAGEMENT_BAR_ID} button:hover {
+                background: color-mix(in srgb, currentColor 7%, transparent);
             }
             #${MANAGEMENT_BAR_ID} .liveflow-status-icon { width: 1em; text-align: center; }
             #${MANAGEMENT_BAR_ID} .liveflow-status-icon::before {

@@ -1134,6 +1134,9 @@ test('management bar uses touch-friendly sizing and CSS-only status shapes', () 
     assert.match(runtimeSource, /#\$\{MANAGEMENT_BAR_ID\} \{[^]*?position: relative;[^]*?z-index: 1;/);
     assert.match(runtimeSource, /min-width: 44px/);
     assert.match(runtimeSource, /min-height: 44px/);
+    assert.match(runtimeSource, /#\$\{MANAGEMENT_BAR_ID\} button \{[^]*?padding: 0 6px;[^]*?background: transparent;/);
+    assert.match(runtimeSource, /\.liveflow-toggle-button \{[^]*?gap: 6px;/);
+    assert.match(runtimeSource, /#\$\{MANAGEMENT_BAR_ID\} button:hover \{[^]*?currentColor 7%/);
     assert.match(runtimeSource, /liveflow-status-icon::before/);
     assert.match(runtimeSource, /data-status-shape="stopped"/);
     assert.doesNotMatch(runtimeSource, /▶|⏹/);
