@@ -1124,8 +1124,11 @@ test('management bar uses the stable primary below-player host and never Native 
 });
 
 test('management bar uses touch-friendly sizing and CSS-only status shapes', () => {
-    assert.match(runtimeSource, /min-height: 52px/);
-    assert.match(runtimeSource, /padding: 4px 12px/);
+    assert.match(runtimeSource, /margin-top: 2px/);
+    assert.match(runtimeSource, /min-height: 48px/);
+    assert.match(runtimeSource, /padding: 1px 8px/);
+    assert.match(runtimeSource, /border-radius: 8px/);
+    assert.match(runtimeSource, /background: color-mix\(in srgb, currentColor 7%, transparent\)/);
     assert.match(runtimeSource, /max-width: calc\(100vw - 16px\)/);
     assert.match(runtimeSource, /margin-inline: auto/);
     assert.match(runtimeSource, /#\$\{MANAGEMENT_BAR_ID\} \{[^]*?position: relative;[^]*?z-index: 1;/);

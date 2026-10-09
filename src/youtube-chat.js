@@ -576,13 +576,14 @@
                 width: 100%;
                 max-width: calc(100vw - 16px);
                 margin-inline: auto;
-                min-height: 52px;
-                padding: 4px 12px;
+                margin-top: 2px;
+                min-height: 48px;
+                padding: 1px 8px;
                 border-top: 1px solid var(--yt-spec-10-percent-layer, rgba(255,255,255,.1));
                 border-bottom: 1px solid var(--yt-spec-10-percent-layer, rgba(255,255,255,.1));
-                border-radius: 6px;
+                border-radius: 8px;
                 color: var(--yt-spec-text-primary, #f1f1f1);
-                background: var(--yt-spec-base-background, #0f0f0f);
+                background: color-mix(in srgb, currentColor 7%, transparent);
                 font: 500 14px/1.2 Roboto, Arial, sans-serif;
             }
             #${MANAGEMENT_BAR_ID} button {
@@ -591,7 +592,7 @@
                 min-height: 44px;
                 border: 0;
                 border-radius: 5px;
-                padding: 0 12px;
+                padding: 0 10px;
                 color: inherit;
                 background: var(--yt-spec-badge-chip-background, rgba(255,255,255,.1));
                 font: inherit;
