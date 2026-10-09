@@ -568,6 +568,8 @@
         style.textContent = `
             #${MANAGEMENT_BAR_ID} {
                 display: flex;
+                position: relative;
+                z-index: 1;
                 align-items: center;
                 gap: clamp(4px, 2vw, 10px);
                 box-sizing: border-box;
