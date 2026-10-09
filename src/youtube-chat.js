@@ -576,7 +576,7 @@
                 width: 100%;
                 max-width: calc(100vw - 16px);
                 margin-inline: auto;
-                margin-top: 2px;
+                margin-top: 8px;
                 min-height: 48px;
                 padding: 1px 8px;
                 border-top: 1px solid var(--yt-spec-10-percent-layer, rgba(255,255,255,.1));
@@ -585,6 +585,10 @@
                 color: var(--yt-spec-text-primary, #f1f1f1);
                 background: color-mix(in srgb, currentColor 7%, transparent);
                 font: 500 14px/1.2 Roboto, Arial, sans-serif;
+            }
+            :root:not([dark]) #${MANAGEMENT_BAR_ID} {
+                color: #0f0f0f;
+                background: var(--yt-spec-general-background-a, #f2f2f2);
             }
             #${MANAGEMENT_BAR_ID} button {
                 flex: 0 0 auto;
