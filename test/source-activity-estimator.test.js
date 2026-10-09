@@ -4,6 +4,7 @@ const {
     computePressure,
     createDensityState,
     transitionDensity,
+    transitionLowMediumDensity,
     createSourceActivityState,
     evaluateSourceActivity,
     classifyPromotionProvenance
@@ -136,4 +137,61 @@ test('fixture accounting closes without unaccounted loss', () => {
         const lostUnaccounted = row.input - row.forwarded - row.explicitRemoval - row.retained;
         assert.equal(lostUnaccounted, 0);
     }
+});
+
+test('LOW and MEDIUM density policy keeps activity and pressure orthogonal', () => {
+    const policyConfig = {
+        attackThresholds: [0.5, 0.75, 0.9],
+        releaseThresholds: [0.2, 0.35, 0.5],
+        minimumAttackResidence: 2,
+        releaseDwell: 3
+    };
+
+    const lowSteady = transitionLowMediumDensity(createDensityState('NORMAL', 2, 0), {
+        sourceActivityBand: 'LOW', pressure: 0
+    }, policyConfig);
+    assert.equal(lowSteady.state.level, 'NORMAL');
+    assert.equal(lowSteady.provenance, null);
+
+    const pressureOnly = transitionLowMediumDensity(createDensityState('NORMAL', 2, 0), {
+        sourceActivityBand: 'LOW', pressure: 0.8
+    }, policyConfig);
+    assert.equal(pressureOnly.state.level, 'COMPACT');
+    assert.equal(pressureOnly.sourceActivityBand, 'LOW');
+    assert.equal(pressureOnly.provenance, 'PRESSURE_RESCUE');
+
+    const sourceOnly = transitionLowMediumDensity(createDensityState('NORMAL', 2, 0), {
+        sourceActivityBand: 'MEDIUM', pressure: 0
+    }, policyConfig);
+    assert.equal(sourceOnly.state.level, 'COMPACT');
+    assert.equal(sourceOnly.provenance, 'SOURCE_ACTIVITY');
+
+    const both = transitionLowMediumDensity(createDensityState('NORMAL', 2, 0), {
+        sourceActivityBand: 'MEDIUM', pressure: 0.8
+    }, policyConfig);
+    assert.equal(both.state.level, 'COMPACT');
+    assert.equal(both.provenance, 'BOTH');
+});
+
+test('LOW and MEDIUM density policy changes at most one level and releases with dwell', () => {
+    const policyConfig = {
+        attackThresholds: [0.5, 0.75, 0.9],
+        releaseThresholds: [0.2, 0.35, 0.5],
+        minimumAttackResidence: 2,
+        releaseDwell: 3
+    };
+    let result = transitionLowMediumDensity(createDensityState('NORMAL', 0, 0), {
+        sourceActivityBand: 'MEDIUM', pressure: 0
+    }, policyConfig);
+    assert.equal(result.state.level, 'NORMAL');
+    result = transitionLowMediumDensity(result.state, { sourceActivityBand: 'MEDIUM', pressure: 0 }, policyConfig);
+    assert.equal(result.state.level, 'COMPACT');
+
+    result = transitionLowMediumDensity(result.state, { sourceActivityBand: 'LOW', pressure: 0 }, policyConfig);
+    assert.equal(result.state.level, 'COMPACT');
+    result = transitionLowMediumDensity(result.state, { sourceActivityBand: 'LOW', pressure: 0 }, policyConfig);
+    assert.equal(result.state.level, 'COMPACT');
+    result = transitionLowMediumDensity(result.state, { sourceActivityBand: 'LOW', pressure: 0 }, policyConfig);
+    assert.equal(result.state.level, 'NORMAL');
+    assert.equal(result.provenance, null);
 });

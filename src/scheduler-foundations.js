@@ -170,6 +170,41 @@
         return createDensityState(state.level, residence, releaseEvidence);
     }
 
+    function transitionLowMediumDensity(state, { sourceActivityBand, pressure } = {}, config = {}) {
+        const { attackThresholds, releaseThresholds, minimumAttackResidence, releaseDwell } = config;
+        if (!state || !['NORMAL', 'COMPACT'].includes(state.level) ||
+            !['LOW', 'MEDIUM'].includes(sourceActivityBand) || !Number.isFinite(pressure) || pressure < 0 || pressure > 1 ||
+            !Array.isArray(attackThresholds) || attackThresholds.length !== 3 ||
+            !Array.isArray(releaseThresholds) || releaseThresholds.length !== 3 ||
+            !attackThresholds.every(Number.isFinite) || !releaseThresholds.every(Number.isFinite) ||
+            !Number.isInteger(minimumAttackResidence) || minimumAttackResidence < 0 ||
+            !Number.isInteger(releaseDwell) || releaseDwell <= 0) return null;
+
+        const sourceActivityPromotes = state.level === 'NORMAL' && sourceActivityBand === 'MEDIUM';
+        const pressureRescuePromotes = state.level === 'NORMAL' && pressure >= attackThresholds[0];
+        const provenance = classifyPromotionProvenance({ sourceActivityPromotes, pressureRescuePromotes });
+        const residence = state.residence + 1;
+
+        if (provenance && residence >= minimumAttackResidence) {
+            return Object.freeze({
+                state: createDensityState('COMPACT', 0, 0),
+                sourceActivityBand,
+                pressure,
+                provenance
+            });
+        }
+
+        const releaseEligible = state.level === 'COMPACT' && sourceActivityBand === 'LOW' && pressure <= releaseThresholds[0];
+        const releaseEvidence = releaseEligible ? state.releaseEvidence + 1 : 0;
+        const release = releaseEligible && residence >= minimumAttackResidence && releaseEvidence >= releaseDwell;
+        return Object.freeze({
+            state: createDensityState(release ? 'NORMAL' : state.level, release ? 0 : residence, release ? 0 : releaseEvidence),
+            sourceActivityBand,
+            pressure,
+            provenance: null
+        });
+    }
+
     function getDensityVisualPolicy(level) {
         const index = DENSITY_LEVELS.indexOf(level);
         if (index < 0) return null;
@@ -413,6 +448,7 @@
         classifyPromotionProvenance,
         createDensityState,
         transitionDensity,
+        transitionLowMediumDensity,
         getDensityVisualPolicy,
         selectDensityLaneBand,
         selectDensityRescueLaneExpansion,
