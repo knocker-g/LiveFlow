@@ -1,5 +1,7 @@
 (function (global) {
     const DENSITY_LEVELS = Object.freeze(['NORMAL', 'COMPACT', 'DENSE', 'MAX_READABLE']);
+    const SOURCE_ACTIVITY_BANDS = Object.freeze(['LOW', 'MEDIUM', 'HIGH', 'BURST']);
+    const PROMOTION_PROVENANCE = Object.freeze(['SOURCE_ACTIVITY', 'PRESSURE_RESCUE', 'BOTH']);
     const LANE_BAND_CLASSES = Object.freeze(['UPPER', 'UPPER_TO_MID', 'BROAD', 'FULL_SAFE']);
     const COLLISION_ALLOWANCE_CLASSES = Object.freeze(['CONSERVATIVE', 'LIMITED_CATCH_UP', 'BOUNDED_OVERLAP', 'MAXIMUM_READABLE_RESCUE']);
     const SPECIAL_FIT_RESULTS = Object.freeze({ FIT: 'FIT', SCALED: 'SCALED', UNREPRESENTABLE: 'UNREPRESENTABLE_SPECIAL' });
@@ -27,6 +29,120 @@
             interval: clamp(requestedInterval, minimumInterval, userBaseInterval),
             credit: 0
         });
+    }
+
+    function validActivityBinding(binding) {
+        return binding && binding.target !== undefined && binding.timeline !== undefined &&
+            Number.isSafeInteger(binding.generation) && binding.generation >= 0;
+    }
+
+    function freezeActivityBinding(binding) {
+        return Object.freeze({ target: binding.target, timeline: binding.timeline, generation: binding.generation });
+    }
+
+    function sameActivityBinding(left, right) {
+        return validActivityBinding(left) && validActivityBinding(right) && left.target === right.target &&
+            left.timeline === right.timeline && left.generation === right.generation;
+    }
+
+    function createSourceActivityState(binding, band = 'LOW', promotionEvidence = 0, releaseEvidence = 0) {
+        if (!validActivityBinding(binding) || !SOURCE_ACTIVITY_BANDS.includes(band) ||
+            !Number.isInteger(promotionEvidence) || promotionEvidence < 0 ||
+            !Number.isInteger(releaseEvidence) || releaseEvidence < 0) return null;
+        return Object.freeze({
+            binding: freezeActivityBinding(binding),
+            band,
+            promotionEvidence,
+            releaseEvidence
+        });
+    }
+
+    function validActivityConfig({ bandThresholdsPerSecond, promotionResidence, releaseDwell } = {}) {
+        return Array.isArray(bandThresholdsPerSecond) && bandThresholdsPerSecond.length === 3 &&
+            bandThresholdsPerSecond.every((value, index) => Number.isFinite(value) && value > 0 &&
+                (index === 0 || value > bandThresholdsPerSecond[index - 1])) &&
+            Number.isInteger(promotionResidence) && promotionResidence > 0 &&
+            Number.isInteger(releaseDwell) && releaseDwell > 0;
+    }
+
+    function sourceActivityBandForRate(rate, thresholds) {
+        if (rate >= thresholds[2]) return 'BURST';
+        if (rate >= thresholds[1]) return 'HIGH';
+        if (rate >= thresholds[0]) return 'MEDIUM';
+        return 'LOW';
+    }
+
+    function evaluateSourceActivity(state, snapshot, config) {
+        if (!state || !validActivityBinding(state.binding) || !SOURCE_ACTIVITY_BANDS.includes(state.band) ||
+            !snapshot || !validActivityBinding(snapshot.currentBinding) || !validActivityBinding(snapshot.eventBinding) ||
+            !Number.isFinite(snapshot.windowStartMs) || !Number.isFinite(snapshot.windowEndMs) ||
+            snapshot.windowEndMs <= snapshot.windowStartMs || !Array.isArray(snapshot.facts) ||
+            !validActivityConfig(config)) return null;
+
+        const bindingReset = !sameActivityBinding(state.binding, snapshot.currentBinding);
+        const currentState = bindingReset ? createSourceActivityState(snapshot.currentBinding) : state;
+        if (!sameActivityBinding(snapshot.eventBinding, snapshot.currentBinding)) {
+            return Object.freeze({
+                state: currentState,
+                accepted: false,
+                bindingReset,
+                currentWindowCount: 0,
+                observedRatePerSecond: 0,
+                candidateBand: currentState.band,
+                promoted: false,
+                demoted: false
+            });
+        }
+
+        const currentFacts = snapshot.facts.filter((fact) => fact && fact.displayable === true &&
+            fact.temporalClass === 'CURRENT_WINDOW' && Number.isFinite(fact.mediaTimeMs) &&
+            fact.mediaTimeMs >= snapshot.windowStartMs && fact.mediaTimeMs <= snapshot.windowEndMs);
+        const observedRatePerSecond = currentFacts.length / ((snapshot.windowEndMs - snapshot.windowStartMs) / 1000);
+        const candidateBand = sourceActivityBandForRate(observedRatePerSecond, config.bandThresholdsPerSecond);
+        const currentIndex = SOURCE_ACTIVITY_BANDS.indexOf(currentState.band);
+        const candidateIndex = SOURCE_ACTIVITY_BANDS.indexOf(candidateBand);
+        let nextState = currentState;
+        let promoted = false;
+        let demoted = false;
+
+        if (candidateIndex > currentIndex) {
+            const promotionEvidence = currentState.promotionEvidence + 1;
+            if (promotionEvidence >= config.promotionResidence) {
+                nextState = createSourceActivityState(snapshot.currentBinding, SOURCE_ACTIVITY_BANDS[currentIndex + 1], 0, 0);
+                promoted = true;
+            } else {
+                nextState = createSourceActivityState(snapshot.currentBinding, currentState.band, promotionEvidence, 0);
+            }
+        } else if (candidateIndex < currentIndex) {
+            const releaseEvidence = currentState.releaseEvidence + 1;
+            if (releaseEvidence >= config.releaseDwell) {
+                nextState = createSourceActivityState(snapshot.currentBinding, SOURCE_ACTIVITY_BANDS[currentIndex - 1], 0, 0);
+                demoted = true;
+            } else {
+                nextState = createSourceActivityState(snapshot.currentBinding, currentState.band, 0, releaseEvidence);
+            }
+        } else {
+            nextState = createSourceActivityState(snapshot.currentBinding, currentState.band, 0, 0);
+        }
+
+        return Object.freeze({
+            state: nextState,
+            accepted: true,
+            bindingReset,
+            currentWindowCount: currentFacts.length,
+            observedRatePerSecond,
+            candidateBand,
+            promoted,
+            demoted
+        });
+    }
+
+    function classifyPromotionProvenance({ sourceActivityPromotes, pressureRescuePromotes } = {}) {
+        if (typeof sourceActivityPromotes !== 'boolean' || typeof pressureRescuePromotes !== 'boolean') return null;
+        if (sourceActivityPromotes && pressureRescuePromotes) return 'BOTH';
+        if (sourceActivityPromotes) return 'SOURCE_ACTIVITY';
+        if (pressureRescuePromotes) return 'PRESSURE_RESCUE';
+        return null;
     }
 
     function createDensityState(level = 'NORMAL', residence = 0, releaseEvidence = 0) {
@@ -285,11 +401,16 @@
 
     const api = {
         DENSITY_LEVELS,
+        SOURCE_ACTIVITY_BANDS,
+        PROMOTION_PROVENANCE,
         LANE_BAND_CLASSES,
         COLLISION_ALLOWANCE_CLASSES,
         SPECIAL_FIT_RESULTS,
         computePressure,
         computePacing,
+        createSourceActivityState,
+        evaluateSourceActivity,
+        classifyPromotionProvenance,
         createDensityState,
         transitionDensity,
         getDensityVisualPolicy,
