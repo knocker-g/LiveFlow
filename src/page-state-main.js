@@ -412,7 +412,8 @@
             reanchorTimestampedActionsObserved: false, reanchorReplayContinuationObserved: false,
             reanchorPlayerSeekContinuationObserved: false,
             launched: 0, firstLaunchObserved: false, pendingCurrent: 0, opportunitiesArmed: 0, opportunitiesEvaluated: 0,
-            stalePruned: 0, selectionNone: 0, collisionBlocked: 0, geometryUnknown: 0, generationInvalidated: 0,
+            stalePruned: 0, capacityDropped: 0, emergencyPendingDropped: 0,
+            selectionNone: 0, collisionBlocked: 0, geometryUnknown: 0, generationInvalidated: 0,
             geometryInvalidated: 0, launchCommitted: 0, collisionActiveDanmaku: 0, collisionSubtitle: 0,
             launchAttempted: 0, launchRejected: 0, visibilityFiltered: 0, enqueueRejected: 0,
             bridgeInput: 0, bridgeDeduped: 0, lifecycleDiscarded: 0,
@@ -667,7 +668,9 @@
             bridgeDeduped: replayPipelineDiagnostic.bridgeDeduped, lifecycleDiscarded: replayPipelineDiagnostic.lifecycleDiscarded,
             pendingExplicitDrop: replayPipelineDiagnostic.enqueueRejected,
             schedulerEligible: replayPipelineDiagnostic.enqueued, selected: replayPipelineDiagnostic.launchCommitted,
-            staleDropped: replayPipelineDiagnostic.stalePruned, schedulerRetained,
+            staleDropped: replayPipelineDiagnostic.stalePruned,
+            schedulerExplicitDrop: replayPipelineDiagnostic.capacityDropped + replayPipelineDiagnostic.emergencyPendingDropped,
+            schedulerRetained,
             launched: replayPipelineDiagnostic.launchCommitted, displayed: replayPipelineDiagnostic.launched
         }) || { stages: {}, lostUnaccounted: 0, overflowUnaccounted: 0, valid: false };
         const currentWindow = {
@@ -702,6 +705,8 @@
             unsupported: 0,
             beforeStartFiltered: replayPipelineDiagnostic.uniqueTimingFiltered,
             staleDropped: replayPipelineDiagnostic.stalePruned,
+            schedulerCapacityDropped: replayPipelineDiagnostic.capacityDropped,
+            emergencyPendingDropped: replayPipelineDiagnostic.emergencyPendingDropped,
             exactIdDeduped: replayGapEvidence?.exactIdDeduped === true ? 1 : 0,
             dueClassified: replayPipelineDiagnostic.uniqueTimingDue,
             dueBridged: replayPipelineDiagnostic.bridged,
@@ -2821,7 +2826,7 @@
             }
             const scheduler = event.data.scheduler;
             if (scheduler && typeof scheduler === 'object') {
-                for (const key of ['pendingCurrent', 'opportunitiesArmed', 'opportunitiesEvaluated', 'stalePruned', 'staleAfterCollision', 'staleAfterPacing', 'staleAfterSelectionMiss', 'staleAlreadyOnEnqueue', 'staleOther', 'selectionNone', 'selectionNoneNoPending', 'selectionNoneCollisionBlocked', 'selectionNoneNoEligible', 'collisionBlocked', 'geometryUnknown', 'generationInvalidated', 'geometryInvalidated', 'launchAttempted', 'launchRejected', 'launchCommitted', 'collisionActiveDanmaku', 'collisionSubtitle', 'collisionCandidateGeometry', 'collisionNoUsableLane', 'collisionOther']) {
+                for (const key of ['pendingCurrent', 'opportunitiesArmed', 'opportunitiesEvaluated', 'stalePruned', 'capacityDropped', 'emergencyPendingDropped', 'staleAfterCollision', 'staleAfterPacing', 'staleAfterSelectionMiss', 'staleAlreadyOnEnqueue', 'staleOther', 'selectionNone', 'selectionNoneNoPending', 'selectionNoneCollisionBlocked', 'selectionNoneNoEligible', 'collisionBlocked', 'geometryUnknown', 'generationInvalidated', 'geometryInvalidated', 'launchAttempted', 'launchRejected', 'launchCommitted', 'collisionActiveDanmaku', 'collisionSubtitle', 'collisionCandidateGeometry', 'collisionNoUsableLane', 'collisionOther']) {
                     if (Number.isInteger(scheduler[key]) && scheduler[key] >= 0) replayPipelineDiagnostic[key] = scheduler[key];
                 }
                 if (['IDLE', 'ARMED', 'EVALUATING'].includes(scheduler.schedulerState)) replayPipelineDiagnostic.schedulerState = scheduler.schedulerState;

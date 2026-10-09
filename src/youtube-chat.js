@@ -104,6 +104,8 @@
             staleAfterSelectionMiss: 0,
             staleAlreadyOnEnqueue: 0,
             staleOther: 0,
+            capacityDropped: 0,
+            emergencyPendingDropped: 0,
             selectionNone: 0,
             selectionNoneNoPending: 0,
             selectionNoneCollisionBlocked: 0,
@@ -222,6 +224,12 @@
             replaySchedulerDiagnostic.staleAlreadyOnEnqueue += event.staleReasons?.alreadyStaleOnEnqueue || 0;
             replaySchedulerDiagnostic.staleOther += event.staleReasons?.other || 0;
             replayGapStaleOnly = true;
+        }
+        if (event.type === 'CAPACITY_DROPPED') {
+            replaySchedulerDiagnostic.capacityDropped += Number.isInteger(event.count) ? event.count : 0;
+        }
+        if (event.type === 'EMERGENCY_PENDING_DROPPED') {
+            replaySchedulerDiagnostic.emergencyPendingDropped += Number.isInteger(event.count) ? event.count : 0;
         }
         if (event.type === 'SELECTION_NONE') {
             replaySchedulerDiagnostic.selectionNone += 1;

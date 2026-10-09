@@ -33,6 +33,7 @@
         const policy = pending.createSpecialPreferencePolicy();
         const launchProofs = new WeakMap();
         const itemDiagnosticState = new WeakMap();
+        let physicalSaturationSeen = false;
         geometryAdapter.refresh();
 
         function notify(event) {
@@ -93,6 +94,9 @@
                 notify({ type: 'COLLISION_BLOCKED' });
                 if (collisionBlocked > 0) itemState.collisionBlocked = true;
             }
+            if (densityLevel === 'MAX_READABLE' && collisionBlocked === proof.candidates.length && collisionBlocked > 0) {
+                physicalSaturationSeen = true;
+            }
             return false;
         }
 
@@ -119,9 +123,21 @@
                     if (state?.safeSeen) return 'PACING_WAIT';
                     if (!state || state.evaluated === 0) return 'SELECTION_MISS';
                     return 'OTHER';
+                },
+                relieveSaturation({ density } = {}) {
+                    if (density !== 'MAX_READABLE' || physicalSaturationSeen !== true) return Object.freeze([]);
+                    physicalSaturationSeen = false;
+                    const dropped = queue.relieveSaturation(1);
+                    for (const item of dropped) itemDiagnosticState.delete(item);
+                    if (dropped.length > 0) notify({ type: 'CAPACITY_DROPPED', count: dropped.length,
+                        semanticClass: 'NORMAL', reason: 'PHYSICAL_SATURATION' });
+                    return dropped;
                 }
             },
-            observe: notify
+            observe(event) {
+                if (event?.type === 'EVALUATING') physicalSaturationSeen = false;
+                notify(event);
+            }
         });
 
         function enqueue(payload, { id, enqueuedAt, rendererType, footprint } = {}) {
@@ -133,7 +149,10 @@
                 safeSeen: false,
                 alreadyStaleOnEnqueue: clock() - enqueuedAt > config.maxPendingAge
             });
-            queue.enforceHardCount(config.maxPendingCount);
+            const emergencyDropped = queue.enforceHardCount(config.maxPendingCount);
+            for (const dropped of emergencyDropped) itemDiagnosticState.delete(dropped);
+            if (emergencyDropped.length > 0) notify({ type: 'EMERGENCY_PENDING_DROPPED', count: emergencyDropped.length,
+                reason: 'MAX_PENDING_COUNT' });
             return true;
         }
 

@@ -123,8 +123,12 @@
                 return finish({ outcome: OUTCOMES.INVALIDATED, launched: 0, staleDropped }, nextDelay);
             }
             if (!selection) {
+                const capacityDropped = typeof operations.relieveSaturation === 'function'
+                    ? operations.relieveSaturation({ density: density.level })
+                    : Object.freeze([]);
                 notify({ type: 'SELECTION_NONE', state, pendingCount: queueDepth() });
-                return finish({ outcome: OUTCOMES.NO_SELECTION, launched: 0, staleDropped }, nextDelay);
+                return finish({ outcome: OUTCOMES.NO_SELECTION, launched: 0, staleDropped,
+                    capacityDropped: Array.isArray(capacityDropped) ? capacityDropped.length : 0 }, nextDelay);
             }
             notify({ type: 'LAUNCH_ATTEMPTED', state, pendingCount: queueDepth() });
             if (launch(selection.item) !== true) {

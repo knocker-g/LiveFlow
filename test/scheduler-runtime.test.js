@@ -140,6 +140,74 @@ test('source-active collision blank reaches stale without lane expansion and lau
         'one input is launched with zero unaccounted loss');
 });
 
+test('MAX_READABLE physical saturation emits one explicit NORMAL relief while SPECIAL remains retained', () => {
+    const events = [];
+    const h = harness({
+        observe: (event) => events.push(event),
+        config: { density: { attackThresholds: [0, 0, 0], releaseThresholds: [0.2, 0.3, 0.4], minimumAttackResidence: 1, releaseDwell: 3 } },
+        candidateProof: () => ({
+            candidates: [{ rectangle: { x: 100, y: 0, width: 50, height: 20, velocity: 200 }, lane: 0, laneSpan: 1 }],
+            activeComments: [{ x: 80, y: 0, width: 50, height: 20, velocity: 100 }]
+        })
+    });
+    h.enqueue('special', 'liveChatPaidMessageRenderer');
+    h.enqueue('normal-oldest');
+    h.enqueue('normal-newer');
+    h.fire();
+    h.fire();
+    h.fire();
+
+    const relief = events.filter(({ type }) => type === 'CAPACITY_DROPPED');
+    assert.equal(relief.length, 1);
+    assert.deepEqual(relief[0], { type: 'CAPACITY_DROPPED', count: 1, semanticClass: 'NORMAL', reason: 'PHYSICAL_SATURATION' });
+    assert.deepEqual(h.runtime.queue.snapshot().map(({ id }) => id), ['special', 'normal-newer']);
+    assert.equal(1 + h.runtime.status().pendingCount, 3, 'explicit relief plus retained closes accounting');
+});
+
+test('MAX_READABLE uses a safe candidate before relief and SPECIAL-only saturation remains temporal', () => {
+    const safeEvents = [];
+    const safe = harness({
+        observe: (event) => safeEvents.push(event),
+        config: { density: { attackThresholds: [0, 0, 0], releaseThresholds: [0.2, 0.3, 0.4], minimumAttackResidence: 1, releaseDwell: 3 } },
+        candidateProof: (_item, _geometry, policy) => ({
+            candidates: [{ rectangle: { x: 100, y: policy.density === 'MAX_READABLE' ? 40 : 0, width: 50, height: 20, velocity: 200 }, lane: 0, laneSpan: 1 }],
+            activeComments: [{ x: 80, y: 0, width: 50, height: 20, velocity: 100 }]
+        })
+    });
+    safe.enqueue('normal');
+    safe.fire(); safe.fire(); safe.fire();
+    assert.deepEqual(safe.launched, ['normal']);
+    assert.equal(safeEvents.some(({ type }) => type === 'CAPACITY_DROPPED'), false);
+
+    const specialEvents = [];
+    const special = harness({
+        observe: (event) => specialEvents.push(event),
+        config: { density: { attackThresholds: [0, 0, 0], releaseThresholds: [0.2, 0.3, 0.4], minimumAttackResidence: 1, releaseDwell: 3 } },
+        candidateProof: () => ({
+            candidates: [{ rectangle: { x: 100, y: 0, width: 50, height: 20, velocity: 200 }, lane: 0, laneSpan: 1 }],
+            activeComments: [{ x: 80, y: 0, width: 50, height: 20, velocity: 100 }]
+        })
+    });
+    special.enqueue('special', 'liveChatPaidStickerRenderer');
+    special.fire(); special.fire(); special.fire();
+    assert.equal(specialEvents.some(({ type }) => type === 'CAPACITY_DROPPED'), false);
+    assert.equal(special.runtime.status().pendingCount, 1);
+    special.setNow(1200); special.fire();
+    assert.equal(special.runtime.status().pendingCount, 0);
+    assert.equal(specialEvents.some(({ type }) => type === 'STALE_PRUNED'), true);
+});
+
+test('emergency pending overflow remains distinct from physical saturation relief', () => {
+    const events = [];
+    const h = harness({ observe: (event) => events.push(event), config: { maxPendingCount: 2 } });
+    h.enqueue('special', 'liveChatPaidMessageRenderer');
+    h.enqueue('normal-a');
+    h.enqueue('normal-b');
+    assert.equal(events.some(({ type }) => type === 'CAPACITY_DROPPED'), false);
+    const emergency = events.find(({ type }) => type === 'EMERGENCY_PENDING_DROPPED');
+    assert.deepEqual(emergency, { type: 'EMERGENCY_PENDING_DROPPED', count: 1, reason: 'MAX_PENDING_COUNT' });
+});
+
 test('arrival while armed leaves the one-shot timer unchanged', () => {
     const h = harness();
     h.enqueue('a');

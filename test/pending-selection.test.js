@@ -97,6 +97,23 @@ test('stale and hard-count drops are FIFO and ignore semantic class', () => {
     assert.deepEqual(bounded.enforceHardCount(2).map(({ id }) => id), ['special']);
 });
 
+test('saturation relief drops the oldest NORMAL before SPECIAL without changing emergency FIFO', () => {
+    const mixed = createPendingQueue();
+    fill(mixed, [
+        item('special-oldest', 0, 'liveChatPaidMessageRenderer'),
+        item('normal-oldest', 1),
+        item('special-newer', 2, 'liveChatPaidStickerRenderer'),
+        item('normal-newer', 3)
+    ]);
+    assert.deepEqual(mixed.relieveSaturation(1).map(({ id }) => id), ['normal-oldest']);
+    assert.deepEqual(mixed.snapshot().map(({ id }) => id), ['special-oldest', 'special-newer', 'normal-newer']);
+
+    const specialOnly = createPendingQueue();
+    fill(specialOnly, [item('special-a', 0, 'liveChatPaidMessageRenderer'), item('special-b', 1, 'liveChatPaidStickerRenderer')]);
+    assert.deepEqual(specialOnly.relieveSaturation(1), []);
+    assert.equal(specialOnly.snapshot().length, 2);
+});
+
 test('items are neither aggregated nor deduplicated', () => {
     const queue = createPendingQueue();
     fill(queue, [item('same', 0), item('same', 1), item('same', 2)]);

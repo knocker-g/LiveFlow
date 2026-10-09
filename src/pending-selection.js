@@ -69,6 +69,17 @@
             return Object.freeze(dropped);
         }
 
+        function relieveSaturation(maxDrops = 1) {
+            if (!Number.isInteger(maxDrops) || maxDrops <= 0) return Object.freeze([]);
+            const dropped = [];
+            while (dropped.length < maxDrops) {
+                const index = items.findIndex((item) => item.semanticClass === SEMANTIC_CLASSES.NORMAL);
+                if (index < 0) break;
+                dropped.push(items.splice(index, 1)[0]);
+            }
+            return Object.freeze(dropped);
+        }
+
         function evaluate({ scanDepth, cohortMaximumItems, cohortMaximumSpan, isSafe, policy } = {}) {
             if (!Number.isInteger(scanDepth) || scanDepth <= 0 ||
                 !Number.isInteger(cohortMaximumItems) || cohortMaximumItems <= 0 ||
@@ -124,6 +135,7 @@
             enqueue,
             pruneStale,
             enforceHardCount,
+            relieveSaturation,
             evaluate,
             confirmSuccessfulLaunch,
             snapshot: () => Object.freeze(items.slice()),

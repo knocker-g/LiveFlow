@@ -669,6 +669,20 @@ test('renderer uses browser animation and removes completed or torn-down comment
     assert.doesNotMatch(runtimeSource, /setInterval\s*\(|innerHTML|requestAnimationFrame/);
 });
 
+test('repeated bounded launch-exit cycles release every lane reservation without growth', () => {
+    const laneStates = Array.from({ length: 9 }, () => null);
+    const active = new Set();
+    for (let sequence = 0; sequence < 500; sequence += 1) {
+        const token = Object.freeze({ sequence });
+        assert.equal(reserveLaneSpan(laneStates, sequence % laneStates.length, 1, { token }), true);
+        active.add(token);
+        assert.equal(releaseLaneReservation(laneStates, token), 1);
+        active.delete(token);
+    }
+    assert.equal(active.size, 0);
+    assert.equal(laneStates.every((lane) => lane === null), true);
+});
+
 test('launch freezes measured footprint and velocity without per-frame remeasurement', () => {
     assert.match(runtimeSource, /visualFootprint: Object\.freeze\(\{ width: commentWidth, height: renderedRect\.height/);
     assert.match(runtimeSource, /trajectory: Object\.freeze\([^]*?width: commentWidth[^]*?velocity: speed/);

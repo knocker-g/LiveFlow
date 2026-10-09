@@ -576,6 +576,9 @@ test('Replay accounting ledger is aggregate-only and detects unaccounted boundar
     assert.match(ledger, /lostUnaccounted: ledger\.lostUnaccounted/);
     assert.match(pageStateSource, /LiveFlowReplayAccountingDiagnostic = Object\.freeze/);
     assert.match(pageStateSource, /receivedActions[^]*parseFailed[^]*displayable[^]*beforeStartFiltered[^]*capacityDropped/);
+    assert.match(contentSource, /event\.type === 'CAPACITY_DROPPED'[^]*capacityDropped \+=/);
+    assert.match(contentSource, /event\.type === 'EMERGENCY_PENDING_DROPPED'[^]*emergencyPendingDropped \+=/);
+    assert.match(ledger, /schedulerExplicitDrop: replayPipelineDiagnostic\.capacityDropped \+ replayPipelineDiagnostic\.emergencyPendingDropped/);
     assert.doesNotMatch(ledger, /opaqueToken|continuation|timestamp|offsetMsec|author|targetIdentity|url/i);
     assert.doesNotMatch(ledger, /fetch\(|performRead\(|setTimeout|setInterval|requestAnimationFrame/);
 });
