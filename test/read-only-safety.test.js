@@ -470,7 +470,7 @@ test('Replay post-reanchor pipeline diagnostic is shape-only, seek-scoped, and r
     assert.match(runtimeSource, /proveBoundedCollisionSafe/);
     assert.match(runtimeSource, /isOutsideHardExclusions/);
     assert.match(contentSource, /blockedReason: 'CANDIDATE_GEOMETRY_INVALID'/);
-    assert.match(contentSource, /blockedReason: 'NO_USABLE_LANE'/);
+    assert.match(contentSource, /generated\.candidates\.length === 0[^]*blockedReason: hardExclusions\.length \? 'SUBTITLE_EXCLUSION' : 'NO_USABLE_LANE'/);
     assert.match(contentSource, /event\.type === 'seeking'[^]*replaySchedulerDiagnostic = createReplaySchedulerDiagnostic\(\)/);
     assert.match(contentSource, /observe: observeReplayScheduler/);
     assert.match(contentSource, /function getCandidateProof[^]*applyOverlaySurfaceRect\(surface\)[^]*overlaySurface\.appendChild\(probe\)[^]*probe\.getBoundingClientRect\(\)/);
