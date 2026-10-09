@@ -609,9 +609,6 @@
                 max-width: 100%;
                 white-space: nowrap;
             }
-            #${MANAGEMENT_BAR_ID} button:hover {
-                background: color-mix(in srgb, currentColor 7%, transparent);
-            }
             #${MANAGEMENT_BAR_ID} .liveflow-status-icon { width: 1em; text-align: center; }
             #${MANAGEMENT_BAR_ID} .liveflow-status-icon::before {
                 display: block;
