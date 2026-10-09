@@ -5,6 +5,7 @@ const {
     createDensityState,
     transitionDensity,
     transitionLowMediumDensity,
+    transitionPresentationDensity,
     createSourceActivityState,
     evaluateSourceActivity,
     classifyPromotionProvenance
@@ -193,5 +194,46 @@ test('LOW and MEDIUM density policy changes at most one level and releases with 
     assert.equal(result.state.level, 'COMPACT');
     result = transitionLowMediumDensity(result.state, { sourceActivityBand: 'LOW', pressure: 0 }, policyConfig);
     assert.equal(result.state.level, 'NORMAL');
+    assert.equal(result.provenance, null);
+});
+
+test('HIGH and BURST activity promote one density level per evaluation with explicit provenance', () => {
+    const policyConfig = {
+        attackThresholds: [0.5, 0.75, 0.9],
+        releaseThresholds: [0.2, 0.35, 0.5],
+        minimumAttackResidence: 1,
+        releaseDwell: 3
+    };
+    let result = transitionPresentationDensity(createDensityState('COMPACT', 1, 0), {
+        sourceActivityBand: 'HIGH', pressure: 0
+    }, policyConfig);
+    assert.equal(result.state.level, 'DENSE');
+    assert.equal(result.provenance, 'SOURCE_ACTIVITY');
+
+    result = transitionPresentationDensity(result.state, { sourceActivityBand: 'BURST', pressure: 1 }, policyConfig);
+    assert.equal(result.state.level, 'MAX_READABLE');
+    assert.equal(result.provenance, 'BOTH');
+
+    const pressureOnly = transitionPresentationDensity(createDensityState('COMPACT', 1, 0), {
+        sourceActivityBand: 'LOW', pressure: 1
+    }, policyConfig);
+    assert.equal(pressureOnly.state.level, 'DENSE');
+    assert.equal(pressureOnly.sourceActivityBand, 'LOW');
+    assert.equal(pressureOnly.provenance, 'PRESSURE_RESCUE');
+});
+
+test('MAX_READABLE releases one level per dwell without mutating activity semantics', () => {
+    const policyConfig = {
+        attackThresholds: [0.5, 0.75, 0.9],
+        releaseThresholds: [0.2, 0.35, 0.5],
+        minimumAttackResidence: 1,
+        releaseDwell: 2
+    };
+    let result = transitionPresentationDensity(createDensityState('MAX_READABLE', 1, 0), {
+        sourceActivityBand: 'LOW', pressure: 0
+    }, policyConfig);
+    assert.equal(result.state.level, 'MAX_READABLE');
+    result = transitionPresentationDensity(result.state, { sourceActivityBand: 'LOW', pressure: 0 }, policyConfig);
+    assert.equal(result.state.level, 'DENSE');
     assert.equal(result.provenance, null);
 });

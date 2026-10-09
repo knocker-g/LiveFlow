@@ -84,6 +84,81 @@
         });
     }
 
+    function generateDensityLaneCandidates({ videoRect, renderedWidth, renderedHeight, actualVelocity, footprint,
+        lineHeight, laneGap, densityPolicy, laneBandFractions, interleavedAnchorStride, exclusionRegions,
+        special = false } = {}) {
+        const densityLevels = ['NORMAL', 'COMPACT', 'DENSE', 'MAX_READABLE'];
+        const bandClasses = ['UPPER', 'UPPER_TO_MID', 'BROAD', 'FULL_SAFE'];
+        if (!validRect(videoRect) || ![renderedWidth, renderedHeight, actualVelocity, lineHeight, laneGap].every(Number.isFinite) ||
+            renderedWidth <= 0 || renderedHeight <= 0 || actualVelocity <= 0 || lineHeight <= 0 || laneGap < 0 ||
+            !footprint || !densityPolicy || !densityLevels.includes(densityPolicy.density) ||
+            !bandClasses.includes(densityPolicy.laneBandClass) || !laneBandFractions || !interleavedAnchorStride ||
+            !bandClasses.every((name) => Number.isFinite(laneBandFractions[name]) && laneBandFractions[name] > 0 && laneBandFractions[name] <= 1) ||
+            !densityLevels.every((name) => Number.isInteger(interleavedAnchorStride[name]) && interleavedAnchorStride[name] >= 0) ||
+            !Array.isArray(exclusionRegions) || !exclusionRegions.every(validRect)) return null;
+
+        const lanePitch = lineHeight + laneGap;
+        const laneCount = Math.floor(videoRect.height / lanePitch);
+        if (laneCount <= 0) return Object.freeze({ candidates: Object.freeze([]), baseCandidates: Object.freeze([]),
+            interleavedCandidates: Object.freeze([]), expansionCandidates: Object.freeze([]), excludedCount: 0 });
+        const densityIndex = densityLevels.indexOf(densityPolicy.density);
+        const bandCount = Math.min(laneCount, Math.max(1, Math.ceil(laneCount * laneBandFractions[densityPolicy.laneBandClass])));
+        const nextBandCount = densityIndex > 0 && densityIndex < densityLevels.length - 1
+            ? Math.min(laneCount, Math.max(1, Math.ceil(laneCount * laneBandFractions[bandClasses[densityIndex + 1]])))
+            : bandCount;
+        let excludedCount = 0;
+
+        function candidateAt(lane) {
+            const normalized = normalizeCandidateGeometry({
+                renderedRect: {
+                    x: videoRect.x + videoRect.width - renderedWidth,
+                    y: videoRect.y + lane * lanePitch,
+                    width: renderedWidth,
+                    height: renderedHeight
+                },
+                videoRect,
+                actualVelocity,
+                footprint
+            });
+            if (!normalized.safe) return null;
+            const outsideExclusions = exclusionRegions.every((region) => !(normalized.rectangle.x < region.x + region.width &&
+                region.x < normalized.rectangle.x + normalized.rectangle.width &&
+                normalized.rectangle.y < region.y + region.height && region.y < normalized.rectangle.y + normalized.rectangle.height));
+            if (!outsideExclusions) {
+                excludedCount += 1;
+                return null;
+            }
+            return Object.freeze({ rectangle: normalized.rectangle, lane, anchorIndex: Math.round(lane * 2), laneSpan: 1,
+                interleaved: lane % 1 !== 0 });
+        }
+
+        const baseCandidates = [];
+        for (let lane = 0; lane < bandCount; lane += 1) {
+            const candidate = candidateAt(lane);
+            if (candidate) baseCandidates.push(candidate);
+        }
+        const expansionCandidates = [];
+        for (let lane = bandCount; lane < nextBandCount; lane += 1) {
+            const candidate = candidateAt(lane);
+            if (candidate) expansionCandidates.push(candidate);
+        }
+        const interleavedCandidates = [];
+        const stride = special ? 0 : interleavedAnchorStride[densityPolicy.density];
+        if (stride > 0) {
+            for (let lane = 0; lane + 1 < bandCount; lane += stride) {
+                const candidate = candidateAt(lane + 0.5);
+                if (candidate) interleavedCandidates.push(candidate);
+            }
+        }
+        return Object.freeze({
+            candidates: Object.freeze([...baseCandidates, ...interleavedCandidates, ...expansionCandidates]),
+            baseCandidates: Object.freeze(baseCandidates),
+            interleavedCandidates: Object.freeze(interleavedCandidates),
+            expansionCandidates: Object.freeze(expansionCandidates),
+            excludedCount
+        });
+    }
+
     function equivalentGeometry(left, right, epsilon) {
         if (!left || !right || left.state !== right.state || left.capabilityAvailable !== right.capabilityAvailable) return false;
         if (left.exclusionRegions.length !== right.exclusionRegions.length) return false;
@@ -168,6 +243,7 @@
         intersectRect,
         computeSubtitleGeometry,
         normalizeCandidateGeometry,
+        generateDensityLaneCandidates,
         createGeometryAuthority,
         createSubtitleGeometryAdapter
     };

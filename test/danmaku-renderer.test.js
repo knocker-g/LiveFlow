@@ -1033,26 +1033,24 @@ test('Normal comments preserve full natural-width one-line text without ellipsis
 });
 
 test('DENSE and MAX_READABLE add bounded half-pitch anchors without changing displayed comments', () => {
-    assert.match(runtimeSource, /interleavedAnchorStride\[densityPolicy\.density\]/);
-    assert.match(runtimeSource, /band\[lane\]\.lane \+ 0\.5/);
-    assert.match(runtimeSource, /anchorIndex: band\[lane\]\.anchorIndex \+ 1/);
+    assert.match(runtimeSource, /generateDensityLaneCandidates\(\{/);
+    assert.match(runtimeSource, /interleavedAnchorStride: phase5Tuning\.interleavedAnchorStride/);
     assert.match(runtimeSource, /rankDensityRescuePlacements\(/);
     assert.doesNotMatch(runtimeSource, /Math\.random/);
 });
 
-test('COMPACT adds limited subtitle-safe secondary anchors after primary placement', () => {
-    assert.match(runtimeSource, /const secondaryCandidates = \[\]/);
-    assert.match(runtimeSource, /selectDensityRescueLaneExpansion\(\s*primaryCandidates, densityPolicy, phase5Tuning\.laneBandFractions/);
-    assert.match(runtimeSource, /rankDensityRescuePlacements\(\s*band, secondaryCandidates, expansionCandidates, activeComments, entry\.id, densityPolicy\.density/);
-    assert.match(runtimeSource, /if \(lane >= reservedBottomLaneStart\) continue;[^]*selectDensityLaneBand/);
-    assert.match(runtimeSource, /isOutsideHardExclusions\(candidateGeometry\.rectangle, geometryState\.exclusionRegions\)/);
+test('candidate generation is Geometry-owned and ranked after hard exclusions', () => {
+    assert.match(runtimeSource, /const generated = geometryCore\.generateDensityLaneCandidates\(\{/);
+    assert.match(runtimeSource, /const secondaryCandidates = decorate\(generated\.interleavedCandidates\)/);
+    assert.match(runtimeSource, /rankDensityRescuePlacements\(\s*primaryCandidates, secondaryCandidates, expansionCandidates, activeComments, entry\.id, densityPolicy\.density/);
+    assert.match(runtimeSource, /exclusionRegions: hardExclusions/);
 });
 
 test('captions enabled reserves the bottom two logical lanes before Density band selection', () => {
     assert.match(runtimeSource, /\.ytp-subtitles-button\[aria-pressed="true"\]/);
     assert.match(runtimeSource, /attributeFilter: \['class', 'style', 'hidden', 'aria-pressed'\]/);
     assert.match(runtimeSource, /reservedBottomLaneStart = captionsEnabled \? Math\.max\(0, laneCount - 2\) : laneCount/);
-    assert.match(runtimeSource, /if \(lane >= reservedBottomLaneStart\) continue;[^]*selectDensityLaneBand/);
+    assert.match(runtimeSource, /if \(reservedBottomLaneStart < laneCount\) hardExclusions\.push/);
 });
 
 test('lane availability deterministically selects the earliest currently safe lane', () => {

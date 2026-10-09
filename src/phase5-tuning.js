@@ -16,7 +16,7 @@
     const CURRENT = Object.freeze({
         fontSize: 28, lineHeight: 32, laneGap: 0,
         laneBandFractions: Object.freeze({ UPPER: 0.25, UPPER_TO_MID: 0.55, BROAD: 0.95, FULL_SAFE: 1 }),
-        interleavedAnchorStride: Object.freeze({ NORMAL: 0, COMPACT: 3, DENSE: 2, MAX_READABLE: 1 }),
+        interleavedAnchorStride: Object.freeze({ NORMAL: 0, COMPACT: 0, DENSE: 2, MAX_READABLE: 1 }),
         collisionAllowances: Object.freeze({
             CONSERVATIVE: Object.freeze({ nominalGap: 24, hardMinimumSeparation: -24, maxCatchUpRatio: 0.15, maxOverlapDuration: 0.15, maxOverlapDepthRatio: 0.08, minimumVisibleFraction: 0.92 }),
             LIMITED_CATCH_UP: Object.freeze({ nominalGap: 16, hardMinimumSeparation: -24, maxCatchUpRatio: 0.72, maxOverlapDuration: 0.65, maxOverlapDepthRatio: 0.25, minimumVisibleFraction: 0.75 }),

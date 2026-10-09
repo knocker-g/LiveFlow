@@ -286,7 +286,7 @@ test('subtitle dirty observation does not mutate already displayed comments', ()
     const observer = source.match(/subtitleMutationObserver = new MutationObserver\([^;]+;/)?.[0] || '';
     assert.match(observer, /markDirty/);
     assert.doesNotMatch(observer, /cleanupOverlay|activeDanmaku|animation|remove\s*\(/);
-    assert.match(source, /normalizeCandidateGeometry/);
+    assert.match(source, /generateDensityLaneCandidates/);
     assert.match(runtime, /proveBoundedCollisionSafe/);
 });
 

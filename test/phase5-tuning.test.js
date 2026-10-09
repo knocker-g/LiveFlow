@@ -38,9 +38,9 @@ test('lane placement prioritizes safe fill-behind then deterministic phased expa
     assert.deepEqual(candidates.map(({ anchorIndex }) => anchorIndex), [0, 1, 2]);
 });
 
-test('COMPACT uses limited secondary anchors while low stays primary-only and high expands further', () => {
+test('only DENSE and MAX_READABLE enable interleaved anchors', () => {
     assert.equal(CURRENT.interleavedAnchorStride.NORMAL, 0);
-    assert.ok(CURRENT.interleavedAnchorStride.COMPACT > CURRENT.interleavedAnchorStride.DENSE);
+    assert.equal(CURRENT.interleavedAnchorStride.COMPACT, 0);
     assert.ok(CURRENT.interleavedAnchorStride.DENSE > 0);
     assert.equal(CURRENT.interleavedAnchorStride.MAX_READABLE, 1);
 });
@@ -63,7 +63,7 @@ test('COMPACT rescue preserves primary and secondary priority before expanded la
     assert.deepEqual(ranked.map(({ anchorIndex }) => anchorIndex), [0, 1, 4]);
 });
 
-test('COMPACT bounded rescue grows without changing NORMAL or the readability hard floor', () => {
+test('COMPACT bounded horizontal rescue grows without interleaving or changing NORMAL hard floor', () => {
     const before = {
         ...CURRENT,
         interleavedAnchorStride: { ...CURRENT.interleavedAnchorStride, COMPACT: 0 },
@@ -76,7 +76,7 @@ test('COMPACT bounded rescue grows without changing NORMAL or the readability ha
     assert.ok(newMedium.launchCount > oldMedium.launchCount);
     assert.ok(newMedium.staleDropCount <= oldMedium.staleDropCount);
     assert.ok(newMedium.collisionBlockedCount <= oldMedium.collisionBlockedCount);
-    assert.ok(newMedium.interleavedLaneUsage > 0);
+    assert.equal(newMedium.interleavedLaneUsage, 0);
     assert.equal(CURRENT.laneBandFractions.UPPER, before.laneBandFractions.UPPER);
     assert.equal(CURRENT.collisionAllowances.CONSERVATIVE, before.collisionAllowances.CONSERVATIVE);
     assert.equal(CURRENT.collisionAllowances.LIMITED_CATCH_UP.hardMinimumSeparation, before.collisionAllowances.LIMITED_CATCH_UP.hardMinimumSeparation);

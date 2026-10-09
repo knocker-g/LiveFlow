@@ -5,9 +5,11 @@ const {
     DIRTY_SIGNALS,
     computeSubtitleGeometry,
     normalizeCandidateGeometry,
+    generateDensityLaneCandidates,
     createGeometryAuthority,
     createSubtitleGeometryAdapter
 } = require('../src/geometry-adapter.js');
+const { proveBoundedCollisionSafe } = require('../src/scheduler-foundations.js');
 
 const video = Object.freeze({ x: 0, y: 0, width: 1280, height: 720 });
 const visible = (rect, extra = {}) => ({ visible: true, rect, ...extra });
@@ -181,4 +183,76 @@ test('candidate geometry preserves full horizontal width but requires complete v
     });
     assert.deepEqual(result.rectangle, { x: 10, y: 10, width: 40, height: 90, velocity: 240 });
     assert.equal(result.footprint, footprint);
+});
+
+function densityCandidates(density, overrides = {}) {
+    const laneBandClass = { NORMAL: 'UPPER', COMPACT: 'UPPER_TO_MID', DENSE: 'BROAD', MAX_READABLE: 'FULL_SAFE' }[density];
+    return generateDensityLaneCandidates({
+        videoRect: { x: 0, y: 0, width: 320, height: 160 },
+        renderedWidth: 120,
+        renderedHeight: 32,
+        actualVelocity: 180,
+        footprint: Object.freeze({ width: 120, height: 32, kind: 'NORMAL' }),
+        lineHeight: 32,
+        laneGap: 0,
+        densityPolicy: { density, laneBandClass },
+        laneBandFractions: { UPPER: 0.25, UPPER_TO_MID: 0.5, BROAD: 0.8, FULL_SAFE: 1 },
+        interleavedAnchorStride: { NORMAL: 0, COMPACT: 0, DENSE: 2, MAX_READABLE: 1 },
+        exclusionRegions: [],
+        ...overrides
+    });
+}
+
+test('density geometry uses base lanes for NORMAL/COMPACT and adds half-step lanes for DENSE/MAX_READABLE', () => {
+    for (const density of ['NORMAL', 'COMPACT']) {
+        const result = densityCandidates(density);
+        assert.ok(result.candidates.length > 0);
+        assert.equal(result.candidates.every(({ lane }) => Number.isInteger(lane)), true);
+    }
+    for (const density of ['DENSE', 'MAX_READABLE']) {
+        const result = densityCandidates(density);
+        assert.ok(result.baseCandidates.length > 0);
+        assert.ok(result.interleavedCandidates.length > 0);
+        assert.equal(result.interleavedCandidates.every(({ lane }) => lane % 1 === 0.5), true);
+    }
+});
+
+test('density geometry derives lane count from actual bounds and excludes subtitle intersections', () => {
+    const narrow = densityCandidates('MAX_READABLE', {
+        videoRect: { x: 0, y: 0, width: 240, height: 70 }
+    });
+    assert.deepEqual(narrow.baseCandidates.map(({ lane }) => lane), [0, 1]);
+
+    const subtitle = Object.freeze([{ x: 0, y: 40, width: 320, height: 8 }]);
+    const excluded = densityCandidates('MAX_READABLE', { exclusionRegions: subtitle });
+    assert.equal(excluded.candidates.every(({ rectangle }) =>
+        rectangle.y + rectangle.height <= 40 || rectangle.y >= 48), true);
+
+    const noCorridor = densityCandidates('MAX_READABLE', {
+        exclusionRegions: [{ x: 0, y: 0, width: 320, height: 160 }]
+    });
+    assert.equal(noCorridor.candidates.length, 0);
+});
+
+test('SPECIAL candidates remain integer anchored while preserving their complete footprint', () => {
+    const special = densityCandidates('MAX_READABLE', {
+        renderedHeight: 64,
+        footprint: Object.freeze({ width: 120, height: 64, kind: 'SPECIAL' }),
+        special: true
+    });
+    assert.equal(special.interleavedCandidates.length, 0);
+    assert.equal(special.candidates.every(({ lane, rectangle }) => Number.isInteger(lane) && rectangle.height === 64), true);
+});
+
+test('SPECIAL full footprint excludes overlapping base and half-step anchors without hiding a safe corridor', () => {
+    const normal = densityCandidates('MAX_READABLE');
+    const activeSpecial = Object.freeze({ x: 100, y: 0, width: 120, height: 48, velocity: 120 });
+    const allowance = Object.freeze({ nominalGap: 24, hardMinimumSeparation: -24, maxCatchUpRatio: 0.5,
+        maxOverlapDuration: 0.5, maxOverlapDepthRatio: 0.25, minimumVisibleFraction: 0.75 });
+    const byLane = new Map(normal.candidates.map((candidate) => [candidate.lane, candidate]));
+    for (const lane of [0, 0.5, 1]) {
+        assert.equal(proveBoundedCollisionSafe(byLane.get(lane).rectangle, [activeSpecial], allowance).safe, false);
+    }
+    assert.equal(proveBoundedCollisionSafe(byLane.get(1.5).rectangle, [activeSpecial], allowance).safe, true);
+    assert.deepEqual(activeSpecial, { x: 100, y: 0, width: 120, height: 48, velocity: 120 });
 });

@@ -205,6 +205,44 @@
         });
     }
 
+    function transitionPresentationDensity(state, { sourceActivityBand, pressure } = {}, config = {}) {
+        const { attackThresholds, releaseThresholds, minimumAttackResidence, releaseDwell } = config;
+        if (!state || !DENSITY_LEVELS.includes(state.level) || !SOURCE_ACTIVITY_BANDS.includes(sourceActivityBand) ||
+            !Number.isFinite(pressure) || pressure < 0 || pressure > 1 ||
+            !Array.isArray(attackThresholds) || attackThresholds.length !== 3 ||
+            !Array.isArray(releaseThresholds) || releaseThresholds.length !== 3 ||
+            !attackThresholds.every(Number.isFinite) || !releaseThresholds.every(Number.isFinite) ||
+            !Number.isInteger(minimumAttackResidence) || minimumAttackResidence < 0 ||
+            !Number.isInteger(releaseDwell) || releaseDwell <= 0) return null;
+
+        const currentIndex = DENSITY_LEVELS.indexOf(state.level);
+        const sourceIndex = SOURCE_ACTIVITY_BANDS.indexOf(sourceActivityBand);
+        const sourceActivityPromotes = sourceIndex > currentIndex;
+        const pressureRescuePromotes = currentIndex < DENSITY_LEVELS.length - 1 && pressure >= attackThresholds[currentIndex];
+        const provenance = classifyPromotionProvenance({ sourceActivityPromotes, pressureRescuePromotes });
+        const residence = state.residence + 1;
+
+        if (provenance && residence >= minimumAttackResidence) {
+            return Object.freeze({
+                state: createDensityState(DENSITY_LEVELS[currentIndex + 1], 0, 0),
+                sourceActivityBand,
+                pressure,
+                provenance
+            });
+        }
+
+        const releaseEligible = currentIndex > 0 && sourceIndex < currentIndex && pressure <= releaseThresholds[currentIndex - 1];
+        const releaseEvidence = releaseEligible ? state.releaseEvidence + 1 : 0;
+        const release = releaseEligible && residence >= minimumAttackResidence && releaseEvidence >= releaseDwell;
+        return Object.freeze({
+            state: createDensityState(release ? DENSITY_LEVELS[currentIndex - 1] : state.level,
+                release ? 0 : residence, release ? 0 : releaseEvidence),
+            sourceActivityBand,
+            pressure,
+            provenance: null
+        });
+    }
+
     function getDensityVisualPolicy(level) {
         const index = DENSITY_LEVELS.indexOf(level);
         if (index < 0) return null;
@@ -449,6 +487,7 @@
         createDensityState,
         transitionDensity,
         transitionLowMediumDensity,
+        transitionPresentationDensity,
         getDensityVisualPolicy,
         selectDensityLaneBand,
         selectDensityRescueLaneExpansion,

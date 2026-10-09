@@ -1057,7 +1057,6 @@
         const width = metrics?.renderedWidth;
         const height = measured.height;
         if (![width, height].every(Number.isFinite) || width <= 0 || height <= 0) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
-        const laneSpan = 1;
         const laneCount = overlayCore.calculateLaneCount(surface.height, phase5Tuning.lineHeight, phase5Tuning.laneGap);
         const playbackRate = currentChatMode === 'replay' ? media.video.playbackRate : 1;
         const baseDuration = overlayCore.calculateCompensatedDanmakuDuration(surface.width, width);
@@ -1081,52 +1080,39 @@
             velocity: trajectory.velocity,
             anchorIndex: trajectory.anchorIndex
         }) : null).filter(Boolean);
-        const usableLaneCount = Math.max(0, laneCount - laneSpan + 1);
-        if (usableLaneCount === 0) return { blockedReason: 'NO_USABLE_LANE' };
         const captionsEnabled = isCaptionTrackEnabled(media.player);
         const reservedBottomLaneStart = captionsEnabled ? Math.max(0, laneCount - 2) : laneCount;
-        const primaryCandidates = [];
-        for (let lane = 0; lane <= laneCount - laneSpan; lane += 1) {
-            if (lane >= reservedBottomLaneStart) continue;
-            const candidateGeometry = geometryCore.normalizeCandidateGeometry({
-                renderedRect: {
-                    x: videoRect.right - width,
-                    y: videoRect.top + lane * (phase5Tuning.lineHeight + phase5Tuning.laneGap),
-                    width,
-                    height
-                },
-                videoRect: { x: videoRect.left, y: videoRect.top, width: videoRect.width, height: videoRect.height },
-                actualVelocity: velocity,
-                footprint: entry.footprint
-            });
-            if (candidateGeometry.safe && schedulerFoundations.isOutsideHardExclusions(candidateGeometry.rectangle, geometryState.exclusionRegions)) {
-                primaryCandidates.push(Object.freeze({ rectangle: candidateGeometry.rectangle, lane, anchorIndex: lane * 2, laneSpan, specialFit }));
-            }
-        }
-        if (primaryCandidates.length === 0) return { blockedReason: geometryState.exclusionRegions.length ? 'SUBTITLE_EXCLUSION' : 'CANDIDATE_GEOMETRY_INVALID' };
-        const band = schedulerFoundations.selectDensityLaneBand(primaryCandidates, densityPolicy, phase5Tuning.laneBandFractions);
-        const expansionCandidates = schedulerFoundations.selectDensityRescueLaneExpansion(
-            primaryCandidates, densityPolicy, phase5Tuning.laneBandFractions
-        );
-        const secondaryCandidates = [];
-        const stride = phase5Tuning.interleavedAnchorStride[densityPolicy.density] || 0;
-        if (stride > 0) {
-            for (let lane = 0; lane + 1 < band.length; lane += stride) {
-                const y = videoRect.top + (band[lane].lane + 0.5) * (phase5Tuning.lineHeight + phase5Tuning.laneGap);
-                const candidateGeometry = geometryCore.normalizeCandidateGeometry({
-                    renderedRect: { x: videoRect.right - width, y, width, height },
-                    videoRect: { x: videoRect.left, y: videoRect.top, width: videoRect.width, height: videoRect.height },
-                    actualVelocity: velocity,
-                    footprint: entry.footprint
-                });
-                if (candidateGeometry.safe && schedulerFoundations.isOutsideHardExclusions(candidateGeometry.rectangle, geometryState.exclusionRegions)) {
-                    secondaryCandidates.push(Object.freeze({ rectangle: candidateGeometry.rectangle, lane: band[lane].lane + 0.5,
-                        anchorIndex: band[lane].anchorIndex + 1, laneSpan, specialFit, interleaved: true }));
-                }
-            }
-        }
+        const lanePitch = phase5Tuning.lineHeight + phase5Tuning.laneGap;
+        const hardExclusions = geometryState.exclusionRegions.slice();
+        if (reservedBottomLaneStart < laneCount) hardExclusions.push({
+            x: videoRect.left,
+            y: videoRect.top + reservedBottomLaneStart * lanePitch,
+            width: videoRect.width,
+            height: videoRect.bottom - (videoRect.top + reservedBottomLaneStart * lanePitch)
+        });
+        const special = normalized.messageType === 'superChat' || normalized.messageType === 'superSticker';
+        const generated = geometryCore.generateDensityLaneCandidates({
+            videoRect: { x: videoRect.left, y: videoRect.top, width: videoRect.width, height: videoRect.height },
+            renderedWidth: width,
+            renderedHeight: height,
+            actualVelocity: velocity,
+            footprint: entry.footprint,
+            lineHeight: phase5Tuning.lineHeight,
+            laneGap: phase5Tuning.laneGap,
+            densityPolicy,
+            laneBandFractions: phase5Tuning.laneBandFractions,
+            interleavedAnchorStride: phase5Tuning.interleavedAnchorStride,
+            exclusionRegions: hardExclusions,
+            special
+        });
+        if (!generated) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
+        if (generated.candidates.length === 0) return { blockedReason: hardExclusions.length ? 'SUBTITLE_EXCLUSION' : 'NO_USABLE_LANE' };
+        const decorate = (candidates) => candidates.map((candidate) => Object.freeze({ ...candidate, specialFit }));
+        const primaryCandidates = decorate(generated.baseCandidates);
+        const secondaryCandidates = decorate(generated.interleavedCandidates);
+        const expansionCandidates = decorate(generated.expansionCandidates);
         return { candidates: window.LiveFlowPhase5Tuning.rankDensityRescuePlacements(
-            band, secondaryCandidates, expansionCandidates, activeComments, entry.id, densityPolicy.density
+            primaryCandidates, secondaryCandidates, expansionCandidates, activeComments, entry.id, densityPolicy.density
         ), activeComments };
     }
 
