@@ -306,6 +306,12 @@ test('runtime smoothing uses one-shot Phase 3 pacing without response-boundary r
     assert.doesNotMatch(schedulerStateSource, /credit\s*\+=|launchAllowance/);
 });
 
+test('Production caller supplies only normalized current-window facts to Source Activity', () => {
+    assert.match(runtimeSource, /function observeCurrentWindowSourceActivity\([^]*temporalClass: 'CURRENT_WINDOW'/);
+    assert.match(runtimeSource, /scheduleDanmakuBatch\([^]*observeCurrentWindowSourceActivity\(runtime, visibleMessages, media\)/);
+    assert.match(runtimeSource, /sourceActivityBinding: currentSourceActivityBinding/);
+});
+
 test('rich text normalization validates avatar URLs and role fallback', () => {
     const normalized = normalizeDanmakuMessage({
         id: 'rich', authorName: 'Alice', authorPhoto: 'https://example.com/avatar.png', authorRole: 'unknown',

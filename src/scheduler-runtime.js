@@ -24,17 +24,70 @@
 
     function createSchedulerRuntime({
         clock, scheduleOneShot, cancelOneShot, generation, geometryAdapter,
-        candidateProof, launch, config, observe
+        sourceActivityBinding, candidateProof, launch, config, observe
     } = {}) {
         if (typeof clock !== 'function' || typeof scheduleOneShot !== 'function' || typeof cancelOneShot !== 'function' ||
-            typeof generation !== 'function' || !geometryAdapter || typeof geometryAdapter.refresh !== 'function' ||
+            typeof generation !== 'function' || (config?.sourceActivity && typeof sourceActivityBinding !== 'function') ||
+            !geometryAdapter || typeof geometryAdapter.refresh !== 'function' ||
             typeof geometryAdapter.status !== 'function' || typeof candidateProof !== 'function' || typeof launch !== 'function' || !config) return null;
         const queue = pending.createPendingQueue();
         const policy = pending.createSpecialPreferencePolicy();
         const launchProofs = new WeakMap();
         const itemDiagnosticState = new WeakMap();
         let physicalSaturationSeen = false;
+        let sourceActivityState = null;
+        let sourceActivityBindingReset = false;
+        let sourceActivityFacts = [];
+        let sourceActivityWindow = null;
         geometryAdapter.refresh();
+
+        function sameActivityBinding(left, right) {
+            return left && right && left.target === right.target && left.timeline === right.timeline &&
+                left.generation === right.generation;
+        }
+
+        function observeSourceActivity({ eventBinding, windowStartMs, windowEndMs, facts } = {}) {
+            if (!config.sourceActivity || typeof sourceActivityBinding !== 'function') return null;
+            const currentBinding = sourceActivityBinding();
+            const ownershipReset = Boolean(sourceActivityState && !sameActivityBinding(sourceActivityState.binding, currentBinding));
+            if (!sourceActivityState || ownershipReset) {
+                sourceActivityState = foundations.createSourceActivityState(currentBinding);
+                sourceActivityFacts = [];
+            }
+            if (!sourceActivityState) return null;
+            if (sameActivityBinding(eventBinding, currentBinding) && Array.isArray(facts)) {
+                sourceActivityFacts.push(...facts.filter((fact) => fact && fact.displayable === true &&
+                    fact.temporalClass === 'CURRENT_WINDOW' && Number.isFinite(fact.mediaTimeMs)));
+            }
+            sourceActivityFacts = sourceActivityFacts.filter((fact) => fact.mediaTimeMs >= windowStartMs &&
+                fact.mediaTimeMs <= windowEndMs);
+            sourceActivityWindow = Object.freeze({ currentBinding, eventBinding, windowStartMs, windowEndMs });
+            sourceActivityBindingReset = ownershipReset;
+            return Object.freeze({ accepted: sameActivityBinding(eventBinding, currentBinding), bindingReset: ownershipReset,
+                currentWindowCount: sourceActivityFacts.length });
+        }
+
+        function evaluateCurrentSourceActivity() {
+            if (!sourceActivityState || !sourceActivityWindow) return sourceActivityState;
+            const currentBinding = sourceActivityBinding();
+            if (!sameActivityBinding(sourceActivityState.binding, currentBinding)) {
+                sourceActivityState = foundations.createSourceActivityState(currentBinding);
+                sourceActivityFacts = [];
+                sourceActivityBindingReset = true;
+                if (!sourceActivityState) return null;
+            }
+            const evaluated = foundations.evaluateSourceActivity(sourceActivityState, {
+                ...sourceActivityWindow,
+                currentBinding,
+                facts: sourceActivityFacts
+            }, config.sourceActivity);
+            if (!evaluated) return sourceActivityState;
+            sourceActivityState = evaluated.state;
+            sourceActivityBindingReset = sourceActivityBindingReset || evaluated.bindingReset;
+            notify({ type: 'SOURCE_ACTIVITY_OBSERVED', sourceActivityBand: evaluated.state.band,
+                accepted: evaluated.accepted, bindingReset: sourceActivityBindingReset });
+            return sourceActivityState;
+        }
 
         function notify(event) {
             if (typeof observe !== 'function') return;
@@ -116,6 +169,18 @@
             policy,
             config,
             operations: {
+                transitionDensity(state, pressure, densityConfig) {
+                    const currentBinding = typeof sourceActivityBinding === 'function' ? sourceActivityBinding() : null;
+                    if (!sourceActivityState && currentBinding) {
+                        sourceActivityState = foundations.createSourceActivityState(currentBinding);
+                    }
+                    if (!sourceActivityState) return foundations.transitionDensity(state, pressure, densityConfig);
+                    evaluateCurrentSourceActivity();
+                    return foundations.transitionPresentationDensity(state, {
+                        sourceActivityBand: sourceActivityState.band,
+                        pressure
+                    }, densityConfig);
+                },
                 classifyStale(item) {
                     const state = itemDiagnosticState.get(item);
                     if (state?.alreadyStaleOnEnqueue) return 'ALREADY_STALE_ON_ENQUEUE';
@@ -163,9 +228,11 @@
 
         return Object.freeze({
             enqueue,
+            observeSourceActivity,
             clear,
             markGeometryDirty: geometryAdapter.markDirty,
-            status: () => Object.freeze({ ...scheduler.status(), pendingCount: queue.snapshot().length }),
+            status: () => Object.freeze({ ...scheduler.status(), pendingCount: queue.snapshot().length,
+                sourceActivityBand: sourceActivityState?.band || 'LOW', sourceActivityBindingReset }),
             queue
         });
     }

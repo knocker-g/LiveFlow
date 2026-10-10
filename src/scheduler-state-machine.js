@@ -41,6 +41,8 @@
         let timerHandle = null;
         let armedGeneration;
         let lastResult = null;
+        let densityProvenance = null;
+        let sourceActivityBand = 'LOW';
 
         function notify(event) {
             if (typeof observe !== 'function') return;
@@ -104,7 +106,17 @@
                 maxPendingAge: config.maxPendingAge
             });
             const pacing = pressure && computePacing({ pressure: pressure.pressure, ...config.pacing });
-            if (pressure) density = transitionDensity(density, pressure.pressure, config.density) || density;
+            if (pressure) {
+                const densityDecision = transitionDensity(density, pressure.pressure, config.density);
+                if (densityDecision?.state) {
+                    density = densityDecision.state;
+                    densityProvenance = densityDecision.provenance || null;
+                    sourceActivityBand = densityDecision.sourceActivityBand || sourceActivityBand;
+                } else {
+                    density = densityDecision || density;
+                    densityProvenance = null;
+                }
+            }
             const selection = queue.evaluate({
                 scanDepth: config.scanDepth,
                 cohortMaximumItems: config.cohortMaximumItems,
@@ -161,7 +173,8 @@
             enqueue,
             stop,
             evaluateOpportunity,
-            status: () => Object.freeze({ state, armed: timerHandle !== null, lastResult, density: density.level })
+            status: () => Object.freeze({ state, armed: timerHandle !== null, lastResult, density: density.level,
+                densityProvenance, sourceActivityBand })
         });
     }
 

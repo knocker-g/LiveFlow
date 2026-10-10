@@ -31,6 +31,10 @@
         releaseThresholds: Object.freeze([0.2, 0.35, 0.5]),
         minimumAttackResidence: 2,
         releaseDwell: 4,
+        sourceActivityWindowMsec: 10000,
+        sourceActivityBandThresholdsPerSecond: Object.freeze([1, 2, 4]),
+        sourceActivityPromotionResidence: 2,
+        sourceActivityReleaseDwell: 2,
     });
     let displayLinkSettings = Object.freeze({
         autoEnableLiveFlowWhenNativeChatClosed: true,
@@ -106,6 +110,8 @@
             staleOther: 0,
             capacityDropped: 0,
             emergencyPendingDropped: 0,
+            sourceActivityBand: 'LOW',
+            densityProvenance: 'NONE',
             selectionNone: 0,
             selectionNoneNoPending: 0,
             selectionNoneCollisionBlocked: 0,
@@ -265,6 +271,11 @@
         }
         replaySchedulerDiagnostic.pendingCurrent = Number.isInteger(status?.pendingCount) ? status.pendingCount :
             Number.isInteger(event.pendingCount) ? event.pendingCount : replaySchedulerDiagnostic.pendingCurrent;
+        if (['LOW', 'MEDIUM', 'HIGH', 'BURST'].includes(status?.sourceActivityBand)) {
+            replaySchedulerDiagnostic.sourceActivityBand = status.sourceActivityBand;
+        }
+        replaySchedulerDiagnostic.densityProvenance = ['SOURCE_ACTIVITY', 'PRESSURE_RESCUE', 'BOTH'].includes(status?.densityProvenance)
+            ? status.densityProvenance : 'NONE';
         replaySchedulerDiagnostic.schedulerState = ['IDLE', 'ARMED', 'EVALUATING'].includes(status?.state)
             ? status.state : ['IDLE', 'ARMED', 'EVALUATING'].includes(event.state) ? event.state : replaySchedulerDiagnostic.schedulerState;
         publishReplaySchedulerDiagnostic();
@@ -1138,6 +1149,7 @@
             scheduleOneShot: (callback, delay) => window.setTimeout(callback, Math.max(0, Math.ceil(delay))),
             cancelOneShot: (timer) => window.clearTimeout(timer),
             generation: () => rendererGeneration,
+            sourceActivityBinding: currentSourceActivityBinding,
             geometryAdapter: subtitleGeometryAdapter,
             candidateProof: getCandidateProof,
             launch: (entry, proof) => renderDanmaku(entry.message, entry.generation, entry.video, proof, entry.settingsSnapshot).status === 'rendered',
@@ -1160,11 +1172,41 @@
                     minimumAttackResidence: PHASE3_UNTUNED_RUNTIME.minimumAttackResidence,
                     releaseDwell: PHASE3_UNTUNED_RUNTIME.releaseDwell
                 },
+                sourceActivity: {
+                    bandThresholdsPerSecond: PHASE3_UNTUNED_RUNTIME.sourceActivityBandThresholdsPerSecond,
+                    promotionResidence: PHASE3_UNTUNED_RUNTIME.sourceActivityPromotionResidence,
+                    releaseDwell: PHASE3_UNTUNED_RUNTIME.sourceActivityReleaseDwell
+                },
                 collisionAllowances: phase5Tuning.collisionAllowances
             }
         });
         phase3RuntimeVideo = getCurrentMainMedia()?.video || null;
         return phase3Runtime;
+    }
+
+    function currentSourceActivityBinding() {
+        if (!currentPageKey || !['live', 'replay'].includes(currentChatMode) ||
+            !Number.isSafeInteger(currentPageLifecycleGeneration) || currentPageLifecycleGeneration < 0) return null;
+        return Object.freeze({
+            target: currentPageKey,
+            timeline: `${currentChatMode}:${currentPageRevision}`,
+            generation: currentPageLifecycleGeneration
+        });
+    }
+
+    function observeCurrentWindowSourceActivity(runtime, messages, media) {
+        const binding = currentSourceActivityBinding();
+        const playerTimeMsec = Number.isFinite(media?.video?.currentTime) ? media.video.currentTime * 1000 : null;
+        if (!runtime || !binding || !Number.isFinite(playerTimeMsec) || !Array.isArray(messages)) return null;
+        const windowEndMs = playerTimeMsec + 250;
+        const windowStartMs = Math.max(0, windowEndMs - PHASE3_UNTUNED_RUNTIME.sourceActivityWindowMsec);
+        const facts = messages.map((message) => Object.freeze({
+            mediaTimeMs: currentChatMode === 'replay' && Number.isFinite(message?.replayOffsetMsec)
+                ? message.replayOffsetMsec : playerTimeMsec,
+            displayable: true,
+            temporalClass: 'CURRENT_WINDOW'
+        }));
+        return runtime.observeSourceActivity?.({ eventBinding: binding, windowStartMs, windowEndMs, facts }) || null;
     }
 
     function renderDanmaku(message, scheduledGeneration = rendererGeneration, scheduledVideo = null, launchProof = null,
@@ -1352,6 +1394,7 @@
         const visibleMessages = Array.isArray(messages)
             ? messages.filter((message) => overlayCore.isMessageVisibleForSettings(message, launchSettingsSnapshot))
             : [];
+        observeCurrentWindowSourceActivity(runtime, visibleMessages, media);
         let enqueuedCount = 0;
         visibleMessages.forEach((message, index) => {
             if (runtime.enqueue({

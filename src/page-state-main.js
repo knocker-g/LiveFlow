@@ -413,6 +413,7 @@
             reanchorPlayerSeekContinuationObserved: false,
             launched: 0, firstLaunchObserved: false, pendingCurrent: 0, opportunitiesArmed: 0, opportunitiesEvaluated: 0,
             stalePruned: 0, capacityDropped: 0, emergencyPendingDropped: 0,
+            sourceActivityBand: 'LOW', densityProvenance: 'NONE',
             selectionNone: 0, collisionBlocked: 0, geometryUnknown: 0, generationInvalidated: 0,
             geometryInvalidated: 0, launchCommitted: 0, collisionActiveDanmaku: 0, collisionSubtitle: 0,
             launchAttempted: 0, launchRejected: 0, visibilityFiltered: 0, enqueueRejected: 0,
@@ -2830,6 +2831,8 @@
                     if (Number.isInteger(scheduler[key]) && scheduler[key] >= 0) replayPipelineDiagnostic[key] = scheduler[key];
                 }
                 if (['IDLE', 'ARMED', 'EVALUATING'].includes(scheduler.schedulerState)) replayPipelineDiagnostic.schedulerState = scheduler.schedulerState;
+                if (['LOW', 'MEDIUM', 'HIGH', 'BURST'].includes(scheduler.sourceActivityBand)) replayPipelineDiagnostic.sourceActivityBand = scheduler.sourceActivityBand;
+                if (['NONE', 'SOURCE_ACTIVITY', 'PRESSURE_RESCUE', 'BOTH'].includes(scheduler.densityProvenance)) replayPipelineDiagnostic.densityProvenance = scheduler.densityProvenance;
                 if (['NONE', 'SHORT', 'NOTICEABLE', 'LONG'].includes(scheduler.launchGapClass)) replayPipelineDiagnostic.launchGapClass = scheduler.launchGapClass;
                 const gapCause = scheduler.launchGapCause === 'NO_DUE_COMMENT' && replayPending.length > 0 ? 'WAITING_FOR_FUTURE' : scheduler.launchGapCause;
                 if (['NO_DUE_COMMENT', 'WAITING_FOR_FUTURE', 'PACING', 'COLLISION_BLOCKED', 'SELECTION_NONE', 'GEOMETRY', 'STALE_ONLY', 'UNKNOWN'].includes(gapCause)) replayPipelineDiagnostic.launchGapCause = gapCause;

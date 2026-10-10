@@ -6,6 +6,8 @@ const { createSchedulerRuntime, classifyLaunchGapClass, classifyLaunchGapCause }
 function harness({ geometryState = GEOMETRY_STATES.KNOWN_EMPTY, safe = true, observe, candidateProof, config: configOverride = {} } = {}) {
     let now = 100;
     let generation = 1;
+    let target = 'video-a';
+    let timeline = 'replay-a';
     const timers = [];
     const launched = [];
     const launchProofs = [];
@@ -17,6 +19,7 @@ function harness({ geometryState = GEOMETRY_STATES.KNOWN_EMPTY, safe = true, obs
         scheduleOneShot(callback, delay) { const timer = { callback, delay, fired: false, cancelled: false }; timers.push(timer); return timer; },
         cancelOneShot(timer) { timer.cancelled = true; },
         generation: () => generation,
+        sourceActivityBinding: () => ({ target, timeline, generation }),
         geometryAdapter: adapter,
         observe,
         candidateProof: candidateProof || (() => safe ? {
@@ -29,6 +32,7 @@ function harness({ geometryState = GEOMETRY_STATES.KNOWN_EMPTY, safe = true, obs
             scanDepth: 3, cohortMaximumItems: 3, cohortMaximumSpan: 50,
             pacing: { userBaseInterval: 400, minimumInterval: 100, maximumRescueFraction: 0.75 },
             density: { attackThresholds: [0.5, 0.7, 0.9], releaseThresholds: [0.2, 0.3, 0.4], minimumAttackResidence: 1, releaseDwell: 3 },
+            sourceActivity: { bandThresholdsPerSecond: [1, 2, 4], promotionResidence: 2, releaseDwell: 2 },
             collisionAllowances: Object.fromEntries(['CONSERVATIVE', 'LIMITED_CATCH_UP', 'BOUNDED_OVERLAP', 'MAXIMUM_READABLE_RESCUE'].map((name) => [name, {
                 nominalGap: 20, hardMinimumSeparation: -10, maxCatchUpRatio: 0.5,
                 maxOverlapDuration: 1, maxOverlapDepthRatio: 0.2, minimumVisibleFraction: 0.8
@@ -41,9 +45,26 @@ function harness({ geometryState = GEOMETRY_STATES.KNOWN_EMPTY, safe = true, obs
         return runtime.enqueue({ id }, { id, enqueuedAt, rendererType, footprint: { width: 50, height: 20 } });
     }
     return { runtime, timers, launched, launchProofs, adapter, authority, fire, enqueue,
+        activityBinding: () => ({ target, timeline, generation }),
         setGeneration(value) { generation = value; },
+        setTarget(value) { target = value; },
+        setTimeline(value) { timeline = value; },
         setGeometry(value) { nextGeometry = value; adapter.markDirty('RESIZE'); },
         setNow(value) { now = value; } };
+}
+
+function activityFacts(count, start = 0, end = 10000) {
+    return Array.from({ length: count }, (_, index) => ({
+        mediaTimeMs: count <= 1 ? start : start + ((end - start) * index) / (count - 1),
+        displayable: true,
+        temporalClass: 'CURRENT_WINDOW'
+    }));
+}
+
+function observeActivity(h, count) {
+    const binding = h.activityBinding();
+    return h.runtime.observeSourceActivity({ eventBinding: binding,
+        windowStartMs: 0, windowEndMs: 10000, facts: activityFacts(count) });
 }
 
 test('arrival flows through pending scheduler to one launch', () => {
@@ -52,6 +73,52 @@ test('arrival flows through pending scheduler to one launch', () => {
     assert.equal(h.timers[0].delay, 0);
     h.fire();
     assert.deepEqual(h.launched, ['a']);
+});
+
+test('Production runtime wires current-window Source Activity into density with orthogonal provenance', () => {
+    const source = harness({ config: { pendingPressureCapacity: 100 } });
+    source.enqueue('a'); source.enqueue('b'); source.enqueue('c'); source.enqueue('d'); source.enqueue('e'); source.enqueue('f');
+    observeActivity(source, 50);
+    source.fire(); source.fire();
+    assert.equal(source.runtime.status().density, 'COMPACT');
+    assert.equal(source.runtime.status().densityProvenance, 'SOURCE_ACTIVITY');
+    source.fire(); source.fire();
+    assert.equal(source.runtime.status().density, 'DENSE');
+    source.fire(); source.fire();
+    assert.equal(source.runtime.status().density, 'MAX_READABLE');
+    assert.equal(source.launched.length, 6, 'six opportunities launch exactly six items without credit');
+
+    const pressure = harness({ config: { pendingPressureCapacity: 1 } });
+    pressure.enqueue('pressure'); pressure.fire();
+    assert.equal(pressure.runtime.status().sourceActivityBand, 'LOW');
+    assert.equal(pressure.runtime.status().densityProvenance, 'PRESSURE_RESCUE');
+
+    const both = harness({ config: { pendingPressureCapacity: 1,
+        sourceActivity: { bandThresholdsPerSecond: [1, 2, 4], promotionResidence: 1, releaseDwell: 2 } } });
+    observeActivity(both, 15);
+    both.enqueue('both-a'); both.enqueue('both-b');
+    both.fire();
+    assert.equal(both.runtime.status().densityProvenance, 'BOTH');
+    both.fire();
+});
+
+test('Production Source Activity currentness resets on binding changes but not geometry-only changes', () => {
+    const h = harness({ config: { pendingPressureCapacity: 100 } });
+    observeActivity(h, 50);
+    h.enqueue('a'); h.enqueue('b'); h.fire(); h.fire();
+    assert.equal(h.runtime.status().sourceActivityBand, 'MEDIUM');
+    h.setGeometry({ state: GEOMETRY_STATES.KNOWN_EMPTY, exclusionRegions: [], capabilityAvailable: true });
+    assert.equal(h.runtime.status().sourceActivityBand, 'MEDIUM');
+    h.setGeneration(2);
+    observeActivity(h, 2);
+    assert.equal(h.runtime.status().sourceActivityBand, 'LOW');
+    assert.equal(h.runtime.status().sourceActivityBindingReset, true);
+    h.setTarget('video-b');
+    observeActivity(h, 2);
+    assert.equal(h.runtime.status().sourceActivityBand, 'LOW');
+    h.setTimeline('replay-b');
+    observeActivity(h, 2);
+    assert.equal(h.runtime.status().sourceActivityBand, 'LOW');
 });
 
 test('launch-gap diagnostic classifies duration and fixed causes without raw timing', () => {
