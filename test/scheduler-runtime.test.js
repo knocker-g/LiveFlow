@@ -1,7 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { GEOMETRY_STATES, createGeometryAuthority, createSubtitleGeometryAdapter } = require('../src/geometry-adapter.js');
+const { GEOMETRY_STATES, createGeometryAuthority, createSubtitleGeometryAdapter,
+    generateDensityLaneCandidates } = require('../src/geometry-adapter.js');
 const { createSchedulerRuntime, classifyLaunchGapClass, classifyLaunchGapCause } = require('../src/scheduler-runtime.js');
+const { CURRENT, rankDensityRescuePlacements } = require('../src/phase5-tuning.js');
 
 function harness({ geometryState = GEOMETRY_STATES.KNOWN_EMPTY, safe = true, observe, candidateProof, config: configOverride = {} } = {}) {
     let now = 100;
@@ -356,6 +358,44 @@ test('current Density policy is injected into bounded candidate proof and commit
     assert.equal(observedPolicies[0].collisionAllowanceClass, 'CONSERVATIVE');
     assert.equal(h.launchProofs[0].laneSpan, 1);
     assert.equal(h.launchProofs[0].density, 'NORMAL');
+});
+
+test('Production DENSE launch proof can commit a generated half-step anchor', () => {
+    const generated = generateDensityLaneCandidates({
+        videoRect: { x: 0, y: 0, width: 320, height: 160 },
+        renderedWidth: 120,
+        renderedHeight: 32,
+        actualVelocity: 180,
+        footprint: { width: 120, height: 32, kind: 'NORMAL' },
+        lineHeight: 32,
+        laneGap: 0,
+        densityPolicy: { density: 'DENSE', laneBandClass: 'BROAD' },
+        laneBandFractions: CURRENT.laneBandFractions,
+        interleavedAnchorStride: CURRENT.interleavedAnchorStride,
+        exclusionRegions: []
+    });
+    const chosenId = Array.from({ length: 64 }, (_, index) => `dense-${index}`).find((id) =>
+        rankDensityRescuePlacements(generated.baseCandidates, generated.interleavedCandidates,
+            generated.expansionCandidates, [], id, 'DENSE')[0]?.interleaved === true);
+    assert.ok(chosenId);
+
+    const h = harness({
+        config: { pendingPressureCapacity: 100 },
+        candidateProof: (item, _geometry, policy) => {
+            const candidates = rankDensityRescuePlacements(generated.baseCandidates, generated.interleavedCandidates,
+                generated.expansionCandidates, [], item.payload.id, policy.density);
+            return { candidates, activeComments: [] };
+        }
+    });
+    observeActivity(h, 50);
+    h.enqueue('warmup-a'); h.enqueue('warmup-b'); h.enqueue('warmup-c'); h.enqueue(chosenId);
+    for (let index = 0; index < 4; index += 1) {
+        h.setMediaTime(10000 + index);
+        h.fire();
+    }
+    assert.equal(h.runtime.status().density, 'DENSE');
+    assert.equal(h.launchProofs[3].interleaved, true);
+    assert.equal(h.launchProofs[3].lane % 1, 0.5);
 });
 
 test('UNREPRESENTABLE_SPECIAL is structurally removed and cannot permanently block a bounded scan', () => {

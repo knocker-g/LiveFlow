@@ -70,7 +70,11 @@
         const primary = rankLanePlacements(primaryCandidates, activeComments, preferredSeed);
         const secondary = rankLanePlacements(secondaryCandidates, activeComments, preferredSeed);
         const expansion = rankLanePlacements(expansionCandidates, activeComments, preferredSeed);
-        if (density === 'COMPACT' || density === 'DENSE') return Object.freeze([...primary, ...secondary, ...expansion]);
+        if (density === 'COMPACT') return Object.freeze([...primary, ...secondary, ...expansion]);
+        if (density === 'DENSE') return Object.freeze([
+            ...rankLanePlacements([...primaryCandidates, ...secondaryCandidates], activeComments, preferredSeed),
+            ...expansion
+        ]);
         return rankLanePlacements([...primaryCandidates, ...secondaryCandidates, ...expansionCandidates], activeComments, preferredSeed);
     }
 

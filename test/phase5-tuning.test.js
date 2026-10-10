@@ -63,6 +63,20 @@ test('COMPACT rescue preserves primary and secondary priority before expanded la
     assert.deepEqual(ranked.map(({ anchorIndex }) => anchorIndex), [0, 1, 4]);
 });
 
+test('DENSE ranking makes interleaved anchors reachable before vertical expansion', () => {
+    const primary = [0, 2, 4].map((anchorIndex) => ({ anchorIndex, interleaved: false,
+        rectangle: { x: 1000, width: 100 } }));
+    const secondary = [1, 3].map((anchorIndex) => ({ anchorIndex, interleaved: true,
+        rectangle: { x: 1000, width: 100 } }));
+    const expansion = [{ anchorIndex: 6, expanded: true, rectangle: { x: 1000, width: 100 } }];
+    const firstChoices = Array.from({ length: 32 }, (_, index) =>
+        rankDensityRescuePlacements(primary, secondary, expansion, [], `dense-${index}`, 'DENSE')[0]);
+    assert.ok(firstChoices.some(({ interleaved }) => interleaved === true),
+        'a safe interleaved anchor must be reachable as a Production launch choice');
+    assert.equal(firstChoices.some(({ expanded }) => expanded === true), false,
+        'DENSE should exhaust the current band before vertical expansion');
+});
+
 test('COMPACT bounded horizontal rescue grows without interleaving or changing NORMAL hard floor', () => {
     const before = {
         ...CURRENT,
