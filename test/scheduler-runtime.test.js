@@ -388,6 +388,66 @@ test('subtitle exclusion and UNKNOWN geometry block without launch', () => {
     assert.deepEqual(unknown.launched, []);
 });
 
+test('caption geometry transitions affect only new launches and restore newly safe candidates', () => {
+    const h = harness({ candidateProof: () => ({
+        candidates: [{ rectangle: { x: 100, y: 0, width: 50, height: 20, velocity: 100 }, lane: 0, laneSpan: 1 }],
+        activeComments: []
+    }) });
+    const active = Object.freeze({ id: 'already-active', rectangle: Object.freeze({ x: 20, y: 0, width: 50, height: 20 }) });
+
+    h.enqueue('before-caption'); h.fire();
+    assert.deepEqual(h.launched, ['before-caption']);
+    h.setGeometry({ state: GEOMETRY_STATES.KNOWN_PRESENT,
+        exclusionRegions: [{ x: 0, y: 0, width: 300, height: 30 }], capabilityAvailable: true });
+    h.enqueue('during-caption'); h.fire();
+    assert.equal(h.runtime.status().lastResult.outcome, 'INVALIDATED');
+    h.fire();
+    assert.deepEqual(h.launched, ['before-caption']);
+    assert.equal(h.runtime.status().pendingCount, 1);
+
+    h.setGeometry({ state: GEOMETRY_STATES.KNOWN_EMPTY, exclusionRegions: [], capabilityAvailable: true });
+    h.fire();
+    assert.equal(h.runtime.status().lastResult.outcome, 'INVALIDATED');
+    h.fire();
+    assert.deepEqual(h.launched, ['before-caption', 'during-caption']);
+    assert.deepEqual(active, { id: 'already-active', rectangle: { x: 20, y: 0, width: 50, height: 20 } });
+});
+
+test('repeated SPECIAL leaves a geometrically safe NORMAL corridor launchable', () => {
+    const activeSpecial = { x: 80, y: 0, width: 120, height: 68, velocity: 100 };
+    const h = harness({ candidateProof: (item) => item.payload.id.startsWith('special') ? {
+        candidates: [{ rectangle: { x: 100, y: 0, width: 120, height: 68, velocity: 100 }, lane: 0, laneSpan: 1 }],
+        activeComments: []
+    } : {
+        candidates: [
+            { rectangle: { x: 100, y: 0, width: 50, height: 20, velocity: 100 }, lane: 0, laneSpan: 1 },
+            { rectangle: { x: 100, y: 80, width: 50, height: 20, velocity: 100 }, lane: 2, laneSpan: 1 }
+        ],
+        activeComments: [activeSpecial]
+    } });
+    h.enqueue('special-a', 'liveChatPaidMessageRenderer');
+    h.enqueue('special-b', 'liveChatPaidStickerRenderer');
+    h.enqueue('normal');
+    h.fire(); h.fire(); h.fire();
+    assert.deepEqual(h.launched, ['special-a', 'special-b', 'normal']);
+    assert.equal(h.runtime.status().pendingCount, 0);
+    assert.equal(h.launchProofs[2].lane, 2);
+});
+
+test('UNKNOWN geometry resumes pending launch only after a current known revision', () => {
+    const h = harness({ geometryState: GEOMETRY_STATES.UNKNOWN });
+    h.enqueue('pending'); h.fire();
+    assert.deepEqual(h.launched, []);
+    assert.equal(h.runtime.status().pendingCount, 1);
+
+    h.setGeometry({ state: GEOMETRY_STATES.KNOWN_EMPTY, exclusionRegions: [], capabilityAvailable: true });
+    h.fire();
+    assert.equal(h.runtime.status().lastResult.outcome, 'INVALIDATED');
+    h.fire();
+    assert.deepEqual(h.launched, ['pending']);
+    assert.equal(h.runtime.status().pendingCount, 0);
+});
+
 test('generation and geometry revision changes invalidate before launch', () => {
     const generation = harness();
     generation.enqueue('a');
