@@ -77,6 +77,28 @@ test('DENSE ranking makes interleaved anchors reachable before vertical expansio
         'DENSE should exhaust the current band before vertical expansion');
 });
 
+test('final High/Burst candidate tightens spacing and modestly shortens new-launch occupancy', () => {
+    const previous = {
+        ...CURRENT,
+        collisionAllowances: {
+            ...CURRENT.collisionAllowances,
+            BOUNDED_OVERLAP: { ...CURRENT.collisionAllowances.BOUNDED_OVERLAP, nominalGap: 14 },
+            MAXIMUM_READABLE_RESCUE: { ...CURRENT.collisionAllowances.MAXIMUM_READABLE_RESCUE, nominalGap: 10 }
+        },
+        lengthVelocity: { ...CURRENT.lengthVelocity, shortMultiplier: 1.04, mediumMultiplier: 1.05,
+            longMultiplier: 1.18, veryLongMultiplier: 1.38, extremeMultiplier: 1.55 }
+    };
+    assert.equal(CURRENT.collisionAllowances.BOUNDED_OVERLAP.nominalGap, 10);
+    assert.equal(CURRENT.collisionAllowances.MAXIMUM_READABLE_RESCUE.nominalGap, 6);
+    assert.equal(CURRENT.collisionAllowances.BOUNDED_OVERLAP.hardMinimumSeparation, -24);
+    assert.equal(CURRENT.collisionAllowances.MAXIMUM_READABLE_RESCUE.hardMinimumSeparation, -24);
+    const before = buildSyntheticTuningMatrix(previous);
+    const after = buildSyntheticTuningMatrix(CURRENT);
+    for (const width of ['short', 'medium', 'long', 'veryLong']) {
+        assert.ok(after.occupancy[width].relativeOccupancy < before.occupancy[width].relativeOccupancy);
+    }
+});
+
 test('COMPACT bounded horizontal rescue grows without interleaving or changing NORMAL hard floor', () => {
     const before = {
         ...CURRENT,

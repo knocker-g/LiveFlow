@@ -20,11 +20,11 @@
         collisionAllowances: Object.freeze({
             CONSERVATIVE: Object.freeze({ nominalGap: 24, hardMinimumSeparation: -24, maxCatchUpRatio: 0.15, maxOverlapDuration: 0.15, maxOverlapDepthRatio: 0.08, minimumVisibleFraction: 0.92 }),
             LIMITED_CATCH_UP: Object.freeze({ nominalGap: 16, hardMinimumSeparation: -24, maxCatchUpRatio: 0.72, maxOverlapDuration: 0.65, maxOverlapDepthRatio: 0.25, minimumVisibleFraction: 0.75 }),
-            BOUNDED_OVERLAP: Object.freeze({ nominalGap: 14, hardMinimumSeparation: -24, maxCatchUpRatio: 0.82, maxOverlapDuration: 0.85, maxOverlapDepthRatio: 0.32, minimumVisibleFraction: 0.68 }),
-            MAXIMUM_READABLE_RESCUE: Object.freeze({ nominalGap: 10, hardMinimumSeparation: -24, maxCatchUpRatio: 0.95, maxOverlapDuration: 1.1, maxOverlapDepthRatio: 0.4, minimumVisibleFraction: 0.6 })
+            BOUNDED_OVERLAP: Object.freeze({ nominalGap: 10, hardMinimumSeparation: -24, maxCatchUpRatio: 0.82, maxOverlapDuration: 0.85, maxOverlapDepthRatio: 0.32, minimumVisibleFraction: 0.68 }),
+            MAXIMUM_READABLE_RESCUE: Object.freeze({ nominalGap: 6, hardMinimumSeparation: -24, maxCatchUpRatio: 0.95, maxOverlapDuration: 1.1, maxOverlapDepthRatio: 0.4, minimumVisibleFraction: 0.6 })
         }),
         minimumSpeed: 132, maximumSpeed: 340,
-        lengthVelocity: Object.freeze({ mediumWidthRatio: 0.25, longWidthRatio: 0.6, veryLongWidthRatio: 1, shortMultiplier: 1.04, mediumMultiplier: 1.05, longMultiplier: 1.18, veryLongMultiplier: 1.38, extremeMultiplier: 1.55 }),
+        lengthVelocity: Object.freeze({ mediumWidthRatio: 0.25, longWidthRatio: 0.6, veryLongWidthRatio: 1, shortMultiplier: 1.08, mediumMultiplier: 1.1, longMultiplier: 1.24, veryLongMultiplier: 1.45, extremeMultiplier: 1.62 }),
         specialMaximumWidthFraction: 0.98, specialMaximumWidthPx: 1400, specialMinimumBodyFontSize: 10.5
     });
 

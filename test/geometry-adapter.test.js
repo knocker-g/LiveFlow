@@ -10,6 +10,8 @@ const {
     createSubtitleGeometryAdapter
 } = require('../src/geometry-adapter.js');
 const { proveBoundedCollisionSafe } = require('../src/scheduler-foundations.js');
+const { computeSpecialSingleLineFit } = require('../src/scheduler-foundations.js');
+const { CURRENT } = require('../src/phase5-tuning.js');
 
 const video = Object.freeze({ x: 0, y: 0, width: 1280, height: 720 });
 const visible = (rect, extra = {}) => ({ visible: true, rect, ...extra });
@@ -255,4 +257,45 @@ test('SPECIAL full footprint excludes overlapping base and half-step anchors wit
     }
     assert.equal(proveBoundedCollisionSafe(byLane.get(1.5).rectangle, [activeSpecial], allowance).safe, true);
     assert.deepEqual(activeSpecial, { x: 100, y: 0, width: 120, height: 48, velocity: 120 });
+});
+
+test('base and interleaved launch geometry keeps a visible half-line vertical offset', () => {
+    for (const density of ['DENSE', 'MAX_READABLE']) {
+        const result = densityCandidates(density);
+        const baseY = result.baseCandidates.map(({ rectangle }) => rectangle.y);
+        const interleavedY = result.interleavedCandidates.map(({ rectangle }) => rectangle.y);
+        assert.ok(baseY.length > 1 && interleavedY.length > 0);
+        assert.equal(baseY[1] - baseY[0], CURRENT.lineHeight);
+        assert.ok(interleavedY.every((y) => baseY.some((base) => Math.abs(y - base) === CURRENT.lineHeight / 2)));
+        assert.ok(result.interleavedCandidates.every(({ rectangle, lane }) =>
+            rectangle.y === lane * CURRENT.lineHeight && lane % 1 === 0.5));
+    }
+});
+
+test('SPECIAL width matrix separates representable long text from structural unrepresentability', () => {
+    const maximumWidth = Math.min(video.width * CURRENT.specialMaximumWidthFraction, CURRENT.specialMaximumWidthPx);
+    const cases = [
+        ['short', 300, 'FIT'],
+        ['long', 1600, 'SCALED'],
+        ['near-limit', 3300, 'SCALED'],
+        ['unrepresentable', 3400, 'UNREPRESENTABLE_SPECIAL']
+    ];
+    for (const [name, bodyNaturalWidth, expected] of cases) {
+        const fit = computeSpecialSingleLineFit({ headerNaturalWidth: 150, bodyNaturalWidth,
+            maximumWidth, baseBodyFontSize: CURRENT.fontSize,
+            minimumBodyFontSize: CURRENT.specialMinimumBodyFontSize });
+        assert.equal(fit.result, expected, name);
+        if (fit.result === 'UNREPRESENTABLE_SPECIAL') continue;
+        const scale = fit.bodyFontSize / CURRENT.fontSize;
+        const renderedWidth = Math.max(150, bodyNaturalWidth * scale);
+        const generated = densityCandidates('MAX_READABLE', {
+            renderedWidth,
+            renderedHeight: 68,
+            footprint: Object.freeze({ width: renderedWidth, height: 68, kind: 'SPECIAL' }),
+            special: true
+        });
+        assert.ok(renderedWidth <= maximumWidth);
+        assert.ok(generated.candidates.length > 0, `${name} remains geometrically representable`);
+        assert.equal(generated.interleavedCandidates.length, 0);
+    }
 });

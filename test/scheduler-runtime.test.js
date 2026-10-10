@@ -417,6 +417,25 @@ test('UNREPRESENTABLE_SPECIAL is structurally removed and cannot permanently blo
     assert.ok(events.includes('UNREPRESENTABLE_SPECIAL'));
 });
 
+test('representable long SPECIAL collision remains retained before explicit temporal stale removal', () => {
+    const events = [];
+    const h = harness({
+        observe: (event) => events.push(event),
+        candidateProof: () => ({
+            candidates: [{ rectangle: { x: 100, y: 0, width: 1200, height: 68, velocity: 180 }, lane: 0, laneSpan: 1 }],
+            activeComments: [{ x: 80, y: 0, width: 1200, height: 68, velocity: 100 }]
+        })
+    });
+    h.enqueue('representable-long-special', 'liveChatPaidMessageRenderer');
+    h.fire();
+    assert.equal(h.runtime.status().pendingCount, 1);
+    assert.equal(events.some(({ type }) => type === 'UNREPRESENTABLE_SPECIAL'), false);
+    assert.ok(events.some(({ type }) => type === 'COLLISION_ACTIVE_DANMAKU'));
+    h.setNow(1200); h.fire();
+    assert.equal(h.runtime.status().pendingCount, 0);
+    assert.equal(events.find(({ type }) => type === 'STALE_PRUNED').staleReasons.collisionBlocked, 1);
+});
+
 test('subtitle exclusion and UNKNOWN geometry block without launch', () => {
     const blocked = harness();
     blocked.setGeometry({ state: GEOMETRY_STATES.KNOWN_PRESENT, exclusionRegions: [{ x: 0, y: 0, width: 200, height: 30 }], capabilityAvailable: true });
