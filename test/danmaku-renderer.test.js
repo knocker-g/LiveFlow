@@ -310,6 +310,8 @@ test('Production caller supplies only normalized current-window facts to Source 
     assert.match(runtimeSource, /function observeCurrentWindowSourceActivity\([^]*temporalClass: 'CURRENT_WINDOW'/);
     assert.match(runtimeSource, /scheduleDanmakuBatch\([^]*observeCurrentWindowSourceActivity\(runtime, visibleMessages, media\)/);
     assert.match(runtimeSource, /sourceActivityBinding: currentSourceActivityBinding/);
+    assert.match(runtimeSource, /sourceActivityTime: \(\) => \{[^]*getCurrentMainMedia\(\)[^]*video\.currentTime \* 1000/);
+    assert.match(runtimeSource, /observeSourceActivity\?\.\(\{ eventBinding: binding, mediaTimeMs: playerTimeMsec/);
 });
 
 test('rich text normalization validates avatar URLs and role fallback', () => {

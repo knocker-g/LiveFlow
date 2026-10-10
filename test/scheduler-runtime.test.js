@@ -5,6 +5,7 @@ const { createSchedulerRuntime, classifyLaunchGapClass, classifyLaunchGapCause }
 
 function harness({ geometryState = GEOMETRY_STATES.KNOWN_EMPTY, safe = true, observe, candidateProof, config: configOverride = {} } = {}) {
     let now = 100;
+    let mediaTimeMs = 10000;
     let generation = 1;
     let target = 'video-a';
     let timeline = 'replay-a';
@@ -20,6 +21,7 @@ function harness({ geometryState = GEOMETRY_STATES.KNOWN_EMPTY, safe = true, obs
         cancelOneShot(timer) { timer.cancelled = true; },
         generation: () => generation,
         sourceActivityBinding: () => ({ target, timeline, generation }),
+        sourceActivityTime: () => mediaTimeMs,
         geometryAdapter: adapter,
         observe,
         candidateProof: candidateProof || (() => safe ? {
@@ -50,6 +52,7 @@ function harness({ geometryState = GEOMETRY_STATES.KNOWN_EMPTY, safe = true, obs
         setTarget(value) { target = value; },
         setTimeline(value) { timeline = value; },
         setGeometry(value) { nextGeometry = value; adapter.markDirty('RESIZE'); },
+        setMediaTime(value) { mediaTimeMs = value; },
         setNow(value) { now = value; } };
 }
 
@@ -64,7 +67,7 @@ function activityFacts(count, start = 0, end = 10000) {
 function observeActivity(h, count) {
     const binding = h.activityBinding();
     return h.runtime.observeSourceActivity({ eventBinding: binding,
-        windowStartMs: 0, windowEndMs: 10000, facts: activityFacts(count) });
+        mediaTimeMs: 10000, windowStartMs: 0, windowEndMs: 10000, facts: activityFacts(count) });
 }
 
 test('arrival flows through pending scheduler to one launch', () => {
@@ -79,12 +82,12 @@ test('Production runtime wires current-window Source Activity into density with 
     const source = harness({ config: { pendingPressureCapacity: 100 } });
     source.enqueue('a'); source.enqueue('b'); source.enqueue('c'); source.enqueue('d'); source.enqueue('e'); source.enqueue('f');
     observeActivity(source, 50);
-    source.fire(); source.fire();
+    source.fire(); source.setMediaTime(10001); source.fire();
     assert.equal(source.runtime.status().density, 'COMPACT');
     assert.equal(source.runtime.status().densityProvenance, 'SOURCE_ACTIVITY');
-    source.fire(); source.fire();
+    source.setMediaTime(10002); source.fire(); source.setMediaTime(10003); source.fire();
     assert.equal(source.runtime.status().density, 'DENSE');
-    source.fire(); source.fire();
+    source.setMediaTime(10004); source.fire(); source.setMediaTime(10005); source.fire();
     assert.equal(source.runtime.status().density, 'MAX_READABLE');
     assert.equal(source.launched.length, 6, 'six opportunities launch exactly six items without credit');
 
@@ -105,7 +108,7 @@ test('Production runtime wires current-window Source Activity into density with 
 test('Production Source Activity currentness resets on binding changes but not geometry-only changes', () => {
     const h = harness({ config: { pendingPressureCapacity: 100 } });
     observeActivity(h, 50);
-    h.enqueue('a'); h.enqueue('b'); h.fire(); h.fire();
+    h.enqueue('a'); h.enqueue('b'); h.fire(); h.setMediaTime(10001); h.fire();
     assert.equal(h.runtime.status().sourceActivityBand, 'MEDIUM');
     h.setGeometry({ state: GEOMETRY_STATES.KNOWN_EMPTY, exclusionRegions: [], capabilityAvailable: true });
     assert.equal(h.runtime.status().sourceActivityBand, 'MEDIUM');
@@ -119,6 +122,35 @@ test('Production Source Activity currentness resets on binding changes but not g
     h.setTimeline('replay-b');
     observeActivity(h, 2);
     assert.equal(h.runtime.status().sourceActivityBand, 'LOW');
+});
+
+test('Production Source Activity expires silent facts against authoritative media time', () => {
+    const h = harness({ config: { pendingPressureCapacity: 100 } });
+    for (let index = 0; index < 10; index += 1) h.enqueue(`item-${index}`);
+    observeActivity(h, 50);
+    for (let index = 0; index < 6; index += 1) {
+        h.setMediaTime(10000 + index);
+        h.fire();
+    }
+    assert.equal(h.runtime.status().sourceActivityBand, 'BURST');
+
+    h.setMediaTime(21000);
+    h.fire();
+    h.setMediaTime(22000);
+    h.fire();
+    assert.equal(h.runtime.status().sourceActivityBand, 'HIGH',
+        'silent old facts expire and bounded release begins while pending opportunities remain');
+    assert.equal(h.runtime.status().pendingCount, 2);
+
+    const frozen = harness({ config: { pendingPressureCapacity: 100 } });
+    observeActivity(frozen, 50);
+    frozen.enqueue('frozen-a'); frozen.enqueue('frozen-b'); frozen.enqueue('frozen-c');
+    frozen.fire(); frozen.fire();
+    assert.equal(frozen.runtime.status().sourceActivityBand, 'LOW',
+        'the same frozen media-time snapshot cannot satisfy promotion residence twice');
+    frozen.setMediaTime(10001);
+    frozen.fire();
+    assert.equal(frozen.runtime.status().sourceActivityBand, 'MEDIUM');
 });
 
 test('launch-gap diagnostic classifies duration and fixed causes without raw timing', () => {

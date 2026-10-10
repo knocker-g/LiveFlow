@@ -24,10 +24,11 @@
 
     function createSchedulerRuntime({
         clock, scheduleOneShot, cancelOneShot, generation, geometryAdapter,
-        sourceActivityBinding, candidateProof, launch, config, observe
+        sourceActivityBinding, sourceActivityTime, candidateProof, launch, config, observe
     } = {}) {
         if (typeof clock !== 'function' || typeof scheduleOneShot !== 'function' || typeof cancelOneShot !== 'function' ||
-            typeof generation !== 'function' || (config?.sourceActivity && typeof sourceActivityBinding !== 'function') ||
+            typeof generation !== 'function' || (config?.sourceActivity &&
+                (typeof sourceActivityBinding !== 'function' || typeof sourceActivityTime !== 'function')) ||
             !geometryAdapter || typeof geometryAdapter.refresh !== 'function' ||
             typeof geometryAdapter.status !== 'function' || typeof candidateProof !== 'function' || typeof launch !== 'function' || !config) return null;
         const queue = pending.createPendingQueue();
@@ -39,6 +40,8 @@
         let sourceActivityBindingReset = false;
         let sourceActivityFacts = [];
         let sourceActivityWindow = null;
+        let sourceActivityFactsRevision = 0;
+        let sourceActivityEvaluationKey = null;
         geometryAdapter.refresh();
 
         function sameActivityBinding(left, right) {
@@ -46,24 +49,30 @@
                 left.generation === right.generation;
         }
 
-        function observeSourceActivity({ eventBinding, windowStartMs, windowEndMs, facts } = {}) {
+        function observeSourceActivity({ eventBinding, mediaTimeMs, windowStartMs, windowEndMs, facts } = {}) {
             if (!config.sourceActivity || typeof sourceActivityBinding !== 'function') return null;
             const currentBinding = sourceActivityBinding();
             const ownershipReset = Boolean(sourceActivityState && !sameActivityBinding(sourceActivityState.binding, currentBinding));
             if (!sourceActivityState || ownershipReset) {
                 sourceActivityState = foundations.createSourceActivityState(currentBinding);
                 sourceActivityFacts = [];
+                sourceActivityWindow = null;
+                sourceActivityFactsRevision = 0;
+                sourceActivityEvaluationKey = null;
             }
             if (!sourceActivityState) return null;
-            if (sameActivityBinding(eventBinding, currentBinding) && Array.isArray(facts)) {
+            const accepted = sameActivityBinding(eventBinding, currentBinding) && Array.isArray(facts) &&
+                Number.isFinite(mediaTimeMs);
+            if (accepted) {
                 sourceActivityFacts.push(...facts.filter((fact) => fact && fact.displayable === true &&
                     fact.temporalClass === 'CURRENT_WINDOW' && Number.isFinite(fact.mediaTimeMs)));
+                sourceActivityFacts = sourceActivityFacts.filter((fact) => fact.mediaTimeMs >= windowStartMs &&
+                    fact.mediaTimeMs <= windowEndMs);
+                sourceActivityWindow = Object.freeze({ currentBinding, eventBinding, mediaTimeMs, windowStartMs, windowEndMs });
+                sourceActivityFactsRevision += 1;
             }
-            sourceActivityFacts = sourceActivityFacts.filter((fact) => fact.mediaTimeMs >= windowStartMs &&
-                fact.mediaTimeMs <= windowEndMs);
-            sourceActivityWindow = Object.freeze({ currentBinding, eventBinding, windowStartMs, windowEndMs });
             sourceActivityBindingReset = ownershipReset;
-            return Object.freeze({ accepted: sameActivityBinding(eventBinding, currentBinding), bindingReset: ownershipReset,
+            return Object.freeze({ accepted, bindingReset: ownershipReset,
                 currentWindowCount: sourceActivityFacts.length });
         }
 
@@ -73,12 +82,31 @@
             if (!sameActivityBinding(sourceActivityState.binding, currentBinding)) {
                 sourceActivityState = foundations.createSourceActivityState(currentBinding);
                 sourceActivityFacts = [];
+                sourceActivityWindow = null;
+                sourceActivityFactsRevision = 0;
+                sourceActivityEvaluationKey = null;
                 sourceActivityBindingReset = true;
                 if (!sourceActivityState) return null;
+                return sourceActivityState;
             }
-            const evaluated = foundations.evaluateSourceActivity(sourceActivityState, {
+            const currentMediaTimeMs = sourceActivityTime();
+            if (!Number.isFinite(currentMediaTimeMs) || currentMediaTimeMs < sourceActivityWindow.mediaTimeMs) {
+                return sourceActivityState;
+            }
+            const mediaTimeDelta = currentMediaTimeMs - sourceActivityWindow.mediaTimeMs;
+            const currentWindow = Object.freeze({
                 ...sourceActivityWindow,
                 currentBinding,
+                windowStartMs: sourceActivityWindow.windowStartMs + mediaTimeDelta,
+                windowEndMs: sourceActivityWindow.windowEndMs + mediaTimeDelta
+            });
+            sourceActivityFacts = sourceActivityFacts.filter((fact) => fact.mediaTimeMs >= currentWindow.windowStartMs &&
+                fact.mediaTimeMs <= currentWindow.windowEndMs);
+            const evaluationKey = `${currentWindow.windowStartMs}:${currentWindow.windowEndMs}:${sourceActivityFactsRevision}`;
+            if (evaluationKey === sourceActivityEvaluationKey) return sourceActivityState;
+            sourceActivityEvaluationKey = evaluationKey;
+            const evaluated = foundations.evaluateSourceActivity(sourceActivityState, {
+                ...currentWindow,
                 facts: sourceActivityFacts
             }, config.sourceActivity);
             if (!evaluated) return sourceActivityState;

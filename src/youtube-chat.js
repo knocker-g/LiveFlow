@@ -1150,6 +1150,10 @@
             cancelOneShot: (timer) => window.clearTimeout(timer),
             generation: () => rendererGeneration,
             sourceActivityBinding: currentSourceActivityBinding,
+            sourceActivityTime: () => {
+                const media = getCurrentMainMedia();
+                return Number.isFinite(media?.video?.currentTime) ? media.video.currentTime * 1000 : null;
+            },
             geometryAdapter: subtitleGeometryAdapter,
             candidateProof: getCandidateProof,
             launch: (entry, proof) => renderDanmaku(entry.message, entry.generation, entry.video, proof, entry.settingsSnapshot).status === 'rendered',
@@ -1206,7 +1210,8 @@
             displayable: true,
             temporalClass: 'CURRENT_WINDOW'
         }));
-        return runtime.observeSourceActivity?.({ eventBinding: binding, windowStartMs, windowEndMs, facts }) || null;
+        return runtime.observeSourceActivity?.({ eventBinding: binding, mediaTimeMs: playerTimeMsec,
+            windowStartMs, windowEndMs, facts }) || null;
     }
 
     function renderDanmaku(message, scheduledGeneration = rendererGeneration, scheduledVideo = null, launchProof = null,
