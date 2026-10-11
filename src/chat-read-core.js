@@ -139,6 +139,8 @@
             const item = action?.addChatItemAction?.item;
             if (!item || typeof item !== 'object') return [];
             if (item.liveChatTextMessageRenderer) return [ChatMessage.fromRenderer(item.liveChatTextMessageRenderer, 'text')];
+            // Membership milestone bodies share NORMAL text semantics; headers are metadata.
+            if (item.liveChatMembershipItemRenderer) return [ChatMessage.fromRenderer(item.liveChatMembershipItemRenderer, 'text')];
             if (item.liveChatPaidMessageRenderer) return [ChatMessage.fromRenderer(item.liveChatPaidMessageRenderer, 'superChat')];
             if (item.liveChatPaidStickerRenderer) return [ChatMessage.fromRenderer(item.liveChatPaidStickerRenderer, 'superSticker')];
             return [];
