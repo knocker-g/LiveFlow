@@ -27,7 +27,7 @@ const strokes = [
     { name: 'B', widths: [1.7, 1.4, 1.4, 1.4], colors: ['#101010', '#0b2011', '#0e2338', '#302709'] }
 ];
 
-function run(config, shape) {
+function run(config, shape, options = {}) {
     let now = 0, timer = null;
     const binding = { target: 'fixture', timeline: 'fixed', generation: 1 };
     const exclusion = { x: 0, y: 256, width: 960, height: 64 };
@@ -51,8 +51,11 @@ function run(config, shape) {
                 interleavedAnchorStride: config.interleavedAnchorStride, exclusionRegions: state.exclusionRegions,
                 special: message.special });
             const stamp = list => list.map(c => ({ ...c, rectangle: { ...c.rectangle, snapshotAt: now / 1000, occlusionHistoryKnown: true } }));
-            return { candidates: tuning.rankDensityRescuePlacements(stamp(generated.baseCandidates), stamp(generated.interleavedCandidates),
-                stamp(generated.expansionCandidates), active, message.id, policy.density, Boolean(config.normalOverlapPolicy)), activeComments: active };
+            const ranked = tuning.rankDensityRescuePlacements(stamp(generated.baseCandidates), stamp(generated.interleavedCandidates),
+                stamp(generated.expansionCandidates), active, message.id, policy.density,
+                options.preferInterleaved ?? Boolean(config.normalOverlapPolicy));
+            options.onCandidates?.({ id: message.id, at: now, density: policy.density, candidates: ranked, active });
+            return { candidates: ranked, activeComments: active };
         },
         launch(message, proof) {
             if (!foundations.isOutsideHardExclusions(proof.rectangle, [exclusion])) throw Error('subtitle intrusion');
@@ -66,7 +69,7 @@ function run(config, shape) {
                 record.occlusionEpisodes = episodes[0]; record.occlusionHistoryKnown = true;
                 active.forEach((a, i) => { a.occlusionHistoryKnown = normalOverlap.historyKnown(a, active.filter(r => r !== a)); a.occlusionEpisodes = episodes[i + 1]; });
             }
-            active.push(record); launches.push({ ...record }); return true;
+            active.push(record); launches.push({ ...record }); options.onLaunch?.({ id: message.id, at: now, proof }); return true;
         },
         config: { maxPendingAge: core.DANMAKU_TARGET_DURATION_MS, maxPendingCount: core.DANMAKU_MAX_RENDER_QUEUE,
             pendingPressureCapacity: core.DANMAKU_MAX_RENDER_QUEUE, scanDepth: 5, cohortMaximumItems: 5,

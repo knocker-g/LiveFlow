@@ -1,0 +1,457 @@
+[
+  {
+    "shape": "HIGH",
+    "b": {
+      "shape": "HIGH",
+      "ingress": 67,
+      "launches": 60,
+      "specialLaunches": 1,
+      "interleaved": 6,
+      "drops": {
+        "STALE_PRUNED": 1,
+        "CAPACITY_DROPPED": 6,
+        "EMERGENCY_PENDING_DROPPED": 0
+      },
+      "pending": 0,
+      "lostUnaccounted": 0,
+      "collisionEvaluations": 446,
+      "minimumLaunchHorizontalGapPx": -21.134000000000015,
+      "averageLaunchHorizontalGapPx": 54.436203703703676,
+      "averageVisible": 21.236842105263158,
+      "peakVisible": 24,
+      "maxVerticalOverlapPx": 32,
+      "maxHorizontalOverlapPx": 16.70399999999995,
+      "maxSampledPairOverlapSeconds": 1.2,
+      "normalOverlap": {
+        "horizontalPx": 16.70399999999995,
+        "verticalPx": 32,
+        "crossRowVerticalPx": 0,
+        "sampledPairSeconds": 1.2,
+        "samples": 13
+      },
+      "sourceShape": {
+        "HIGH": 76
+      },
+      "displayShape": {
+        "DENSE": 69,
+        "MAX_READABLE": 7
+      }
+    },
+    "c": {
+      "shape": "HIGH",
+      "ingress": 67,
+      "launches": 57,
+      "specialLaunches": 1,
+      "interleaved": 43,
+      "drops": {
+        "STALE_PRUNED": 1,
+        "CAPACITY_DROPPED": 9,
+        "EMERGENCY_PENDING_DROPPED": 0
+      },
+      "pending": 0,
+      "lostUnaccounted": 0,
+      "collisionEvaluations": 708,
+      "minimumLaunchHorizontalGapPx": -79.41600000000005,
+      "averageLaunchHorizontalGapPx": 47.20763461538463,
+      "averageVisible": 19.842105263157894,
+      "peakVisible": 22,
+      "maxVerticalOverlapPx": 16,
+      "maxHorizontalOverlapPx": 59.44800000000009,
+      "maxSampledPairOverlapSeconds": 1.2,
+      "normalOverlap": {
+        "horizontalPx": 59.44800000000009,
+        "verticalPx": 16,
+        "crossRowVerticalPx": 16,
+        "sampledPairSeconds": 1.2,
+        "samples": 43
+      },
+      "sourceShape": {
+        "HIGH": 76
+      },
+      "displayShape": {
+        "DENSE": 66,
+        "MAX_READABLE": 10
+      }
+    },
+    "corrected": {
+      "shape": "HIGH",
+      "ingress": 67,
+      "launches": 65,
+      "specialLaunches": 1,
+      "interleaved": 0,
+      "drops": {
+        "STALE_PRUNED": 1,
+        "CAPACITY_DROPPED": 1,
+        "EMERGENCY_PENDING_DROPPED": 0
+      },
+      "pending": 0,
+      "lostUnaccounted": 0,
+      "collisionEvaluations": 186,
+      "minimumLaunchHorizontalGapPx": -21.134000000000015,
+      "averageLaunchHorizontalGapPx": 77.82716949152544,
+      "averageVisible": 22.36842105263158,
+      "peakVisible": 25,
+      "maxVerticalOverlapPx": 4,
+      "maxHorizontalOverlapPx": 15.840000000000032,
+      "maxSampledPairOverlapSeconds": 0.4,
+      "normalOverlap": {
+        "horizontalPx": 0,
+        "verticalPx": 0,
+        "crossRowVerticalPx": 0,
+        "sampledPairSeconds": 0,
+        "samples": 0
+      },
+      "sourceShape": {
+        "HIGH": 76
+      },
+      "displayShape": {
+        "DENSE": 69,
+        "MAX_READABLE": 7
+      }
+    },
+    "bOnly": 5,
+    "cOnly": 2,
+    "classified": {
+      "RANKING_RECOVERED": 5
+    },
+    "rows": [
+      {
+        "id": "fixed-23",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 73,
+        "at": 11620,
+        "density": "DENSE",
+        "representativeLane": 1.5,
+        "reason": "SAFE",
+        "sameStateBSafe": true,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-27",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 59,
+        "at": 11540,
+        "density": "DENSE",
+        "representativeLane": 1.5,
+        "reason": "AGGREGATE_VISIBILITY",
+        "sameStateBSafe": true,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-31",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 43,
+        "at": 12580,
+        "density": "DENSE",
+        "representativeLane": 4.5,
+        "reason": "AGGREGATE_VISIBILITY",
+        "sameStateBSafe": true,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-35",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 37,
+        "at": 12580,
+        "density": "DENSE",
+        "representativeLane": 4.5,
+        "reason": "AGGREGATE_VISIBILITY",
+        "sameStateBSafe": true,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-47",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 53,
+        "at": 15120,
+        "density": "DENSE",
+        "representativeLane": 5.5,
+        "reason": "SAFE",
+        "sameStateBSafe": true,
+        "safeBaseObserved": false
+      }
+    ],
+    "sameStateBSafeCBlocked": {
+      "AGGREGATE_VISIBILITY": 21
+    },
+    "safeBaseSelectionFailure": 0,
+    "missedSafeBaseEvaluation": 0,
+    "halfChosenWithSafeBase": 35,
+    "halfLaunchedWithSafeBase": 32,
+    "intervention": "B ranking with identical C safety; no scalar changes"
+  },
+  {
+    "shape": "BURST",
+    "b": {
+      "shape": "BURST",
+      "ingress": 167,
+      "launches": 81,
+      "specialLaunches": 2,
+      "interleaved": 0,
+      "drops": {
+        "STALE_PRUNED": 3,
+        "CAPACITY_DROPPED": 83,
+        "EMERGENCY_PENDING_DROPPED": 0
+      },
+      "pending": 0,
+      "lostUnaccounted": 0,
+      "collisionEvaluations": 428,
+      "minimumLaunchHorizontalGapPx": -1.2960000000001628,
+      "averageLaunchHorizontalGapPx": 70.09268,
+      "averageVisible": 28.407894736842106,
+      "peakVisible": 32,
+      "maxVerticalOverlapPx": 32,
+      "maxHorizontalOverlapPx": 7.819999999999936,
+      "maxSampledPairOverlapSeconds": 0.2,
+      "normalOverlap": {
+        "horizontalPx": 0,
+        "verticalPx": 0,
+        "crossRowVerticalPx": 0,
+        "sampledPairSeconds": 0,
+        "samples": 0
+      },
+      "sourceShape": {
+        "BURST": 76
+      },
+      "displayShape": {
+        "MAX_READABLE": 76
+      }
+    },
+    "c": {
+      "shape": "BURST",
+      "ingress": 167,
+      "launches": 73,
+      "specialLaunches": 2,
+      "interleaved": 66,
+      "drops": {
+        "STALE_PRUNED": 3,
+        "CAPACITY_DROPPED": 91,
+        "EMERGENCY_PENDING_DROPPED": 0
+      },
+      "pending": 0,
+      "lostUnaccounted": 0,
+      "collisionEvaluations": 461,
+      "minimumLaunchHorizontalGapPx": -63.79200000000003,
+      "averageLaunchHorizontalGapPx": 62.15888235294116,
+      "averageVisible": 25.539473684210527,
+      "peakVisible": 29,
+      "maxVerticalOverlapPx": 32,
+      "maxHorizontalOverlapPx": 43.82400000000018,
+      "maxSampledPairOverlapSeconds": 1,
+      "normalOverlap": {
+        "horizontalPx": 43.82400000000018,
+        "verticalPx": 16,
+        "crossRowVerticalPx": 16,
+        "sampledPairSeconds": 1,
+        "samples": 6
+      },
+      "sourceShape": {
+        "BURST": 76
+      },
+      "displayShape": {
+        "MAX_READABLE": 76
+      }
+    },
+    "corrected": {
+      "shape": "BURST",
+      "ingress": 167,
+      "launches": 80,
+      "specialLaunches": 2,
+      "interleaved": 0,
+      "drops": {
+        "STALE_PRUNED": 3,
+        "CAPACITY_DROPPED": 84,
+        "EMERGENCY_PENDING_DROPPED": 0
+      },
+      "pending": 0,
+      "lostUnaccounted": 0,
+      "collisionEvaluations": 431,
+      "minimumLaunchHorizontalGapPx": 8.812000000000012,
+      "averageLaunchHorizontalGapPx": 66.9516081081081,
+      "averageVisible": 27.94736842105263,
+      "peakVisible": 31,
+      "maxVerticalOverlapPx": 32,
+      "maxHorizontalOverlapPx": 0.73599999999999,
+      "maxSampledPairOverlapSeconds": 0.2,
+      "normalOverlap": {
+        "horizontalPx": 0,
+        "verticalPx": 0,
+        "crossRowVerticalPx": 0,
+        "sampledPairSeconds": 0,
+        "samples": 0
+      },
+      "sourceShape": {
+        "BURST": 76
+      },
+      "displayShape": {
+        "MAX_READABLE": 76
+      }
+    },
+    "bOnly": 12,
+    "cOnly": 4,
+    "classified": {
+      "RANKING_RECOVERED": 9,
+      "PAIR_COLLISION": 2,
+      "AGGREGATE_BUDGET": 1
+    },
+    "rows": [
+      {
+        "id": "fixed-5",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 2,
+        "at": 720,
+        "density": "MAX_READABLE",
+        "representativeLane": 6.5,
+        "reason": "HARD_READABILITY_FLOOR",
+        "sameStateBSafe": false,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-24",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 2,
+        "at": 3000,
+        "density": "MAX_READABLE",
+        "representativeLane": 2.5,
+        "reason": "HARD_READABILITY_FLOOR",
+        "sameStateBSafe": false,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-25",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 2,
+        "at": 3120,
+        "density": "MAX_READABLE",
+        "representativeLane": 6.5,
+        "reason": "HARD_READABILITY_FLOOR",
+        "sameStateBSafe": false,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-26",
+        "cause": "PAIR_COLLISION",
+        "recoveredByRanking": false,
+        "evaluations": 2,
+        "at": 3240,
+        "density": "MAX_READABLE",
+        "representativeLane": 6.5,
+        "reason": "HARD_READABILITY_FLOOR",
+        "sameStateBSafe": false,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-46",
+        "cause": "AGGREGATE_BUDGET",
+        "recoveredByRanking": false,
+        "evaluations": 1,
+        "at": 5520,
+        "density": "MAX_READABLE",
+        "representativeLane": 2.5,
+        "reason": "AGGREGATE_VISIBILITY",
+        "sameStateBSafe": true,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-49",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 1,
+        "at": 5880,
+        "density": "MAX_READABLE",
+        "representativeLane": 3.5,
+        "reason": "HARD_READABILITY_FLOOR",
+        "sameStateBSafe": false,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-50",
+        "cause": "PAIR_COLLISION",
+        "recoveredByRanking": false,
+        "evaluations": 1,
+        "at": 6000,
+        "density": "MAX_READABLE",
+        "representativeLane": 6.5,
+        "reason": "HARD_READABILITY_FLOOR",
+        "sameStateBSafe": false,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-69",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 1,
+        "at": 8280,
+        "density": "MAX_READABLE",
+        "representativeLane": 1.5,
+        "reason": "HARD_READABILITY_FLOOR",
+        "sameStateBSafe": false,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-89",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 1,
+        "at": 10680,
+        "density": "MAX_READABLE",
+        "representativeLane": 4.5,
+        "reason": "HARD_READABILITY_FLOOR",
+        "sameStateBSafe": false,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-109",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 1,
+        "at": 13080,
+        "density": "MAX_READABLE",
+        "representativeLane": 6.5,
+        "reason": "HARD_READABILITY_FLOOR",
+        "sameStateBSafe": false,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-129",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 1,
+        "at": 15480,
+        "density": "MAX_READABLE",
+        "representativeLane": 5.5,
+        "reason": "HARD_READABILITY_FLOOR",
+        "sameStateBSafe": false,
+        "safeBaseObserved": false
+      },
+      {
+        "id": "fixed-154",
+        "cause": "RANKING_RECOVERED",
+        "recoveredByRanking": true,
+        "evaluations": 1,
+        "at": 18520,
+        "density": "MAX_READABLE",
+        "representativeLane": 3.5,
+        "reason": "HARD_READABILITY_FLOOR",
+        "sameStateBSafe": false,
+        "safeBaseObserved": false
+      }
+    ],
+    "sameStateBSafeCBlocked": {
+      "AGGREGATE_VISIBILITY": 13
+    },
+    "safeBaseSelectionFailure": 0,
+    "missedSafeBaseEvaluation": 0,
+    "halfChosenWithSafeBase": 39,
+    "halfLaunchedWithSafeBase": 37,
+    "intervention": "B ranking with identical C safety; no scalar changes"
+  }
+]
