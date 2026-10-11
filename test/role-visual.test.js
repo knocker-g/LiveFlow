@@ -22,6 +22,7 @@ test('existing candidate maps normalized roles to three distinct CSS fills witho
     for (const [role, color] of [['member', '#66e08a'], ['moderator', '#70b7ff'], ['owner', '#ffd75e']]) {
         const rule = source.match(new RegExp(`\\.liveflow-danmaku\\[data-author-role="${role}"\\] \\{([^}]+)\\}`))[1];
         assert.match(rule, new RegExp(`color: ${color};`));
+        assert.match(rule, /paint-order: stroke fill;/, 'role fill must cover inward stroke at glyph junctions');
         assert.doesNotMatch(rule, /font|width|height|animation|position|lane/);
     }
     assert.match(source, /data-author-role="guest"\] \{ color: #fff; -webkit-text-stroke: 1\.1px #202020; paint-order: stroke fill/);

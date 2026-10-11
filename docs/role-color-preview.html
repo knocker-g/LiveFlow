@@ -2,7 +2,7 @@
 <html lang="ja">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>LiveFlow role color candidate A</title>
+<title>LiveFlow role color candidate B</title>
 <style>
 body { margin: 24px; font: 16px/1.5 sans-serif; color: #202020; background: #eee; }
 main { max-width: 1000px; margin: auto; }
@@ -12,15 +12,19 @@ section { padding: 24px; margin: 20px 0; border-radius: 8px; }
 .label { font-size: 14px; margin: 12px 0 4px; }
 .liveflow-danmaku { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font: 28px/32px sans-serif; font-weight: 600; }
 .liveflow-danmaku[data-author-role="guest"] { color: #fff; -webkit-text-stroke: 1.1px #202020; paint-order: stroke fill; }
-.liveflow-danmaku[data-author-role="member"] { color: #66e08a; -webkit-text-stroke: .45px #12381d; }
-.liveflow-danmaku[data-author-role="moderator"] { color: #70b7ff; -webkit-text-stroke: .45px #183b5c; }
-.liveflow-danmaku[data-author-role="owner"] { color: #ffd75e; -webkit-text-stroke: .45px #564813; }
+.liveflow-danmaku[data-author-role="member"] { color: #66e08a; -webkit-text-stroke: .45px #12381d; paint-order: stroke fill; }
+.liveflow-danmaku[data-author-role="moderator"] { color: #70b7ff; -webkit-text-stroke: .45px #183b5c; paint-order: stroke fill; }
+.liveflow-danmaku[data-author-role="owner"] { color: #ffd75e; -webkit-text-stroke: .45px #564813; paint-order: stroke fill; }
+body:has(#baseline:checked) .liveflow-danmaku:not(.liveflow-danmaku-special)[data-author-role="member"],
+body:has(#baseline:checked) .liveflow-danmaku:not(.liveflow-danmaku-special)[data-author-role="moderator"],
+body:has(#baseline:checked) .liveflow-danmaku:not(.liveflow-danmaku-special)[data-author-role="owner"] { paint-order: normal; }
 .liveflow-danmaku-special { display: flex; flex-direction: column; align-items: stretch; width: max-content; min-width: 180px; min-height: 68px; padding: 4px 8px; border-radius: 8px; background: rgba(24,24,24,.8); }
 .liveflow-danmaku.liveflow-danmaku-special { -webkit-text-stroke: .8px rgba(0,0,0,.85); paint-order: stroke fill; }
 </style>
 <main>
-<h1>LiveFlow — role color candidate A</h1>
-<p>既存NORMAL baselineと既存role paletteの比較。Exact paletteはHuman acceptance待ちです。</p>
+<h1>LiveFlow — role readability candidate B</h1>
+<p>色・weight・stroke幅はAと同じ。Bはstrokeを先に描き、fillを保ちます。Human acceptance待ちです。</p>
+<label><input id="baseline" type="checkbox"> 旧Aへ切替（fillの上にstroke）。未チェックは修正B。</label>
 <p>静止previewです。実動画の動き・背景上での最終確認もお願いします。</p>
 <section class="dark">
 <h2>Dark background</h2>

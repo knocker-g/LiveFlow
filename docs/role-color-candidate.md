@@ -1,4 +1,14 @@
-# Role color candidate A
+# Role readability candidate B
+
+Human feedback rejected candidate A's junction readability. Candidate B adds `paint-order: stroke fill` to Member/Moderator/Owner only. Their fill colors, .45px outline colors/widths, weight, font size, and line-height stay unchanged; no shadow is added. Guest and SPECIAL rules are unchanged.
+
+First bad boundary: the three role CSS rules omitted the paint-order fix already used by the accepted Guest/SPECIAL baseline. With the default fill-then-stroke order, the inner half of the centered dark stroke covers colored fill, which can thin glyph junctions. Stroke-then-fill covers that inward stroke with the original fill. This establishes the styling mechanism; Human visual confirmation of the reported symptom remains required.
+
+Validation: the added role paint-order guard failed before the Production edit. After the three-rule change, renderer/style 115/115 PASS; touched JS syntax and diff check PASS. Existing untouched scheduling/retention/Temporal/role evidence is reused. No browser reassurance run or color sweep.
+
+The preview defaults to B and has a checkbox to compare old A on the same dark/bright samples. Exact palette and final readability acceptance remain pending. The previously inspected KNO-95 MEMBER reference and accepted paint-order fix are reused.
+
+## Historical candidate A
 
 Source trace found the existing palette already implemented in `src/youtube-chat.js`. Accepted role normalization now makes it reachable through `ChatMessage.authorRole` -> page-state bridge -> `normalizeDanmakuMessage` -> `createDanmakuNode.dataset.authorRole`. No Production change is needed to expose this first candidate.
 
