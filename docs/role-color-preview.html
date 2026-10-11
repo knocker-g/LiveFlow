@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LiveFlow role color candidate A</title>
+<style>
+body { margin: 24px; font: 16px/1.5 sans-serif; color: #202020; background: #eee; }
+main { max-width: 1000px; margin: auto; }
+section { padding: 24px; margin: 20px 0; border-radius: 8px; }
+.dark { background: linear-gradient(120deg,#121820,#46505b); color: white; }
+.bright { background: linear-gradient(120deg,#fff,#dde6c7); }
+.label { font-size: 14px; margin: 12px 0 4px; }
+.liveflow-danmaku { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font: 28px/32px sans-serif; font-weight: 600; }
+.liveflow-danmaku[data-author-role="guest"] { color: #fff; -webkit-text-stroke: 1.1px #202020; paint-order: stroke fill; }
+.liveflow-danmaku[data-author-role="member"] { color: #66e08a; -webkit-text-stroke: .45px #12381d; }
+.liveflow-danmaku[data-author-role="moderator"] { color: #70b7ff; -webkit-text-stroke: .45px #183b5c; }
+.liveflow-danmaku[data-author-role="owner"] { color: #ffd75e; -webkit-text-stroke: .45px #564813; }
+.liveflow-danmaku-special { display: flex; flex-direction: column; align-items: stretch; width: max-content; min-width: 180px; min-height: 68px; padding: 4px 8px; border-radius: 8px; background: rgba(24,24,24,.8); }
+.liveflow-danmaku.liveflow-danmaku-special { -webkit-text-stroke: .8px rgba(0,0,0,.85); paint-order: stroke fill; }
+</style>
+<main>
+<h1>LiveFlow — role color candidate A</h1>
+<p>既存NORMAL baselineと既存role paletteの比較。Exact paletteはHuman acceptance待ちです。</p>
+<p>静止previewです。実動画の動き・背景上での最終確認もお願いします。</p>
+<section class="dark">
+<h2>Dark background</h2>
+<div class="label">Guest baseline / Unknown fallback</div><div class="liveflow-danmaku" data-author-role="guest">コメントありがとう！ Thank you</div>
+<div class="label">Candidate A — MEMBER #66e08a</div><div class="liveflow-danmaku" data-author-role="member">コメントありがとう！ Thank you</div>
+<div class="label">Candidate A — MODERATOR #70b7ff</div><div class="liveflow-danmaku" data-author-role="moderator">コメントありがとう！ Thank you</div>
+<div class="label">Candidate A — OWNER #ffd75e</div><div class="liveflow-danmaku" data-author-role="owner">コメントありがとう！ Thank you</div>
+<div class="label">Existing SPECIAL surface (simplified)</div><div class="liveflow-danmaku liveflow-danmaku-special" style="color:#FFFFFF"><span>Alice · ¥500</span><span>コメントありがとう！</span></div>
+</section>
+<section class="bright">
+<h2>Bright background</h2>
+<div class="label">Guest baseline / Unknown fallback</div><div class="liveflow-danmaku" data-author-role="guest">コメントありがとう！ Thank you</div>
+<div class="label">Candidate A — MEMBER #66e08a</div><div class="liveflow-danmaku" data-author-role="member">コメントありがとう！ Thank you</div>
+<div class="label">Candidate A — MODERATOR #70b7ff</div><div class="liveflow-danmaku" data-author-role="moderator">コメントありがとう！ Thank you</div>
+<div class="label">Candidate A — OWNER #ffd75e</div><div class="liveflow-danmaku" data-author-role="owner">コメントありがとう！ Thank you</div>
+<div class="label">Existing SPECIAL surface (simplified)</div><div class="liveflow-danmaku liveflow-danmaku-special" style="color:#FFFFFF"><span>Alice · ¥500</span><span>コメントありがとう！</span></div>
+</section>
+</main>
+</html>
