@@ -1,0 +1,561 @@
+[
+  {
+    "shape": "HIGH",
+    "variants": [
+      {
+        "name": "B",
+        "shape": "HIGH",
+        "ingress": 67,
+        "launches": 60,
+        "specialLaunches": 1,
+        "interleaved": 6,
+        "drops": {
+          "STALE_PRUNED": 1,
+          "CAPACITY_DROPPED": 6,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 446,
+        "minimumLaunchHorizontalGapPx": -21.134000000000015,
+        "averageLaunchHorizontalGapPx": 54.436203703703676,
+        "averageVisible": 21.236842105263158,
+        "peakVisible": 24,
+        "maxVerticalOverlapPx": 32,
+        "maxHorizontalOverlapPx": 16.70399999999995,
+        "maxSampledPairOverlapSeconds": 1.2,
+        "normalOverlap": {
+          "horizontalPx": 16.70399999999995,
+          "verticalPx": 32,
+          "crossRowVerticalPx": 0,
+          "sampledPairSeconds": 1.2,
+          "samples": 13
+        },
+        "sourceShape": {
+          "HIGH": 76
+        },
+        "displayShape": {
+          "DENSE": 69,
+          "MAX_READABLE": 7
+        },
+        "baseLaunches": 54,
+        "exactOverlap": {
+          "verticalDepthPx": 0,
+          "verticalAreaPx2": 0,
+          "verticalDurationSeconds": 0,
+          "horizontalDepthPx": 19.434779220779205,
+          "horizontalDurationSeconds": 1.1306632213608916,
+          "catchUpDepthPx": 19.434779220779205,
+          "catchUpApproachPx": 22.418181818181434,
+          "catchUpDurationSeconds": 1.1306632213608916,
+          "verticalPairs": 0
+        },
+        "rejectedCandidateReasons": {
+          "HARD_READABILITY_FLOOR": 6716,
+          "EXCESSIVE_OVERLAP_DURATION": 146
+        },
+        "safety": {
+          "safeProofViolation": 0,
+          "subtitleViolation": 0,
+          "specialViolation": 0
+        },
+        "selection": {
+          "promotedWithBase": 0,
+          "promotedWithoutBase": 0,
+          "maximumForeclosed": 0,
+          "maximumProofCalls": 0
+        }
+      },
+      {
+        "name": "C",
+        "shape": "HIGH",
+        "ingress": 67,
+        "launches": 57,
+        "specialLaunches": 1,
+        "interleaved": 43,
+        "drops": {
+          "STALE_PRUNED": 1,
+          "CAPACITY_DROPPED": 9,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 708,
+        "minimumLaunchHorizontalGapPx": -79.41600000000005,
+        "averageLaunchHorizontalGapPx": 47.20763461538463,
+        "averageVisible": 19.842105263157894,
+        "peakVisible": 22,
+        "maxVerticalOverlapPx": 16,
+        "maxHorizontalOverlapPx": 59.44800000000009,
+        "maxSampledPairOverlapSeconds": 1.2,
+        "normalOverlap": {
+          "horizontalPx": 59.44800000000009,
+          "verticalPx": 16,
+          "crossRowVerticalPx": 16,
+          "sampledPairSeconds": 1.2,
+          "samples": 43
+        },
+        "sourceShape": {
+          "HIGH": 76
+        },
+        "displayShape": {
+          "DENSE": 66,
+          "MAX_READABLE": 10
+        },
+        "baseLaunches": 14,
+        "exactOverlap": {
+          "verticalDepthPx": 16,
+          "verticalAreaPx2": 969.6973271889347,
+          "verticalDurationSeconds": 1.277342657342651,
+          "horizontalDepthPx": 60.606082949308416,
+          "horizontalDurationSeconds": 1.277342657342651,
+          "catchUpDepthPx": 60.606082949308416,
+          "catchUpApproachPx": 79.70618181818135,
+          "catchUpDurationSeconds": 1.277342657342651,
+          "verticalPairs": 9
+        },
+        "rejectedCandidateReasons": {
+          "HARD_READABILITY_FLOOR": 4918,
+          "NORMAL_OVERLAP_DEPTH": 4923,
+          "NORMAL_OVERLAP_DURATION": 805,
+          "EXCESSIVE_OVERLAP_DURATION": 50,
+          "AGGREGATE_VISIBILITY": 29,
+          "AGGREGATE_OVERLAP_DURATION": 1
+        },
+        "safety": {
+          "safeProofViolation": 0,
+          "subtitleViolation": 0,
+          "specialViolation": 0
+        },
+        "selection": {
+          "promotedWithBase": 0,
+          "promotedWithoutBase": 0,
+          "maximumForeclosed": 0,
+          "maximumProofCalls": 0
+        }
+      },
+      {
+        "name": "C-selection",
+        "shape": "HIGH",
+        "ingress": 67,
+        "launches": 65,
+        "specialLaunches": 1,
+        "interleaved": 0,
+        "drops": {
+          "STALE_PRUNED": 1,
+          "CAPACITY_DROPPED": 1,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 186,
+        "minimumLaunchHorizontalGapPx": -21.134000000000015,
+        "averageLaunchHorizontalGapPx": 77.82716949152544,
+        "averageVisible": 22.36842105263158,
+        "peakVisible": 25,
+        "maxVerticalOverlapPx": 4,
+        "maxHorizontalOverlapPx": 15.840000000000032,
+        "maxSampledPairOverlapSeconds": 0.4,
+        "normalOverlap": {
+          "horizontalPx": 0,
+          "verticalPx": 0,
+          "crossRowVerticalPx": 0,
+          "sampledPairSeconds": 0,
+          "samples": 0
+        },
+        "sourceShape": {
+          "HIGH": 76
+        },
+        "displayShape": {
+          "DENSE": 69,
+          "MAX_READABLE": 7
+        },
+        "baseLaunches": 65,
+        "exactOverlap": {
+          "verticalDepthPx": 0,
+          "verticalAreaPx2": 0,
+          "verticalDurationSeconds": 0,
+          "horizontalDepthPx": 0,
+          "horizontalDurationSeconds": 0,
+          "catchUpDepthPx": 0,
+          "catchUpApproachPx": 0,
+          "catchUpDurationSeconds": 0,
+          "verticalPairs": 0
+        },
+        "rejectedCandidateReasons": {
+          "HARD_READABILITY_FLOOR": 1738,
+          "NORMAL_OVERLAP_DEPTH": 848,
+          "NORMAL_OVERLAP_DURATION": 230,
+          "AGGREGATE_VISIBILITY": 20,
+          "EXCESSIVE_OVERLAP_DURATION": 29
+        },
+        "safety": {
+          "safeProofViolation": 0,
+          "subtitleViolation": 0,
+          "specialViolation": 0
+        },
+        "selection": {
+          "promotedWithBase": 0,
+          "promotedWithoutBase": 0,
+          "maximumForeclosed": 0,
+          "maximumProofCalls": 0
+        }
+      },
+      {
+        "name": "D",
+        "shape": "HIGH",
+        "ingress": 67,
+        "launches": 60,
+        "specialLaunches": 1,
+        "interleaved": 43,
+        "drops": {
+          "STALE_PRUNED": 1,
+          "CAPACITY_DROPPED": 6,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 635,
+        "minimumLaunchHorizontalGapPx": -79.41600000000005,
+        "averageLaunchHorizontalGapPx": 67.71222222222224,
+        "averageVisible": 20.67105263157895,
+        "peakVisible": 24,
+        "maxVerticalOverlapPx": 16,
+        "maxHorizontalOverlapPx": 51.48000000000002,
+        "maxSampledPairOverlapSeconds": 1.4,
+        "normalOverlap": {
+          "horizontalPx": 51.48000000000002,
+          "verticalPx": 16,
+          "crossRowVerticalPx": 16,
+          "sampledPairSeconds": 1.4,
+          "samples": 9
+        },
+        "sourceShape": {
+          "HIGH": 76
+        },
+        "displayShape": {
+          "DENSE": 69,
+          "MAX_READABLE": 7
+        },
+        "baseLaunches": 17,
+        "exactOverlap": {
+          "verticalDepthPx": 16,
+          "verticalAreaPx2": 966.1670046082945,
+          "verticalDurationSeconds": 1.2726923076923096,
+          "horizontalDepthPx": 60.38543778801841,
+          "horizontalDurationSeconds": 1.2726923076923096,
+          "catchUpDepthPx": 0,
+          "catchUpApproachPx": 0,
+          "catchUpDurationSeconds": 0,
+          "verticalPairs": 3
+        },
+        "rejectedCandidateReasons": {
+          "HARD_READABILITY_FLOOR": 4889,
+          "NORMAL_OVERLAP_DEPTH": 4008,
+          "NORMAL_OVERLAP_DURATION": 912,
+          "AGGREGATE_VISIBILITY": 17,
+          "EXCESSIVE_OVERLAP_DURATION": 42
+        },
+        "safety": {
+          "safeProofViolation": 0,
+          "subtitleViolation": 0,
+          "specialViolation": 0
+        },
+        "selection": {
+          "promotedWithBase": 27,
+          "promotedWithoutBase": 16,
+          "maximumForeclosed": 1,
+          "maximumProofCalls": 15
+        }
+      }
+    ],
+    "lostOpportunities": {
+      "bOnlyIds": [
+        "fixed-43"
+      ],
+      "dOnlyIds": [
+        "fixed-61"
+      ],
+      "interpretation": "episode-level identity comparison; local cost does not forecast recovery of presently blocked anchors"
+    }
+  },
+  {
+    "shape": "BURST",
+    "variants": [
+      {
+        "name": "B",
+        "shape": "BURST",
+        "ingress": 167,
+        "launches": 81,
+        "specialLaunches": 2,
+        "interleaved": 0,
+        "drops": {
+          "STALE_PRUNED": 3,
+          "CAPACITY_DROPPED": 83,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 428,
+        "minimumLaunchHorizontalGapPx": -1.2960000000001628,
+        "averageLaunchHorizontalGapPx": 70.09268,
+        "averageVisible": 28.407894736842106,
+        "peakVisible": 32,
+        "maxVerticalOverlapPx": 32,
+        "maxHorizontalOverlapPx": 7.819999999999936,
+        "maxSampledPairOverlapSeconds": 0.2,
+        "normalOverlap": {
+          "horizontalPx": 0,
+          "verticalPx": 0,
+          "crossRowVerticalPx": 0,
+          "sampledPairSeconds": 0,
+          "samples": 0
+        },
+        "sourceShape": {
+          "BURST": 76
+        },
+        "displayShape": {
+          "MAX_READABLE": 76
+        },
+        "baseLaunches": 81,
+        "exactOverlap": {
+          "verticalDepthPx": 0,
+          "verticalAreaPx2": 0,
+          "verticalDurationSeconds": 0,
+          "horizontalDepthPx": 0.9854377880185439,
+          "horizontalDurationSeconds": 0.020769230769233395,
+          "catchUpDepthPx": 0,
+          "catchUpApproachPx": 0,
+          "catchUpDurationSeconds": 0,
+          "verticalPairs": 0
+        },
+        "rejectedCandidateReasons": {
+          "HARD_READABILITY_FLOOR": 4276,
+          "EXCESSIVE_OVERLAP_DURATION": 14
+        },
+        "safety": {
+          "safeProofViolation": 0,
+          "subtitleViolation": 0,
+          "specialViolation": 0
+        },
+        "selection": {
+          "promotedWithBase": 0,
+          "promotedWithoutBase": 0,
+          "maximumForeclosed": 0,
+          "maximumProofCalls": 0
+        }
+      },
+      {
+        "name": "C",
+        "shape": "BURST",
+        "ingress": 167,
+        "launches": 73,
+        "specialLaunches": 2,
+        "interleaved": 66,
+        "drops": {
+          "STALE_PRUNED": 3,
+          "CAPACITY_DROPPED": 91,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 461,
+        "minimumLaunchHorizontalGapPx": -63.79200000000003,
+        "averageLaunchHorizontalGapPx": 62.15888235294116,
+        "averageVisible": 25.539473684210527,
+        "peakVisible": 29,
+        "maxVerticalOverlapPx": 32,
+        "maxHorizontalOverlapPx": 43.82400000000018,
+        "maxSampledPairOverlapSeconds": 1,
+        "normalOverlap": {
+          "horizontalPx": 43.82400000000018,
+          "verticalPx": 16,
+          "crossRowVerticalPx": 16,
+          "sampledPairSeconds": 1,
+          "samples": 6
+        },
+        "sourceShape": {
+          "BURST": 76
+        },
+        "displayShape": {
+          "MAX_READABLE": 76
+        },
+        "baseLaunches": 7,
+        "exactOverlap": {
+          "verticalDepthPx": 16,
+          "verticalAreaPx2": 776.0870046082964,
+          "verticalDurationSeconds": 1.0223076923076937,
+          "horizontalDepthPx": 48.505437788018526,
+          "horizontalDurationSeconds": 1.0223076923076937,
+          "catchUpDepthPx": 0,
+          "catchUpApproachPx": 0,
+          "catchUpDurationSeconds": 0,
+          "verticalPairs": 2
+        },
+        "rejectedCandidateReasons": {
+          "HARD_READABILITY_FLOOR": 3335,
+          "NORMAL_OVERLAP_DEPTH": 1137,
+          "NORMAL_OVERLAP_DURATION": 257,
+          "EXCESSIVE_OVERLAP_DURATION": 4,
+          "AGGREGATE_VISIBILITY": 15
+        },
+        "safety": {
+          "safeProofViolation": 0,
+          "subtitleViolation": 0,
+          "specialViolation": 0
+        },
+        "selection": {
+          "promotedWithBase": 0,
+          "promotedWithoutBase": 0,
+          "maximumForeclosed": 0,
+          "maximumProofCalls": 0
+        }
+      },
+      {
+        "name": "C-selection",
+        "shape": "BURST",
+        "ingress": 167,
+        "launches": 80,
+        "specialLaunches": 2,
+        "interleaved": 0,
+        "drops": {
+          "STALE_PRUNED": 3,
+          "CAPACITY_DROPPED": 84,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 431,
+        "minimumLaunchHorizontalGapPx": 8.812000000000012,
+        "averageLaunchHorizontalGapPx": 66.9516081081081,
+        "averageVisible": 27.94736842105263,
+        "peakVisible": 31,
+        "maxVerticalOverlapPx": 32,
+        "maxHorizontalOverlapPx": 0.73599999999999,
+        "maxSampledPairOverlapSeconds": 0.2,
+        "normalOverlap": {
+          "horizontalPx": 0,
+          "verticalPx": 0,
+          "crossRowVerticalPx": 0,
+          "sampledPairSeconds": 0,
+          "samples": 0
+        },
+        "sourceShape": {
+          "BURST": 76
+        },
+        "displayShape": {
+          "MAX_READABLE": 76
+        },
+        "baseLaunches": 80,
+        "exactOverlap": {
+          "verticalDepthPx": 0,
+          "verticalAreaPx2": 0,
+          "verticalDurationSeconds": 0,
+          "horizontalDepthPx": 0,
+          "horizontalDurationSeconds": 0,
+          "catchUpDepthPx": 0,
+          "catchUpApproachPx": 0,
+          "catchUpDurationSeconds": 0,
+          "verticalPairs": 0
+        },
+        "rejectedCandidateReasons": {
+          "HARD_READABILITY_FLOOR": 3273,
+          "NORMAL_OVERLAP_DEPTH": 818,
+          "NORMAL_OVERLAP_DURATION": 211,
+          "AGGREGATE_VISIBILITY": 9,
+          "EXCESSIVE_OVERLAP_DURATION": 5
+        },
+        "safety": {
+          "safeProofViolation": 0,
+          "subtitleViolation": 0,
+          "specialViolation": 0
+        },
+        "selection": {
+          "promotedWithBase": 0,
+          "promotedWithoutBase": 0,
+          "maximumForeclosed": 0,
+          "maximumProofCalls": 0
+        }
+      },
+      {
+        "name": "D",
+        "shape": "BURST",
+        "ingress": 167,
+        "launches": 74,
+        "specialLaunches": 2,
+        "interleaved": 58,
+        "drops": {
+          "STALE_PRUNED": 3,
+          "CAPACITY_DROPPED": 90,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 442,
+        "minimumLaunchHorizontalGapPx": -32.544000000000096,
+        "averageLaunchHorizontalGapPx": 64.3744264705882,
+        "averageVisible": 25.92105263157895,
+        "peakVisible": 29,
+        "maxVerticalOverlapPx": 32,
+        "maxHorizontalOverlapPx": 21.62999999999988,
+        "maxSampledPairOverlapSeconds": 1.2,
+        "normalOverlap": {
+          "horizontalPx": 21.62999999999988,
+          "verticalPx": 16,
+          "crossRowVerticalPx": 16,
+          "sampledPairSeconds": 1.2,
+          "samples": 8
+        },
+        "sourceShape": {
+          "BURST": 76
+        },
+        "displayShape": {
+          "MAX_READABLE": 76
+        },
+        "baseLaunches": 16,
+        "exactOverlap": {
+          "verticalDepthPx": 16,
+          "verticalAreaPx2": 399.8399999999983,
+          "verticalDurationSeconds": 1.1539393939393905,
+          "horizontalDepthPx": 24.989999999999895,
+          "horizontalDurationSeconds": 1.1539393939393905,
+          "catchUpDepthPx": 0,
+          "catchUpApproachPx": 0,
+          "catchUpDurationSeconds": 0,
+          "verticalPairs": 4
+        },
+        "rejectedCandidateReasons": {
+          "HARD_READABILITY_FLOOR": 3176,
+          "NORMAL_OVERLAP_DEPTH": 904,
+          "NORMAL_OVERLAP_DURATION": 230,
+          "AGGREGATE_VISIBILITY": 9,
+          "EXCESSIVE_OVERLAP_DURATION": 3
+        },
+        "safety": {
+          "safeProofViolation": 0,
+          "subtitleViolation": 0,
+          "specialViolation": 0
+        },
+        "selection": {
+          "promotedWithBase": 39,
+          "promotedWithoutBase": 19,
+          "maximumForeclosed": 1,
+          "maximumProofCalls": 15
+        }
+      }
+    ],
+    "lostOpportunities": {
+      "bOnlyIds": [
+        "fixed-26",
+        "fixed-50",
+        "fixed-70",
+        "fixed-97",
+        "fixed-117",
+        "fixed-137",
+        "fixed-157"
+      ],
+      "dOnlyIds": [],
+      "interpretation": "episode-level identity comparison; local cost does not forecast recovery of presently blocked anchors"
+    }
+  }
+]

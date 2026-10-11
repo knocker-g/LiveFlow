@@ -51,10 +51,12 @@ function run(config, shape, options = {}) {
                 interleavedAnchorStride: config.interleavedAnchorStride, exclusionRegions: state.exclusionRegions,
                 special: message.special });
             const stamp = list => list.map(c => ({ ...c, rectangle: { ...c.rectangle, snapshotAt: now / 1000, occlusionHistoryKnown: true } }));
-            const ranked = tuning.rankDensityRescuePlacements(stamp(generated.baseCandidates), stamp(generated.interleavedCandidates),
+            let ranked = tuning.rankDensityRescuePlacements(stamp(generated.baseCandidates), stamp(generated.interleavedCandidates),
                 stamp(generated.expansionCandidates), active, message.id, policy.density,
                 options.preferInterleaved ?? Boolean(config.normalOverlapPolicy));
-            options.onCandidates?.({ id: message.id, at: now, density: policy.density, candidates: ranked, active });
+            const selection = options.selectCandidates?.({ candidates: ranked, active, density: policy.density, config });
+            if (selection) ranked = selection.candidates;
+            options.onCandidates?.({ id: message.id, at: now, density: policy.density, candidates: ranked, active, selection: selection?.diagnostic });
             return { candidates: ranked, activeComments: active };
         },
         launch(message, proof) {
