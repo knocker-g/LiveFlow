@@ -100,6 +100,7 @@
     function createReplaySchedulerDiagnostic() {
         return {
             pendingCurrent: 0,
+            schedulerLifecycleDiscarded: 0,
             opportunitiesArmed: 0,
             opportunitiesEvaluated: 0,
             stalePruned: 0,
@@ -236,6 +237,9 @@
         }
         if (event.type === 'EMERGENCY_PENDING_DROPPED') {
             replaySchedulerDiagnostic.emergencyPendingDropped += Number.isInteger(event.count) ? event.count : 0;
+        }
+        if (event.type === 'PENDING_CLEARED' && event.reason === 'LIFECYCLE_SUPPRESSED') {
+            replaySchedulerDiagnostic.schedulerLifecycleDiscarded += Number.isInteger(event.count) ? event.count : 0;
         }
         if (event.type === 'SELECTION_NONE') {
             replaySchedulerDiagnostic.selectionNone += 1;

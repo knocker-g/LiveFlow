@@ -251,7 +251,10 @@
 
         function clear() {
             scheduler.stop();
-            queue.enforceHardCount(0);
+            const cleared = queue.enforceHardCount(0);
+            for (const item of cleared) itemDiagnosticState.delete(item);
+            if (cleared.length > 0) notify({ type: 'PENDING_CLEARED', count: cleared.length,
+                pendingCount: 0, reason: 'LIFECYCLE_SUPPRESSED' });
         }
 
         return Object.freeze({

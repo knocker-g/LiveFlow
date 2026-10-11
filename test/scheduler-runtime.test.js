@@ -535,6 +535,40 @@ test('clear cancels scheduling and removes pending without touching launched obj
     assert.equal(displayed.immutable, true);
 });
 
+test('lifecycle clear conserves pending as explicit removal without launching or resurrecting it', () => {
+    const { computeReplayAccountingLedger } = require('../src/chat-read-core.js');
+    const events = [];
+    const h = harness({ observe: (event) => events.push(event) });
+    h.enqueue('normal-a');
+    h.enqueue('special', 'liveChatPaidMessageRenderer');
+    h.enqueue('normal-b');
+    assert.deepEqual(h.runtime.queue.snapshot().map((item) => item.id), ['normal-a', 'special', 'normal-b']);
+    h.runtime.clear();
+    assert.equal(h.runtime.status().pendingCount, 0);
+    assert.equal(h.runtime.status().state, 'IDLE');
+    assert.equal(h.timers[0].cancelled, true);
+    const cleared = events.filter((event) => event.type === 'PENDING_CLEARED');
+    const removed = cleared.reduce((count, event) => count + event.count, 0);
+    const ledger = computeReplayAccountingLedger({
+        receivedActions: 3, parsed: 3, displayable: 3,
+        dueClassified: 3, dueBridged: 3, enqueued: 3, schedulerEligible: 3,
+        schedulerRetained: h.runtime.status().pendingCount, schedulerExplicitDrop: removed
+    });
+    assert.equal(ledger.lostUnaccounted, 0, 'all cleared items require explicit lifecycle attribution');
+    assert.equal(ledger.stages.scheduler.explicitRemoval, 3);
+    assert.deepEqual(cleared.map(({ reason, count }) => ({ reason, count })),
+        [{ reason: 'LIFECYCLE_SUPPRESSED', count: 3 }]);
+    assert.equal(events.some((event) => ['STALE_PRUNED', 'CAPACITY_DROPPED', 'EMERGENCY_PENDING_DROPPED'].includes(event.type)), false);
+    h.runtime.clear();
+    assert.equal(events.filter((event) => event.type === 'PENDING_CLEARED').length, 1, 'duplicate clear cannot count removal twice');
+    h.timers[0].callback();
+    h.fire();
+    assert.deepEqual(h.launched, []);
+    h.enqueue('fresh');
+    h.fire();
+    assert.deepEqual(h.launched, ['fresh']);
+});
+
 test('a fresh arrival after seek-style clear rearms through the normal empty transition', () => {
     const h = harness();
     h.enqueue('before-seek');
@@ -543,6 +577,67 @@ test('a fresh arrival after seek-style clear rearms through the normal empty tra
     assert.equal(h.runtime.status().state, 'ARMED');
     h.fire();
     assert.deepEqual(h.launched, ['after-seek']);
+});
+
+test('actual overlay cleanup publishes lifecycle removal to the Replay scheduler ledger', () => {
+    const fs = require('node:fs');
+    const vm = require('node:vm');
+    const core = require('../src/chat-read-core.js');
+    const content = fs.readFileSync(require.resolve('../src/youtube-chat.js'), 'utf8');
+    const main = fs.readFileSync(require.resolve('../src/page-state-main.js'), 'utf8');
+    function functionSource(source, name) {
+        const start = source.indexOf(`function ${name}(`);
+        const body = source.indexOf('{', start);
+        let depth = 1;
+        let end = body + 1;
+        for (; depth && end < source.length; end += 1) {
+            if (source[end] === '{') depth += 1;
+            if (source[end] === '}') depth -= 1;
+        }
+        assert.ok(start >= 0 && depth === 0);
+        return source.slice(start, end);
+    }
+    const messages = [];
+    const context = vm.createContext({
+        core, currentChatMode: 'replay', currentPageLifecycleGeneration: 1,
+        REPLAY_PIPELINE_DIAGNOSTIC_TYPE: 'LIVEFLOW_REPLAY_PIPELINE_DIAGNOSTIC',
+        window: { location: { origin: 'https://www.youtube.com' }, postMessage: (message) => messages.push(message) },
+        updateReplayLaunchGap() {}, disconnectSubtitleGeometryObservers() {},
+        rendererGeneration: 1, activeDanmaku: new Map(), laneStates: [],
+        overlayRoot: null, overlaySurface: null
+    });
+    vm.runInContext(['createReplaySchedulerDiagnostic', 'publishReplaySchedulerDiagnostic',
+        'observeReplayScheduler', 'cleanupOverlay'].map((name) => functionSource(content, name)).join('\n') +
+        '\nreplaySchedulerDiagnostic = createReplaySchedulerDiagnostic();', context);
+    const h = harness({ observe: (event) => context.observeReplayScheduler(event) });
+    context.phase3Runtime = h.runtime;
+    for (const id of ['one', 'two', 'three']) h.enqueue(id);
+    const receiver = main.match(/for \(const key of \['pendingCurrent'[^]*?\n                \}/)[0];
+    vm.runInContext(functionSource(main, 'createReplayPipelineDiagnostic') +
+        '\nreplayPipelineDiagnostic = createReplayPipelineDiagnostic();', context);
+    Object.assign(context.replayPipelineDiagnostic, { receivedActions: 3, messagesObserved: 3, bridged: 3, enqueued: 3 });
+    const ledgerCall = main.match(/core\?\.computeReplayAccountingLedger\?\.\(\{[^]*?\}\)/)[0];
+    const ledger = () => vm.runInContext(`schedulerRetained = replayPipelineDiagnostic.pendingCurrent; ${ledgerCall}`, context);
+    const receive = () => {
+        context.scheduler = messages.at(-1).scheduler;
+        vm.runInContext(receiver, context);
+    };
+    receive();
+    // Establish the coherent pre-cleanup snapshot; this fixture isolates clear attribution.
+    context.replayPipelineDiagnostic.pendingCurrent = h.runtime.status().pendingCount;
+    assert.equal(ledger().lostUnaccounted, 0);
+    context.cleanupOverlay();
+    receive();
+    assert.equal(context.phase3Runtime, null);
+    assert.equal(context.replayPipelineDiagnostic.pendingCurrent, 0);
+    assert.equal(context.replayPipelineDiagnostic.schedulerLifecycleDiscarded, 3);
+    assert.equal(ledger().lostUnaccounted, 0);
+    assert.equal(ledger().stages.scheduler.explicitRemoval, 3);
+    context.cleanupOverlay();
+    receive();
+    assert.equal(context.replayPipelineDiagnostic.schedulerLifecycleDiscarded, 3);
+    h.timers[0].callback();
+    assert.deepEqual(h.launched, []);
 });
 
 test('runtime source uses no interval or animation-frame pacing loop', () => {

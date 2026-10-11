@@ -611,7 +611,7 @@ test('renderer target accepts only the same current main video', () => {
 test('navigation invalidates renderer and cancels pending and active work', () => {
     assert.match(runtimeSource, /function cleanupOverlay\(\)\s*\{\s*rendererGeneration \+= 1;/);
     assert.match(runtimeSource, /phase3Runtime\?\.clear\(\)/);
-    assert.match(schedulerRuntimeSource, /scheduler\.stop\(\);\s*queue\.enforceHardCount\(0\)/);
+    assert.match(schedulerRuntimeSource, /scheduler\.stop\(\);\s*const cleared = queue\.enforceHardCount\(0\)/);
     assert.match(runtimeSource, /activeDanmaku\.forEach\([^]*?animation\?\.cancel\(\)/);
     assert.match(runtimeSource, /addEventListener\('yt-navigate-start', handleNavigationStart\)/);
     assert.match(runtimeSource, /function handleNavigationStart\(\)[^]*?disconnectNativeChatObserver\(\)[^]*?cleanupOverlay\(\)/);
