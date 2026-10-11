@@ -1039,7 +1039,7 @@ test('SPECIAL body preserves full one-line text and measured two-line footprint'
     assert.match(runtimeSource, /function applySpecialFit\([^]*computeSpecialSingleLineFit/);
     assert.match(runtimeSource, /message\.style\.fontSize = `\$\{fit\.bodyFontSize\}px`/);
     assert.match(runtimeSource, /commentHeight: renderedRect\.height/);
-    assert.match(runtimeSource, /height: trajectory\.height/);
+    assert.match(runtimeSource, /height: rect\.height/);
     assert.match(runtimeSource, /const laneSpan = 1;/);
     assert.match(runtimeSource, /commentHeight: renderedRect\.height/);
     assert.match(runtimeSource, /visualFootprint: Object\.freeze\(\{ width: commentWidth, height: renderedRect\.height, anchorLane: launchProof\.lane, logicalLaneSpan: 1 \}\)/);

@@ -121,14 +121,18 @@
                 footprint
             });
             if (!normalized.safe) return null;
-            const outsideExclusions = exclusionRegions.every((region) => !(normalized.rectangle.x < region.x + region.width &&
-                region.x < normalized.rectangle.x + normalized.rectangle.width &&
+            const clearanceRectangle = { x: videoRect.x, y: normalized.rectangle.y, width: videoRect.width, height: renderedHeight };
+            const outsideExclusions = exclusionRegions.every((region) => !(clearanceRectangle.x < region.x + region.width &&
+                region.x < clearanceRectangle.x + clearanceRectangle.width &&
                 normalized.rectangle.y < region.y + region.height && region.y < normalized.rectangle.y + normalized.rectangle.height));
             if (!outsideExclusions) {
                 excludedCount += 1;
                 return null;
             }
-            return Object.freeze({ rectangle: normalized.rectangle, lane, anchorIndex: Math.round(lane * 2), laneSpan: 1,
+            const rectangle = Object.freeze({ ...normalized.rectangle, x: videoRect.x + videoRect.width,
+                width: renderedWidth, exitX: videoRect.x, surfaceRight: videoRect.x + videoRect.width,
+                semanticClass: special ? 'SPECIAL' : 'NORMAL' });
+            return Object.freeze({ rectangle, clearanceRectangle: Object.freeze(clearanceRectangle), lane, anchorIndex: Math.round(lane * 2), laneSpan: 1,
                 interleaved: lane % 1 !== 0 });
         }
 

@@ -3,6 +3,7 @@
     const pending = typeof module !== 'undefined' && module.exports ? require('./pending-selection.js') : global.LiveFlowPendingSelection;
     const machine = typeof module !== 'undefined' && module.exports ? require('./scheduler-state-machine.js') : global.LiveFlowSchedulerStateMachine;
     const geometry = typeof module !== 'undefined' && module.exports ? require('./geometry-adapter.js') : global.LiveFlowGeometryAdapter;
+    const normalOverlap = typeof module !== 'undefined' && module.exports ? require('./normal-overlap-policy.js') : global.LiveFlowNormalOverlapPolicy;
 
     function classifyLaunchGapClass(elapsedMsec) {
         if (!Number.isFinite(elapsedMsec) || elapsedMsec < 0) return 'NONE';
@@ -155,16 +156,18 @@
             let subtitleBlocked = 0;
             let collisionBlocked = 0;
             for (const candidate of proof.candidates) {
-                if (!foundations.isOutsideHardExclusions(candidate.rectangle, geometryState.exclusionRegions)) {
+                if (!foundations.isOutsideHardExclusions({ ...candidate.rectangle, ...(candidate.clearanceRectangle || {}) }, geometryState.exclusionRegions)) {
                     subtitleBlocked += 1;
                     continue;
                 }
-                const collision = foundations.proveBoundedCollisionSafe(candidate.rectangle, proof.activeComments, allowance);
+                const collision = config.normalOverlapPolicy
+                    ? normalOverlap.prove(candidate.rectangle, proof.activeComments, allowance, config.normalOverlapPolicy, ['DENSE', 'MAX_READABLE'].includes(densityLevel))
+                    : foundations.proveBoundedCollisionSafe(candidate.rectangle, proof.activeComments, allowance);
                 if (!collision.safe) {
                     collisionBlocked += 1;
                     continue;
                 }
-                launchProofs.set(item, Object.freeze({ ...candidate, density: densityLevel }));
+                launchProofs.set(item, Object.freeze({ ...candidate, density: densityLevel, geometryRevision: refreshed.revision }));
                 itemState.safeSeen = true;
                 return true;
             }

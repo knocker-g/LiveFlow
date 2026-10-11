@@ -1,0 +1,230 @@
+[
+  {
+    "name": "Baseline",
+    "runs": [
+      {
+        "shape": "HIGH",
+        "ingress": 67,
+        "launches": 61,
+        "specialLaunches": 1,
+        "interleaved": 9,
+        "drops": {
+          "STALE_PRUNED": 1,
+          "CAPACITY_DROPPED": 5,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 489,
+        "minimumLaunchHorizontalGapPx": -16.920000000000073,
+        "averageLaunchHorizontalGapPx": 56.40316071428572,
+        "averageVisible": 21.092105263157894,
+        "peakVisible": 24,
+        "maxVerticalOverlapPx": 32,
+        "maxHorizontalOverlapPx": 6.92999999999995,
+        "maxSampledPairOverlapSeconds": 0.4,
+        "normalOverlap": {
+          "horizontalPx": 6.92999999999995,
+          "verticalPx": 32,
+          "crossRowVerticalPx": 0,
+          "sampledPairSeconds": 0.4,
+          "samples": 4
+        },
+        "sourceShape": {
+          "HIGH": 76
+        },
+        "displayShape": {
+          "DENSE": 69,
+          "MAX_READABLE": 7
+        }
+      },
+      {
+        "shape": "BURST",
+        "ingress": 167,
+        "launches": 66,
+        "specialLaunches": 2,
+        "interleaved": 21,
+        "drops": {
+          "STALE_PRUNED": 3,
+          "CAPACITY_DROPPED": 98,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 469,
+        "minimumLaunchHorizontalGapPx": -21.134000000000015,
+        "averageLaunchHorizontalGapPx": 63.66185245901638,
+        "averageVisible": 23.17105263157895,
+        "peakVisible": 26,
+        "maxVerticalOverlapPx": 32,
+        "maxHorizontalOverlapPx": 13.860000000000014,
+        "maxSampledPairOverlapSeconds": 0.2,
+        "normalOverlap": {
+          "horizontalPx": 0,
+          "verticalPx": 0,
+          "crossRowVerticalPx": 0,
+          "sampledPairSeconds": 0,
+          "samples": 0
+        },
+        "sourceShape": {
+          "BURST": 76
+        },
+        "displayShape": {
+          "MAX_READABLE": 76
+        }
+      }
+    ]
+  },
+  {
+    "name": "B",
+    "runs": [
+      {
+        "shape": "HIGH",
+        "ingress": 67,
+        "launches": 60,
+        "specialLaunches": 1,
+        "interleaved": 6,
+        "drops": {
+          "STALE_PRUNED": 1,
+          "CAPACITY_DROPPED": 6,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 446,
+        "minimumLaunchHorizontalGapPx": -21.134000000000015,
+        "averageLaunchHorizontalGapPx": 54.436203703703676,
+        "averageVisible": 21.236842105263158,
+        "peakVisible": 24,
+        "maxVerticalOverlapPx": 32,
+        "maxHorizontalOverlapPx": 16.70399999999995,
+        "maxSampledPairOverlapSeconds": 1.2,
+        "normalOverlap": {
+          "horizontalPx": 16.70399999999995,
+          "verticalPx": 32,
+          "crossRowVerticalPx": 0,
+          "sampledPairSeconds": 1.2,
+          "samples": 13
+        },
+        "sourceShape": {
+          "HIGH": 76
+        },
+        "displayShape": {
+          "DENSE": 69,
+          "MAX_READABLE": 7
+        }
+      },
+      {
+        "shape": "BURST",
+        "ingress": 167,
+        "launches": 81,
+        "specialLaunches": 2,
+        "interleaved": 0,
+        "drops": {
+          "STALE_PRUNED": 3,
+          "CAPACITY_DROPPED": 83,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 428,
+        "minimumLaunchHorizontalGapPx": -1.2960000000001628,
+        "averageLaunchHorizontalGapPx": 70.09268,
+        "averageVisible": 28.407894736842106,
+        "peakVisible": 32,
+        "maxVerticalOverlapPx": 32,
+        "maxHorizontalOverlapPx": 7.819999999999936,
+        "maxSampledPairOverlapSeconds": 0.2,
+        "normalOverlap": {
+          "horizontalPx": 0,
+          "verticalPx": 0,
+          "crossRowVerticalPx": 0,
+          "sampledPairSeconds": 0,
+          "samples": 0
+        },
+        "sourceShape": {
+          "BURST": 76
+        },
+        "displayShape": {
+          "MAX_READABLE": 76
+        }
+      }
+    ]
+  },
+  {
+    "name": "C",
+    "runs": [
+      {
+        "shape": "HIGH",
+        "ingress": 67,
+        "launches": 57,
+        "specialLaunches": 1,
+        "interleaved": 43,
+        "drops": {
+          "STALE_PRUNED": 1,
+          "CAPACITY_DROPPED": 9,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 708,
+        "minimumLaunchHorizontalGapPx": -79.41600000000005,
+        "averageLaunchHorizontalGapPx": 47.20763461538463,
+        "averageVisible": 19.842105263157894,
+        "peakVisible": 22,
+        "maxVerticalOverlapPx": 16,
+        "maxHorizontalOverlapPx": 59.44800000000009,
+        "maxSampledPairOverlapSeconds": 1.2,
+        "normalOverlap": {
+          "horizontalPx": 59.44800000000009,
+          "verticalPx": 16,
+          "crossRowVerticalPx": 16,
+          "sampledPairSeconds": 1.2,
+          "samples": 43
+        },
+        "sourceShape": {
+          "HIGH": 76
+        },
+        "displayShape": {
+          "DENSE": 66,
+          "MAX_READABLE": 10
+        }
+      },
+      {
+        "shape": "BURST",
+        "ingress": 167,
+        "launches": 73,
+        "specialLaunches": 2,
+        "interleaved": 66,
+        "drops": {
+          "STALE_PRUNED": 3,
+          "CAPACITY_DROPPED": 91,
+          "EMERGENCY_PENDING_DROPPED": 0
+        },
+        "pending": 0,
+        "lostUnaccounted": 0,
+        "collisionEvaluations": 461,
+        "minimumLaunchHorizontalGapPx": -63.79200000000003,
+        "averageLaunchHorizontalGapPx": 62.15888235294116,
+        "averageVisible": 25.539473684210527,
+        "peakVisible": 29,
+        "maxVerticalOverlapPx": 32,
+        "maxHorizontalOverlapPx": 43.82400000000018,
+        "maxSampledPairOverlapSeconds": 1,
+        "normalOverlap": {
+          "horizontalPx": 43.82400000000018,
+          "verticalPx": 16,
+          "crossRowVerticalPx": 16,
+          "sampledPairSeconds": 1,
+          "samples": 6
+        },
+        "sourceShape": {
+          "BURST": 76
+        },
+        "displayShape": {
+          "MAX_READABLE": 76
+        }
+      }
+    ]
+  }
+]

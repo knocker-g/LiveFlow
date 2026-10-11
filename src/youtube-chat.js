@@ -872,11 +872,29 @@
         if (!overlayRoot?.isConnected || !overlaySurface?.isConnected || !surfaceRect ||
             ![surfaceRect.left, surfaceRect.top, surfaceRect.width, surfaceRect.height].every(Number.isFinite) ||
             surfaceRect.width <= 0 || surfaceRect.height <= 0) return false;
+        if (activeDanmaku.size > 0 && ['left', 'top', 'width', 'height'].some(key =>
+            overlaySurface.style[key] !== `${surfaceRect[key]}px`)) return false;
         overlaySurface.style.left = `${surfaceRect.left}px`;
         overlaySurface.style.top = `${surfaceRect.top}px`;
         overlaySurface.style.width = `${surfaceRect.width}px`;
         overlaySurface.style.height = `${surfaceRect.height}px`;
         return true;
+    }
+
+    function snapshotActiveGeometry(surfaceBounds) {
+        const result = [];
+        for (const { node, trajectory, occlusionEpisodes, occlusionHistoryKnown } of activeDanmaku.values()) {
+            if (!node?.isConnected || !trajectory) return null;
+            const rect = node.getBoundingClientRect();
+            if (![rect.left, rect.top, rect.width, rect.height, trajectory.velocity].every(Number.isFinite) ||
+                rect.width <= 0 || rect.height <= 0 || trajectory.velocity <= 0) return null;
+            result.push({ x: rect.left, y: rect.top, width: rect.width, height: rect.height,
+                velocity: trajectory.velocity, anchorIndex: trajectory.anchorIndex,
+                exitX: surfaceBounds.left, surfaceRight: surfaceBounds.right,
+                semanticClass: trajectory.semanticClass,
+                occlusionEpisodes, occlusionHistoryKnown: occlusionHistoryKnown === true });
+        }
+        return result;
     }
 
     function readSubtitleGeometry() {
@@ -1063,6 +1081,7 @@
         if (!surface) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
         if (!attachOverlay(media.player) || !overlaySurface) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
         if (!applyOverlaySurfaceRect(surface)) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
+        const surfaceBounds = overlaySurface.getBoundingClientRect();
         const probe = createDanmakuNode(normalized, entry.payload.settingsSnapshot);
         overlaySurface.appendChild(probe);
         const specialFit = applySpecialFit(probe, surface.width);
@@ -1095,27 +1114,21 @@
             phase5Tuning.lengthVelocity, phase5Tuning.maximumSpeed * playbackRate);
         if (!Number.isFinite(velocity)) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
         const now = performance.now();
-        const activeComments = Array.from(activeDanmaku.values(), ({ trajectory }) => trajectory ? ({
-            x: trajectory.startX - trajectory.velocity * Math.max(0, now - trajectory.startTimeMs) / 1000,
-            y: trajectory.y,
-            width: trajectory.width,
-            height: trajectory.height,
-            velocity: trajectory.velocity,
-            anchorIndex: trajectory.anchorIndex
-        }) : null).filter(Boolean);
+        const activeComments = snapshotActiveGeometry(surfaceBounds);
+        if (!activeComments) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
         const captionsEnabled = isCaptionTrackEnabled(media.player);
         const reservedBottomLaneStart = captionsEnabled ? Math.max(0, laneCount - 2) : laneCount;
         const lanePitch = phase5Tuning.lineHeight + phase5Tuning.laneGap;
         const hardExclusions = geometryState.exclusionRegions.slice();
         if (reservedBottomLaneStart < laneCount) hardExclusions.push({
-            x: videoRect.left,
-            y: videoRect.top + reservedBottomLaneStart * lanePitch,
-            width: videoRect.width,
-            height: videoRect.bottom - (videoRect.top + reservedBottomLaneStart * lanePitch)
+            x: surfaceBounds.left,
+            y: surfaceBounds.top + reservedBottomLaneStart * lanePitch,
+            width: surfaceBounds.width,
+            height: surfaceBounds.bottom - (surfaceBounds.top + reservedBottomLaneStart * lanePitch)
         });
         const special = normalized.messageType === 'superChat' || normalized.messageType === 'superSticker';
         const generated = geometryCore.generateDensityLaneCandidates({
-            videoRect: { x: videoRect.left, y: videoRect.top, width: videoRect.width, height: videoRect.height },
+            videoRect: { x: surfaceBounds.left, y: surfaceBounds.top, width: surfaceBounds.width, height: surfaceBounds.height },
             renderedWidth: width,
             renderedHeight: height,
             actualVelocity: velocity,
@@ -1130,12 +1143,17 @@
         });
         if (!generated) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
         if (generated.candidates.length === 0) return { blockedReason: hardExclusions.length ? 'SUBTITLE_EXCLUSION' : 'NO_USABLE_LANE' };
-        const decorate = (candidates) => candidates.map((candidate) => Object.freeze({ ...candidate, specialFit }));
+        const decorate = (candidates) => candidates.map((candidate) => Object.freeze({ ...candidate, specialFit,
+            rectangle: Object.freeze({ ...candidate.rectangle, snapshotAt: now / 1000, occlusionHistoryKnown: true }),
+            snapshotAtMs: now, captionsEnabled, surfaceBounds: Object.freeze({ left: surfaceBounds.left, top: surfaceBounds.top,
+                width: surfaceBounds.width, height: surfaceBounds.height }),
+            hardExclusions: Object.freeze(hardExclusions) }));
         const primaryCandidates = decorate(generated.baseCandidates);
         const secondaryCandidates = decorate(generated.interleavedCandidates);
         const expansionCandidates = decorate(generated.expansionCandidates);
         return { candidates: window.LiveFlowPhase5Tuning.rankDensityRescuePlacements(
-            primaryCandidates, secondaryCandidates, expansionCandidates, activeComments, entry.id, densityPolicy.density
+            primaryCandidates, secondaryCandidates, expansionCandidates, activeComments, entry.id, densityPolicy.density,
+            Boolean(phase5Tuning.normalOverlapPolicy)
         ), activeComments };
     }
 
@@ -1185,7 +1203,8 @@
                     promotionResidence: PHASE3_UNTUNED_RUNTIME.sourceActivityPromotionResidence,
                     releaseDwell: PHASE3_UNTUNED_RUNTIME.sourceActivityReleaseDwell
                 },
-                collisionAllowances: phase5Tuning.collisionAllowances
+                collisionAllowances: phase5Tuning.collisionAllowances,
+                normalOverlapPolicy: phase5Tuning.normalOverlapPolicy
             }
         });
         phase3RuntimeVideo = getCurrentMainMedia()?.video || null;
@@ -1279,6 +1298,28 @@
         });
         const speed = window.LiveFlowPhase5Tuning.applyLengthAwareVelocity(baseSpeed, commentWidth, surfaceRect.width,
             phase5Tuning.lengthVelocity, phase5Tuning.maximumSpeed * playbackRate);
+        const commitAt = performance.now();
+        const currentBounds = overlaySurface.getBoundingClientRect();
+        const commitRectangle = { ...launchProof?.rectangle, snapshotAt: commitAt / 1000, occlusionHistoryKnown: true };
+        const refreshedGeometry = subtitleGeometryAdapter?.refresh();
+        const activeGeometry = snapshotActiveGeometry(currentBounds);
+        const allowanceClass = window.LiveFlowSchedulerFoundations.getDensityVisualPolicy(launchProof?.density)?.collisionAllowanceClass;
+        const allowance = phase5Tuning.collisionAllowances[allowanceClass];
+        if (!launchProof?.rectangle || !launchProof.surfaceBounds || !allowance || !activeGeometry ||
+            !Number.isFinite(launchProof.snapshotAtMs) || now < launchProof.snapshotAtMs ||
+            isCaptionTrackEnabled(player) !== launchProof.captionsEnabled || refreshedGeometry?.geometry?.state === 'UNKNOWN' ||
+            refreshedGeometry?.revision !== launchProof.geometryRevision ||
+            ['left', 'top', 'width', 'height'].some(key => currentBounds[key] !== launchProof.surfaceBounds[key]) ||
+            commentWidth !== launchProof.rectangle.width || renderedRect.height !== launchProof.rectangle.height ||
+            speed !== launchProof.rectangle.velocity ||
+            !window.LiveFlowSchedulerFoundations.isOutsideHardExclusions(
+                { ...launchProof.rectangle, ...launchProof.clearanceRectangle }, launchProof.hardExclusions) ||
+            !(phase5Tuning.normalOverlapPolicy
+                ? window.LiveFlowNormalOverlapPolicy.prove(commitRectangle, activeGeometry, allowance, phase5Tuning.normalOverlapPolicy, ['DENSE', 'MAX_READABLE'].includes(launchProof.density))
+                : window.LiveFlowSchedulerFoundations.proveBoundedCollisionSafe(launchProof.rectangle, activeGeometry, allowance)).safe) {
+            node.remove();
+            return { status: 'drop' };
+        }
         const laneSpan = 1;
         const anchorIndex = Number.isInteger(launchProof?.anchorIndex) && launchProof.anchorIndex >= 0 && launchProof.anchorIndex < anchorCount ? launchProof.anchorIndex : -1;
         if (anchorIndex < 0 || !Number.isFinite(launchProof?.lane)) {
@@ -1321,13 +1362,26 @@
             easing: 'linear',
             fill: 'forwards'
         });
+        const episodes = phase5Tuning.normalOverlapPolicy
+            ? window.LiveFlowNormalOverlapPolicy.recordEpisodes(commitRectangle, activeGeometry, commitAt / 1000) : null;
+        if (episodes) {
+            let index = 1;
+            for (const record of activeDanmaku.values()) {
+                const subject = activeGeometry[index - 1];
+                record.occlusionHistoryKnown = window.LiveFlowNormalOverlapPolicy.historyKnown(subject,
+                    activeGeometry.filter(r => r !== subject));
+                record.occlusionEpisodes = episodes[index++];
+            }
+        }
         activeDanmaku.set(token, {
+            occlusionEpisodes: episodes?.[0], occlusionHistoryKnown: Boolean(episodes),
             animation,
             node,
             visualFootprint: Object.freeze({ width: commentWidth, height: renderedRect.height, anchorLane: launchProof.lane, logicalLaneSpan: 1 }),
-            trajectory: Object.freeze({ startTimeMs: now, startX: video.getBoundingClientRect().right,
-                y: video.getBoundingClientRect().top + launchProof.lane * (phase5Tuning.lineHeight + phase5Tuning.laneGap),
-                width: commentWidth, height: renderedRect.height, velocity: speed, anchorIndex })
+            trajectory: Object.freeze({ startTimeMs: now, startX: currentBounds.right,
+                y: currentBounds.top + launchProof.lane * (phase5Tuning.lineHeight + phase5Tuning.laneGap),
+                width: commentWidth, height: renderedRect.height, velocity: speed, anchorIndex,
+                semanticClass: special ? 'SPECIAL' : 'NORMAL' })
         });
         if (currentChatMode === 'replay') {
             window.postMessage({ source: 'liveflow-content-script', type: REPLAY_DISPLAYED_TYPE, pageLifecycleGeneration: currentPageLifecycleGeneration }, window.location.origin);

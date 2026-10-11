@@ -60,6 +60,7 @@
                 "src/chat-read-core.js",
                 "src/overlay-core.js",
                 "src/scheduler-foundations.js",
+                "src/normal-overlap-policy.js",
                 "src/pending-selection.js",
                 "src/scheduler-state-machine.js",
                 "src/geometry-adapter.js",

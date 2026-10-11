@@ -296,7 +296,8 @@
 
     function finiteRectangle(rectangle) {
         return rectangle && ['x', 'y', 'width', 'height', 'velocity'].every((key) => Number.isFinite(rectangle[key])) &&
-            rectangle.width > 0 && rectangle.height > 0 && rectangle.velocity > 0;
+            rectangle.width > 0 && rectangle.height > 0 && rectangle.velocity > 0 &&
+            (rectangle.exitX === undefined || Number.isFinite(rectangle.exitX));
     }
 
     function proveCollisionSafe(candidate, activeComments, horizontalGap) {
@@ -309,7 +310,8 @@
             if (!verticalOverlap) continue;
             const initialGap = candidate.x - (active.x + active.width);
             if (initialGap < horizontalGap) return Object.freeze({ safe: false, reason: 'READABILITY_GAP' });
-            const coexistence = Math.max(0, (active.x + active.width) / active.velocity);
+            const coexistence = Math.min(Math.max(0, (active.x + active.width - (active.exitX || 0)) / active.velocity),
+                Math.max(0, (candidate.x + candidate.width - (candidate.exitX || 0)) / candidate.velocity));
             const finalGap = initialGap + (active.velocity - candidate.velocity) * coexistence;
             if (Math.min(initialGap, finalGap) < horizontalGap) return Object.freeze({ safe: false, reason: 'TRAJECTORY_COLLISION' });
         }
@@ -330,7 +332,8 @@
             const verticalOverlap = candidate.y < active.y + active.height && active.y < candidate.y + candidate.height;
             if (!verticalOverlap) continue;
             const initialGap = candidate.x - (active.x + active.width);
-            const coexistence = Math.max(0, (active.x + active.width) / active.velocity);
+            const coexistence = Math.min(Math.max(0, (active.x + active.width - (active.exitX || 0)) / active.velocity),
+                Math.max(0, (candidate.x + candidate.width - (candidate.exitX || 0)) / candidate.velocity));
             const relativeClosingVelocity = Math.max(0, candidate.velocity - active.velocity);
             const catchUpDistance = relativeClosingVelocity * coexistence;
             const minimumGap = initialGap - catchUpDistance;

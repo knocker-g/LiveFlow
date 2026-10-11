@@ -66,10 +66,13 @@
             .map(({ candidate }) => candidate));
     }
 
-    function rankDensityRescuePlacements(primaryCandidates, secondaryCandidates, expansionCandidates, activeComments, preferredSeed, density) {
+    function rankDensityRescuePlacements(primaryCandidates, secondaryCandidates, expansionCandidates, activeComments, preferredSeed, density, preferInterleaved = false) {
         const primary = rankLanePlacements(primaryCandidates, activeComments, preferredSeed);
         const secondary = rankLanePlacements(secondaryCandidates, activeComments, preferredSeed);
         const expansion = rankLanePlacements(expansionCandidates, activeComments, preferredSeed);
+        if (preferInterleaved && ['DENSE', 'MAX_READABLE'].includes(density)) return Object.freeze([
+            ...secondary, ...primary, ...expansion
+        ]);
         if (density === 'COMPACT') return Object.freeze([...primary, ...secondary, ...expansion]);
         if (density === 'DENSE') return Object.freeze([
             ...rankLanePlacements([...primaryCandidates, ...secondaryCandidates], activeComments, preferredSeed),

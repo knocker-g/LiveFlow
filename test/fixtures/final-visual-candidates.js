@@ -6,6 +6,7 @@ const geometry = require('../../src/geometry-adapter.js');
 const foundations = require('../../src/scheduler-foundations.js');
 const { createSchedulerRuntime } = require('../../src/scheduler-runtime.js');
 const core = require('../../src/overlay-core.js');
+const normalOverlap = require('../../src/normal-overlap-policy.js');
 const baseline = tuning.CURRENT;
 function candidate(name, duration, stride) {
     return { name, config: { ...baseline,
@@ -18,6 +19,7 @@ function candidate(name, duration, stride) {
         } } };
 }
 const candidates = [{ name: 'Baseline', config: baseline }, candidate('A', 1.4, 2), candidate('B', 1.4, 1)];
+const candidateC = { name: 'C', config: { ...candidates[2].config, normalOverlapPolicy: normalOverlap.C } };
 const palettes = { guest: '#fff', member: '#66e08a', moderator: '#70b7ff', owner: '#ffd75e' };
 const strokes = [
     { name: 'Baseline', widths: [1.1, .45, .45, .45], colors: ['#202020', '#12381d', '#183b5c', '#564813'] },
@@ -32,7 +34,7 @@ function run(config, shape) {
     const authority = geometry.createGeometryAuthority({ epsilon: 1 });
     const adapter = geometry.createSubtitleGeometryAdapter({ authority,
         readGeometry: () => ({ state: 'KNOWN_PRESENT', exclusionRegions: [exclusion], capabilityAvailable: true }) });
-    const active = [], launches = [], events = [], frames = [], pairSamples = [];
+    const active = [], launches = [], events = [], frames = [], pairSamples = [], normalSamples = [];
     const ingress = [], launchGaps = [];
     const widths = [180, 300, 480, 720];
     const runtime = createSchedulerRuntime({ clock: () => now, generation: () => 1,
@@ -48,8 +50,9 @@ function run(config, shape) {
                 densityPolicy: policy, laneBandFractions: config.laneBandFractions,
                 interleavedAnchorStride: config.interleavedAnchorStride, exclusionRegions: state.exclusionRegions,
                 special: message.special });
-            return { candidates: tuning.rankDensityRescuePlacements(generated.baseCandidates, generated.interleavedCandidates,
-                generated.expansionCandidates, active, message.id, policy.density), activeComments: active };
+            const stamp = list => list.map(c => ({ ...c, rectangle: { ...c.rectangle, snapshotAt: now / 1000, occlusionHistoryKnown: true } }));
+            return { candidates: tuning.rankDensityRescuePlacements(stamp(generated.baseCandidates), stamp(generated.interleavedCandidates),
+                stamp(generated.expansionCandidates), active, message.id, policy.density, Boolean(config.normalOverlapPolicy)), activeComments: active };
         },
         launch(message, proof) {
             if (!foundations.isOutsideHardExclusions(proof.rectangle, [exclusion])) throw Error('subtitle intrusion');
@@ -58,6 +61,11 @@ function run(config, shape) {
             if (overlappingRows.length) launchGaps.push(Math.min(...overlappingRows.map(a => proof.rectangle.x - a.x - a.width)));
             const record = { ...proof.rectangle, anchorIndex: proof.anchorIndex, interleaved: proof.interleaved,
                 id: message.id, special: message.special, at: now, initialX: proof.rectangle.x };
+            if (config.normalOverlapPolicy) {
+                const episodes = normalOverlap.recordEpisodes(record, active, now / 1000);
+                record.occlusionEpisodes = episodes[0]; record.occlusionHistoryKnown = true;
+                active.forEach((a, i) => { a.occlusionHistoryKnown = normalOverlap.historyKnown(a, active.filter(r => r !== a)); a.occlusionEpisodes = episodes[i + 1]; });
+            }
             active.push(record); launches.push({ ...record }); return true;
         },
         config: { maxPendingAge: core.DANMAKU_TARGET_DURATION_MS, maxPendingCount: core.DANMAKU_MAX_RENDER_QUEUE,
@@ -66,7 +74,7 @@ function run(config, shape) {
             pacing: { userBaseInterval: 120, minimumInterval: 80, maximumRescueFraction: .75 },
             density: { attackThresholds: [.5, .75, .9], releaseThresholds: [.2, .35, .5], minimumAttackResidence: 2, releaseDwell: 4 },
             sourceActivity: { bandThresholdsPerSecond: [1, 2, 4], promotionResidence: 2, releaseDwell: 2 },
-            collisionAllowances: config.collisionAllowances }
+            collisionAllowances: config.collisionAllowances, normalOverlapPolicy: config.normalOverlapPolicy }
     });
     let nextArrival = 0, count = 0, reported = 0;
     for (now = 0; now <= 40000; now += 20) {
@@ -94,8 +102,12 @@ function run(config, shape) {
             for (let i = 0; i < active.length; i++) for (let j = i + 1; j < active.length; j++) {
                 const a = active[i], b = active[j];
                 const vertical = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
-                const horizontal = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
-                if (vertical && horizontal) pairSamples.push({ at: now, pair: [a.id, b.id].sort().join('/'), vertical, horizontal });
+                const horizontal = Math.max(0, Math.min(960, a.x + a.width, b.x + b.width) - Math.max(0, a.x, b.x));
+                if (vertical && horizontal) {
+                    const sample = { at: now, pair: [a.id, b.id].sort().join('/'), vertical, horizontal, crossRow: a.y !== b.y };
+                    pairSamples.push(sample);
+                    if (!a.special && !b.special) normalSamples.push(sample);
+                }
             }
         }
     }
@@ -106,16 +118,23 @@ function run(config, shape) {
         (r[f[key]] = (r[f[key]] || 0) + 1, r), {});
     const durations = {};
     for (const p of pairSamples) durations[p.pair] = (durations[p.pair] || 0) + .2;
+    const normalDurations = {};
+    for (const p of normalSamples) normalDurations[p.pair] = (normalDurations[p.pair] || 0) + .2;
     return { shape, ingress: count, launches: launches.length, specialLaunches: launches.filter(a => a.special).length,
         interleaved: launches.filter(a => a.interleaved).length, drops, pending,
         lostUnaccounted: count - launches.length - Object.values(drops).reduce((a, b) => a + b, 0) - pending,
         collisionEvaluations: events.filter(e => e.type === 'COLLISION_BLOCKED').length,
         minimumLaunchHorizontalGapPx: launchGaps.length ? Math.min(...launchGaps) : null,
         averageLaunchHorizontalGapPx: launchGaps.length ? launchGaps.reduce((a, b) => a + b, 0) / launchGaps.length : null,
-        averageVisible: frames.filter(f => f.at >= 5000 && f.at <= 20000).reduce((s, f) => s + f.active.length, 0) / 76,
+        averageVisible: frames.filter(f => f.at >= 5000 && f.at <= 20000).reduce((s, f) => s + f.active.filter(a => a.x < 960 && a.x + a.width > 0).length, 0) / 76,
+        peakVisible: Math.max(...frames.filter(f => f.at <= 20000).map(f => f.active.filter(a => a.x < 960 && a.x + a.width > 0).length)),
         maxVerticalOverlapPx: Math.max(0, ...pairSamples.map(p => p.vertical)),
         maxHorizontalOverlapPx: Math.max(0, ...pairSamples.map(p => p.horizontal)),
         maxSampledPairOverlapSeconds: Math.max(0, ...Object.values(durations)),
+        normalOverlap: { horizontalPx: Math.max(0, ...normalSamples.map(p => p.horizontal)),
+            verticalPx: Math.max(0, ...normalSamples.map(p => p.vertical)),
+            crossRowVerticalPx: Math.max(0, ...normalSamples.filter(p => p.crossRow).map(p => p.vertical)),
+            sampledPairSeconds: Math.max(0, ...Object.values(normalDurations)), samples: normalSamples.length },
         sourceShape: residence('band'), displayShape: residence('density'), frames, launchesDetail: launches };
 }
 
@@ -134,5 +153,5 @@ function writePreview(output) {
 <script>const data=${data};const root=document.getElementById('density');for(const shape of ['HIGH','BURST']){const h=document.createElement('h2');h.textContent=shape;root.append(h);for(const c of data){const r=c.runs.find(r=>r.shape===shape);const label=document.createElement('div');label.textContent=c.name+' launches='+r.launches+' visible(avg)='+r.averageVisible.toFixed(2)+' drops='+JSON.stringify(r.drops);root.append(label);const canvas=document.createElement('canvas');canvas.width=960;canvas.height=320;canvas.dataset.c=c.name;canvas.dataset.shape=shape;root.append(canvas)}}function draw(){const t=Number(document.getElementById('time').value);document.getElementById('stamp').textContent=t/1000+'s';for(const canvas of root.querySelectorAll('canvas')){const run=data.find(c=>c.name===canvas.dataset.c).runs.find(r=>r.shape===canvas.dataset.shape);const frame=run.frames.find(f=>f.at===t);const ctx=canvas.getContext('2d');ctx.fillStyle='#38434d';ctx.fillRect(0,0,960,320);ctx.fillStyle='#111';ctx.fillRect(0,256,960,64);ctx.fillStyle='white';ctx.font='18px sans-serif';ctx.fillText('Subtitle hard exclusion',320,294);for(const a of frame.active){ctx.save();ctx.beginPath();ctx.rect(a.x,a.y,a.width,a.height);ctx.clip();if(a.special){ctx.fillStyle='rgba(24,24,24,.8)';ctx.fillRect(a.x,a.y,a.width,a.height)}ctx.font='600 28px sans-serif';ctx.lineWidth=a.special?.8:1.1;ctx.strokeStyle=a.special?'rgba(0,0,0,.85)':'#202020';ctx.fillStyle='white';const text=a.special?'SPECIAL ありがとう！':'盛り上がってきた！ '+a.id;ctx.strokeText(text,a.x,a.y+27);ctx.fillText(text,a.x,a.y+27);ctx.restore()}}}document.getElementById('time').oninput=draw;draw();</script>`);
     return results;
 }
-module.exports = { candidates, strokes, run, writePreview };
+module.exports = { candidates, candidateC, strokes, run, writePreview };
 if (require.main === module) writePreview(path.resolve(__dirname, '../../docs'));
