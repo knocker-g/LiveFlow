@@ -15,6 +15,22 @@
         return typeof value === 'string' ? value.slice(0, maxLength) : '';
     }
 
+    function normalizeAuthorRole(authorBadges) {
+        if (!Array.isArray(authorBadges)) return 'guest';
+        const roles = new Set();
+        for (const entry of authorBadges) {
+            const badge = entry?.liveChatAuthorBadgeRenderer;
+            if (!badge || typeof badge !== 'object') continue;
+            const iconType = badge.icon?.iconType;
+            if (iconType === 'OWNER') roles.add('owner');
+            else if (iconType === 'MODERATOR') roles.add('moderator');
+            // A custom author badge thumbnail is the membership discriminator, not its URL or tooltip.
+            else if (badge.icon === undefined && normalizeThumbnailImage(badge.customThumbnail)) roles.add('member');
+        }
+        // The existing single-role schema cannot express conflicting role evidence safely.
+        return roles.size === 1 ? roles.values().next().value : 'guest';
+    }
+
     class ChatMessage {
         constructor({ id, authorName, message, timestampUsec, authorPhoto, authorBadges, badges, messageType, authorRole, messageRuns, authorExternalChannelId, purchaseAmountText, sticker, colors }) {
             this.id = id || '';
@@ -62,7 +78,7 @@
                 authorPhoto: firstThumbnail,
                 authorBadges: badges,
                 messageType,
-                authorRole: 'guest',
+                authorRole: normalizeAuthorRole(renderer.authorBadges),
                 messageRuns,
                 authorExternalChannelId: renderer.authorExternalChannelId || '',
                 purchaseAmountText: normalizeDisplayText(renderer.purchaseAmountText?.simpleText, MAX_AMOUNT_TEXT_LENGTH),
