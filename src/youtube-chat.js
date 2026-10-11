@@ -682,10 +682,10 @@
             .liveflow-danmaku-special .liveflow-danmaku-author { flex: 0 0 auto; min-width: 0; overflow: visible; text-overflow: clip; white-space: nowrap; color: #fff; }
             .liveflow-danmaku-amount { flex: 0 0 auto; white-space: nowrap; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.25); color: #fff; font-weight: 700; }
             .liveflow-danmaku-sticker { flex: 0 0 32px; width: 32px; height: 32px; object-fit: contain; }
-            .liveflow-danmaku[data-author-role="guest"] { color: #fff; -webkit-text-stroke: 1.1px #202020; paint-order: stroke fill; }
-            .liveflow-danmaku[data-author-role="member"] { color: #66e08a; -webkit-text-stroke: .45px #12381d; paint-order: stroke fill; }
-            .liveflow-danmaku[data-author-role="moderator"] { color: #70b7ff; -webkit-text-stroke: .45px #183b5c; paint-order: stroke fill; }
-            .liveflow-danmaku[data-author-role="owner"] { color: #ffd75e; -webkit-text-stroke: .45px #564813; paint-order: stroke fill; }
+            .liveflow-danmaku[data-author-role="guest"] { color: #fff; -webkit-text-stroke: 1.4px #101010; paint-order: stroke fill; }
+            .liveflow-danmaku[data-author-role="member"] { color: #66e08a; -webkit-text-stroke: 1.1px #0b2011; paint-order: stroke fill; }
+            .liveflow-danmaku[data-author-role="moderator"] { color: #70b7ff; -webkit-text-stroke: 1.1px #0e2338; paint-order: stroke fill; }
+            .liveflow-danmaku[data-author-role="owner"] { color: #ffd75e; -webkit-text-stroke: 1.1px #302709; paint-order: stroke fill; }
             .liveflow-danmaku.liveflow-danmaku-special { -webkit-text-stroke: .8px rgba(0,0,0,.85); paint-order: stroke fill; }
             .liveflow-danmaku img { -webkit-text-stroke: 0; }
             @keyframes liveflow-read-indicator { from { opacity: .35; } to { opacity: 1; } }

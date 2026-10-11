@@ -18,14 +18,15 @@ function create(message) {
     return context.create(overlayCore.normalizeDanmakuMessage(message), {});
 }
 
-test('existing candidate maps normalized roles to three distinct CSS fills without guest changes', () => {
-    for (const [role, color] of [['member', '#66e08a'], ['moderator', '#70b7ff'], ['owner', '#ffd75e']]) {
+test('selected Typography A strengthens outlines and preserves normalized role fills', () => {
+    for (const [role, color, outline] of [['member', '#66e08a', '#0b2011'], ['moderator', '#70b7ff', '#0e2338'], ['owner', '#ffd75e', '#302709']]) {
         const rule = source.match(new RegExp(`\\.liveflow-danmaku\\[data-author-role="${role}"\\] \\{([^}]+)\\}`))[1];
         assert.match(rule, new RegExp(`color: ${color};`));
+        assert.match(rule, new RegExp(`-webkit-text-stroke: 1\\.1px ${outline};`));
         assert.match(rule, /paint-order: stroke fill;/, 'role fill must cover inward stroke at glyph junctions');
         assert.doesNotMatch(rule, /font|width|height|animation|position|lane/);
     }
-    assert.match(source, /data-author-role="guest"\] \{ color: #fff; -webkit-text-stroke: 1\.1px #202020; paint-order: stroke fill/);
+    assert.match(source, /data-author-role="guest"\] \{ color: #fff; -webkit-text-stroke: 1\.4px #101010; paint-order: stroke fill/);
 });
 
 test('actual Presentation node receives Adapter roles and unknown fallback, with SPECIAL white override', () => {
