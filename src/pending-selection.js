@@ -73,7 +73,10 @@
             if (!Number.isInteger(maxDrops) || maxDrops <= 0) return Object.freeze([]);
             const dropped = [];
             while (dropped.length < maxDrops) {
-                const index = items.findIndex((item) => item.semanticClass === SEMANTIC_CLASSES.NORMAL);
+                // Retention is separate from launch selection: ordinary NORMAL is relieved first.
+                let index = items.findIndex((item) => item.semanticClass === SEMANTIC_CLASSES.NORMAL &&
+                    !['owner', 'moderator'].includes(item.payload?.message?.authorRole));
+                if (index < 0) index = items.findIndex((item) => item.semanticClass === SEMANTIC_CLASSES.NORMAL);
                 if (index < 0) break;
                 dropped.push(items.splice(index, 1)[0]);
             }

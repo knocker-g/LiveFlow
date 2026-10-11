@@ -45,8 +45,8 @@ function harness({ geometryState = GEOMETRY_STATES.KNOWN_EMPTY, safe = true, obs
         }
     });
     function fire() { const timer = timers.find((entry) => !entry.fired && !entry.cancelled); if (timer) { timer.fired = true; timer.callback(); } }
-    function enqueue(id, rendererType = 'liveChatTextMessageRenderer', enqueuedAt = now) {
-        return runtime.enqueue({ id }, { id, enqueuedAt, rendererType, footprint: { width: 50, height: 20 } });
+    function enqueue(id, rendererType = 'liveChatTextMessageRenderer', enqueuedAt = now, authorRole = 'guest') {
+        return runtime.enqueue({ id, message: { authorRole } }, { id, enqueuedAt, rendererType, footprint: { width: 50, height: 20 } });
     }
     return { runtime, timers, launched, launchProofs, adapter, authority, fire, enqueue,
         activityBinding: () => ({ target, timeline, generation }),
@@ -296,6 +296,60 @@ test('MAX_READABLE uses a safe candidate before relief and SPECIAL-only saturati
     special.setNow(1200); special.fire();
     assert.equal(special.runtime.status().pendingCount, 0);
     assert.equal(specialEvents.some(({ type }) => type === 'STALE_PRUNED'), true);
+});
+
+test('physical saturation protects normalized roles after ordinary NORMAL and closes accounting', () => {
+    const events = [];
+    let safe = false;
+    const h = harness({ observe: (event) => events.push(event),
+        config: { scanDepth: 10, cohortMaximumItems: 10,
+            density: { attackThresholds: [0, 0, 0], releaseThresholds: [0.2, 0.3, 0.4], minimumAttackResidence: 1, releaseDwell: 3 } },
+        candidateProof: () => ({
+            candidates: [{ rectangle: { x: 100, y: 0, width: 50, height: 20, velocity: 200 }, lane: 0, laneSpan: 1 }],
+            activeComments: safe ? [] : [{ x: 80, y: 0, width: 50, height: 20, velocity: 100 }]
+        }) });
+    h.enqueue('owner', undefined, 100, 'owner');
+    h.enqueue('moderator', undefined, 100, 'moderator');
+    h.enqueue('special', 'liveChatPaidMessageRenderer');
+    h.enqueue('member', undefined, 100, 'member');
+    h.enqueue('guest');
+    h.fire(); h.fire(); h.fire();
+    assert.deepEqual(h.runtime.queue.snapshot().map(({ id }) => id), ['owner', 'moderator', 'special', 'guest']);
+    h.fire();
+    assert.deepEqual(h.runtime.queue.snapshot().map(({ id }) => id), ['owner', 'moderator', 'special']);
+    safe = true;
+    h.fire(); h.fire(); h.fire();
+    assert.equal(h.launched[0], 'special');
+    assert.deepEqual(h.launched.slice(1).sort(), ['moderator', 'owner']);
+    const explicit = events.filter(({ type }) => ['CAPACITY_DROPPED', 'STALE_PRUNED', 'EMERGENCY_PENDING_DROPPED'].includes(type))
+        .reduce((count, event) => count + event.count, 0);
+    assert.equal(explicit, 2);
+    assert.equal(5 - h.launched.length - explicit - h.runtime.status().pendingCount, 0, 'lostUnaccounted=0');
+});
+
+test('normalized roles have existing launch parity, shared stale expiry and emergency oldest drop', () => {
+    const roles = ['guest', 'member', 'moderator', 'owner'];
+    const safe = harness({ config: { scanDepth: 10, cohortMaximumItems: 10 } });
+    roles.forEach((role) => safe.enqueue(role, undefined, 100, role));
+    roles.forEach(() => safe.fire());
+    const ordinary = harness({ config: { scanDepth: 10, cohortMaximumItems: 10 } });
+    roles.forEach((role) => ordinary.enqueue(role));
+    roles.forEach(() => ordinary.fire());
+    assert.deepEqual(safe.launched, ordinary.launched, 'roles do not change existing NORMAL launch order');
+    assert.equal(safe.runtime.status().pendingCount, 0);
+    const events = [];
+    const stale = harness({ safe: false, observe: (event) => events.push(event) });
+    roles.forEach((role) => stale.enqueue(role, undefined, 100, role));
+    stale.setNow(1100); stale.fire();
+    assert.equal(stale.runtime.status().pendingCount, 4, 'same stale boundary for every role');
+    stale.setNow(1101); stale.fire();
+    assert.equal(stale.runtime.status().pendingCount, 0);
+    assert.deepEqual(stale.launched, [], 'stale Owner/Moderator catch-up=0');
+    assert.equal(events.find(({ type }) => type === 'STALE_PRUNED').count, 4);
+    const emergency = harness({ config: { maxPendingCount: 1 } });
+    emergency.enqueue('owner-oldest', undefined, 100, 'owner');
+    emergency.enqueue('guest-newest');
+    assert.deepEqual(emergency.runtime.queue.snapshot().map(({ id }) => id), ['guest-newest']);
 });
 
 test('emergency pending overflow remains distinct from physical saturation relief', () => {

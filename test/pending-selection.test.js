@@ -114,6 +114,17 @@ test('saturation relief drops the oldest NORMAL before SPECIAL without changing 
     assert.equal(specialOnly.snapshot().length, 2);
 });
 
+test('capacity relief uses ordinary, protected NORMAL, then existing SPECIAL protection', () => {
+    const queue = createPendingQueue();
+    const roles = ['owner', 'moderator', 'member', 'guest', 'UNKNOWN'];
+    fill(queue, [item('special', 0, 'liveChatPaidMessageRenderer'), ...roles.map((role, index) =>
+        createPendingItem({ id: role, enqueuedAt: index + 1, rendererType: 'liveChatTextMessageRenderer',
+            payload: { message: { authorRole: role } }, footprint: { width: 50, height: 20 } }))]);
+    assert.deepEqual(queue.relieveSaturation(5).map(({ id }) => id), ['member', 'guest', 'UNKNOWN', 'owner', 'moderator']);
+    assert.deepEqual(queue.snapshot().map(({ id }) => id), ['special']);
+    assert.deepEqual(queue.relieveSaturation(1), [], 'SPECIAL-only saturation keeps existing protection');
+});
+
 test('items are neither aggregated nor deduplicated', () => {
     const queue = createPendingQueue();
     fill(queue, [item('same', 0), item('same', 1), item('same', 2)]);
