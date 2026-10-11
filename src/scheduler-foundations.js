@@ -340,7 +340,10 @@
             const visibleFraction = 1 - Math.min(1, overlapDepthRatio);
             const catchUpRatio = catchUpDistance / candidate.width;
             const overlapStartsAt = relativeClosingVelocity > 0 ? Math.max(0, initialGap / relativeClosingVelocity) : Infinity;
-            const overlapDuration = minimumGap < 0 ? Math.max(0, coexistence - overlapStartsAt) : 0;
+            const openingVelocity = active.velocity - candidate.velocity;
+            const overlapDuration = initialGap < 0
+                ? (openingVelocity > 0 ? Math.min(coexistence, -initialGap / openingVelocity) : coexistence)
+                : (minimumGap < 0 ? Math.max(0, coexistence - overlapStartsAt) : 0);
             if (initialGap >= allowance.nominalGap && minimumGap >= allowance.nominalGap) continue;
             if (minimumGap < allowance.hardMinimumSeparation) return Object.freeze({ safe: false, reason: 'HARD_READABILITY_FLOOR' });
             if (catchUpRatio > allowance.maxCatchUpRatio) return Object.freeze({ safe: false, reason: 'EXCESSIVE_CATCH_UP' });
