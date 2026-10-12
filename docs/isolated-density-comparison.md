@@ -1,0 +1,43 @@
+# Isolated Density B/D comparison packages
+
+Development-only implementation. No Production source, manifest, settings schema or candidate constants changed. Real YouTube acceptance and Human decision are still pending.
+
+## Build and verify
+
+From the workspace, run `node tools/build-density-comparison.mjs build/density-comparison-<unique-name>`. The output directory must be new and inside ignored `build/`; the generator never overwrites existing packages. Only B and D are generated. It copies actual local runtime files, including dirty tracked prerequisites, and records their hashes rather than claiming HEAD alone describes the build.
+
+Verify each directory with `node tools/build-density-comparison.mjs --verify build/density-comparison-<unique-name>/B` (and `/D`). Verification rejects changed, missing or additional files and mismatched extension IDs. `provenance.json` records source HEAD, dirty inventory, input/output SHA256, shared build ID, candidate build ID, package digest and extension ID. Package digest uses the documented normalized embedded digest slot to avoid a self-hash cycle; provenance is excluded from that digest. Retain provenance alongside the capture. Digests establish integrity against the recorded package, not cryptographic attestation against a malicious replacement of all metadata.
+
+The packages get separate randomly generated public manifest keys/extension IDs. No private key is saved. Their `chrome.storage.local` namespaces cannot collide with each other or the ordinary extension; each rebuild gets fresh IDs. Use a dedicated comparison profile, disable the normal extension there, and load **only one comparison package at a time**. Never publish these directories. Generated directories are ignored by Git and absent from the ordinary manifest; generator and fixture modules are never loaded by the Production extension. There is no repository release automation to certify arbitrary externally assembled ZIPs: release assembly must continue excluding ignored build output.
+
+## Exact candidate wiring
+
+The generator reads `final-visual-candidates.js` definitions: B is existing fixture B; D is that same B configuration plus existing `normal-overlap-policy.C`. It does not run Candidate C or C-selection. The exact D selector source from `opportunity-aware-density.js` is wrapped with the existing browser module globals.
+
+Only generated `youtube-chat.js` changes: capture exact candidate config instead of CURRENT, rank both with B occupancy ordering, then apply the existing D selector only for D. All decorated candidates/history/currentness metadata and active geometry remain intact. Scheduler still makes its own complete proof; Renderer still revalidates surface, geometry revision, measured size/velocity, subtitle and pair/aggregate history at commit. Successful launch motion/history ownership is unchanged. Typography A must already be present or generation fails. Both packages use identical Core, Acquisition, Authority, settings and other runtime files byte-for-byte.
+
+Patch anchors must occur exactly once. Unknown source shape fails generation; it does not silently produce another candidate. No permissions, network or MAIN-world diagnostic APIs are added.
+
+## Manual short real-video procedure
+
+1. In a dedicated Edge/Chrome comparison profile, load B through the browser's existing unpacked-extension workflow. Do not bypass policy/security restrictions if unavailable. Confirm extension ID against provenance and the page's `DEV B / <build prefix>` label. Match initial settings explicitly; fresh IDs mean settings do not transfer automatically.
+2. Open the selected YouTube episode, set fixed viewport, playback rate/time, caption state and Display/settings. Keep Typography A. Allow ordinary acquisition to become current. Record video URL, interval and provenance. Do not change configuration during capture.
+3. Begin an external short screen recording or take representative captures using the user's existing capture workflow. Click **Record 20s**. Click **Export JSON** after the interval; it stops sampling and downloads local JSON. No automatic screen recording permission is requested. Exporting early is allowed but produces a shorter interval.
+4. Unload B, load D alone, match all settings and the same video interval/viewport. Confirm D identity, repeat one short recording/export. Avoid ad/seek/resize/pause transitions inside the comparison. Lifecycle cleanup stops the recorder; a new recording must be started explicitly.
+5. Pair JSON, provenance and captures. Compare condition snapshots and source/scheduler state first. The same video time does not guarantee identical natural-service chat input. Disclose differences; no fixed-input replay or request injection is implemented. Human judges only excitement, overlap naturalness and readability, then chooses B/D/neither.
+
+## Evidence and limits
+
+The generated-only exporter is private to the extension's ISOLATED-world closure. It has no message bridge, request/enqueue/config mutation API, persistence or remote transmission. A 100ms observer runs only after the explicit Record click, for at most 20s/201 frames. Each event/selection/launch/exit array is capped at 2000 records; truncation stops recording and is disclosed. Observer output serialization failures stop observation, without removing comments or altering scheduling. There is bounded observer overhead; deterministic noninterference is verified, real-device timing overhead remains unmeasured.
+
+JSON contains candidate/source/build/digest identity, actual invoked selection policy, successful Renderer commit boxes/geometry revision/clearance strip, anonymous observation IDs, natural animation completion observations, explicit scheduler event totals, timestamped actual DOM boxes, settings, video ID/time, rate/pause/ad, viewport, surface, captions and generation. No comment text or author data is exported. Compare launch counts with `LAUNCH_COMMITTED`; candidate rejections are not terminal Drops. Initial active comments may precede the record window; sampled visibility includes them while launch counts only count in-window commits.
+
+NORMAL overlap includes clipped measured depth/area samples and per-pair sampled time spans. These are sampled approximations, **not exact continuous episode bounds**; short sub100ms intervals can be missed, and paused/ad frames are excluded from pair sampling. Raw timestamps remain available. Unknown surface/boxes produce null average visible rather than fake zero; condition changes and truncation invalidate a clean fixed-condition interpretation. Full catching/overtaking requires recording/trajectory analysis, not a static frame. Natural completion observations support left-exit inspection but do not establish PASS if no exit was captured. Screenshots remain necessary to assess actual glyph readability and right-entry appearance.
+
+`lostUnaccounted` is intentionally null/NOT_RUN in this exporter: it cannot access the canonical full-pipeline ledger across JS worlds. For Replay, use the **existing** status-only `window.LiveFlowReplayAccountingDiagnostic.status()` in the page's DevTools MAIN context at qualified start/end, saving only `conservationValid`, `lostUnaccounted`, `overflowUnaccounted` and relevant stage counters. No new bridge is added. Missing/invalid ledger is INCONCLUSIVE; a difference between observer launch counts and source ingress is not an accounting verdict. Do not expose Control Plane/token diagnostics. No SPECIAL occurrence or subtitle coverage means NOT_RUN/INCONCLUSIVE, not PASS. Exported commit geometry supports checking the protected footprint/exclusions, not claims about unseen source SPECIAL Drop reasons.
+
+## Verification / reuse
+
+New package tests evaluate generated actual candidateProof and Renderer functions with deterministic fake DOM: D promotion reaches successful interleaved Renderer launch, changed geometry rejects commit, immutable trajectories remain frozen. They verify config parity, selector wrapper parity, package digests/input hashes/IDs/permissions/core equality and bounded passive recording. Existing opportunity-aware-density, normal-overlap-policy, scheduler-runtime, danmaku-renderer and density-vertical-gate targeted guards cover unchanged safety semantics. Full suite and real Browser are not prerequisites for this dev-only checkpoint. Prior unchanged READ-only/authority/retention evidence is reused; package wiring itself requires the new tests.
+
+No Human PASS, Density LOCK, Done or Phase 5 exit follows from these packages or deterministic tests. Next gate is one qualified real-video B/D comparison with the user's approved environment.
