@@ -1618,6 +1618,7 @@
 
         const media = getCurrentMainMedia();
         attachManagementBar();
+        if (media && event.data.mode === 'replay') ensurePlaybackContextObserver(media.player);
         if (media && isEffectiveDisplayActive()) attachOverlay(media.player);
         requestReadOnce();
     }

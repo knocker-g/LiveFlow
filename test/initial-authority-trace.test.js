@@ -41,6 +41,7 @@ async function harness(traced, { paused = true, hidden = false, collectorThrows 
         replayProductionControlState: api.createReplayState('STOPPED'), replayConsumedAuthorityRegistry: api.createConsumedAuthorityRegistry(),
         replayBootstrapAuthority: null, replayBootstrapEligibilityLifecycleId: -1, replaySeekAuthority: null,
         replayInitialBootstrapWait: null, runtimeUserEnabled: true,
+        replayInitialBootstrapIntent: null, replayInitialBootstrapCancelledLifecycleId: -1,
         replayPausedSequentialAuthority: null, replayReanchorLock: false, replayPlayerSeekDiagnosticLock: false,
         readRequestInFlight: false, navigationPending: false, pageState: { mode: 'replay', targetIdentity: 'fixture', context: {}, continuation: '' },
         replayRestartDiagnostic: { sequence: 1 }, replayPending: [], replayStartTimeSeconds: 0,

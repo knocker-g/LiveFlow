@@ -27,6 +27,8 @@
     let deferredReadStartGeneration = null;
     let replayBootstrapAuthority = null;
     let replayInitialBootstrapWait = null;
+    let replayInitialBootstrapIntent = null;
+    let replayInitialBootstrapCancelledLifecycleId = -1;
     let replayBootstrapEligibilityLifecycleId = -1;
     let lastEstablishedWatchRoot = null;
     let lastEstablishedVideo = null;
@@ -191,6 +193,68 @@
         return Boolean(replayBootstrapAuthority);
     }
 
+    function deferReplayInitialBootstrap() {
+        if (replayBootstrapEligibilityLifecycleId === pageLifecycleGeneration ||
+            replayInitialBootstrapCancelledLifecycleId === pageLifecycleGeneration) return false;
+        if (!replayInitialBootstrapIntent) replayInitialBootstrapIntent = Object.freeze({
+            lifecycle: pageLifecycleGeneration, revision: pageRevision, generation: currentLoopGeneration,
+            target: window.LiveFlowChatReadCore?.extractWatchTargetIdentity?.(window.location.href) || ''
+        });
+        return true;
+    }
+
+    function initialReplayBootstrapIntentIsCurrent() {
+        const intent = replayInitialBootstrapIntent;
+        return Boolean(intent && intent.lifecycle === pageLifecycleGeneration && intent.revision === pageRevision &&
+            intent.generation === currentLoopGeneration && intent.target.length > 0 &&
+            intent.target === window.LiveFlowChatReadCore?.extractWatchTargetIdentity?.(window.location.href));
+    }
+
+    function admitReadyReplayBootstrap(opaqueToken, video) {
+        if (replayBootstrapEligibilityLifecycleId === pageLifecycleGeneration ||
+            replayInitialBootstrapCancelledLifecycleId === pageLifecycleGeneration) return false;
+        if (document.hidden || navigationPending || !isCurrentPageStateTarget() ||
+            (replayInitialBootstrapIntent && !initialReplayBootstrapIntentIsCurrent())) {
+            replayInitialBootstrapCancelledLifecycleId = pageLifecycleGeneration;
+            replayInitialBootstrapIntent = null;
+            return false;
+        }
+        const binding = currentReplayAuthorityBinding();
+        const owned = Boolean(video && video === getCurrentMainVideo() && video === lastEstablishedVideo);
+        const snapshot = replayControlPlaneCore?.createCapabilitySnapshot?.({ binding, evidenceEpoch: pageRevision,
+            capabilities: { bootstrapRead: 'SUPPORTED', targetIdentity: 'SUPPORTED',
+                mainContentOwnership: owned ? 'SUPPORTED' : 'UNKNOWN',
+                playerTiming: Number.isFinite(video?.currentTime) ? 'SUPPORTED' : 'UNKNOWN' }
+        })?.snapshot;
+        if (replayAdIsActive() || !owned || video.readyState < 2 || !Number.isFinite(video.readyState) ||
+            video.ended || video.seeking || !Number.isFinite(video.currentTime) || !pageState.context ||
+            runtimeUserEnabled !== true || readRequestInFlight || activeLoopGeneration !== 0 ||
+            replayReanchorLock || replayPlayerSeekDiagnosticLock ||
+            !['STOPPED', 'BOOTSTRAPPING'].includes(replayProductionControlState?.phase) ||
+            replayControlPlaneCore?.canUseCapabilityPath?.('BOOTSTRAP', snapshot, binding)?.allowed !== true) {
+            deferReplayInitialBootstrap();
+            return false;
+        }
+        replayInitialBootstrapIntent = null;
+        return acceptReplayBootstrapCandidate(opaqueToken);
+    }
+
+    function resumeInitialReplayBootstrap(event = null) {
+        if (!replayInitialBootstrapIntent || replayBootstrapEligibilityLifecycleId === pageLifecycleGeneration) return false;
+        if (!initialReplayBootstrapIntentIsCurrent() || document.hidden || navigationPending) {
+            invalidateReplayBootstrapAuthority();
+            return false;
+        }
+        const video = getCurrentMainVideo();
+        if (!video || (event?.target && event.target !== video) || replayAdIsActive() || video.seeking ||
+            video.ended || video.readyState < 2 || !Number.isFinite(video.readyState) || !Number.isFinite(video.currentTime)) return false;
+        // Re-read the owned watch snapshot; intent never retains its continuation/context/Authority.
+        if (!respond({ expectedLifecycleGeneration: pageLifecycleGeneration, eventSource: 'initial-main-ready' })) return false;
+        if (pageState.mode !== 'replay' || replayBootstrapEligibilityLifecycleId !== pageLifecycleGeneration ||
+            replayBootstrapAuthority?.diagnostic?.(currentReplayAuthorityBinding())?.authorityState !== 'OBSERVED_UNUSED') return false;
+        return startReplayBootstrap(pageLifecycleGeneration);
+    }
+
     function startReplayBootstrap(requestedLifecycleGeneration) {
         if (requestedLifecycleGeneration !== pageLifecycleGeneration || pageState.mode !== 'replay' ||
             replayBootstrapEligibilityLifecycleId !== pageLifecycleGeneration) return false;
@@ -240,6 +304,8 @@
     }
 
     function invalidateReplayBootstrapAuthority() {
+        if (replayInitialBootstrapIntent) replayInitialBootstrapCancelledLifecycleId = replayInitialBootstrapIntent.lifecycle;
+        replayInitialBootstrapIntent = null;
         invalidateAuthorityHandle(replayBootstrapAuthority);
         replayBootstrapAuthority = null;
         replayInitialBootstrapWait = null;
@@ -1460,7 +1526,8 @@
             bootstrapTargetMatched: true,
             mode: chatMode
         };
-        if (pageState.mode === 'replay' && shadowLifecycleStart) acceptReplayBootstrapCandidate(continuation);
+        if (pageState.mode === 'replay') admitReadyReplayBootstrap(continuation, currentVideo);
+        else replayInitialBootstrapIntent = null;
         if (pageState.mode === 'replay' && shadowLifecycleStart) {
             observeReplayControlShadow('LIFECYCLE_START', {}, 'BOOTSTRAPPING');
         }
@@ -2845,6 +2912,7 @@
     }
 
     function settleReplayAdExit(event = null) {
+        if (replayInitialBootstrapIntent) return resumeInitialReplayBootstrap(event);
         if (!replayAdExitNeedsReanchor || replayAdActive || pageState.mode !== 'replay') return false;
         const video = getCurrentMainVideo();
         if (event?.target && event.target !== video) return false;
@@ -2882,6 +2950,11 @@
             return;
         }
         if (event.data.type === REPLAY_AD_ENTER_TYPE) {
+            if (['unknown', 'replay'].includes(pageState.mode) && replayBootstrapEligibilityLifecycleId !== pageLifecycleGeneration &&
+                replayInitialBootstrapCancelledLifecycleId !== pageLifecycleGeneration) {
+                deferReplayInitialBootstrap();
+                return;
+            }
             if (pageState.mode === 'replay' && !replayAdActive) {
                 terminateReplayForegroundRetainedDiagnostic('VISIBLE_PRECONDITION_FAILED', true);
                 replayAdActive = true;
@@ -2894,6 +2967,10 @@
             return;
         }
         if (event.data.type === REPLAY_AD_EXIT_TYPE) {
+            if (replayInitialBootstrapIntent) {
+                resumeInitialReplayBootstrap();
+                return;
+            }
             if (replayAdActive && pageState.mode === 'replay') {
                 replayAdActive = false;
                 observeReplayRuntimeAccounting('ad-exit');
@@ -2950,6 +3027,7 @@
     });
     window.addEventListener('visibilitychange', () => {
         if (document.hidden) {
+            if (pageState.mode !== 'replay' && replayInitialBootstrapIntent) invalidateReplayBootstrapAuthority();
             if (pageState.mode === 'replay') enterReplaySuspended('HIDDEN');
             else if (activeLoopGeneration !== 0 || readRequestInFlight || activeWaitTimer !== null) stopReadLoop('visibility-hidden');
             observeReplayRuntimeAccounting('visibility-hidden');
@@ -2997,6 +3075,10 @@
     }, true);
     function restartReplayFromCurrentPosition(event, explicitReason = null) {
         if (event && event.target !== getCurrentMainVideo()) return;
+        if (event?.type === 'play' && replayInitialBootstrapIntent) {
+            resumeInitialReplayBootstrap(event);
+            return;
+        }
         if (event?.type === 'play' && replayInitialBootstrapWait) {
             observeReplayControlShadow('MEDIA_PLAY', { initialBootstrap: true });
             startReplayBootstrap(pageLifecycleGeneration);

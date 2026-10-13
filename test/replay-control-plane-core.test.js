@@ -681,15 +681,16 @@ test('foreground recovery diagnostics are shape-only and diagnostic token never 
 
 test('AD exit uses only retained approved REANCHOR and hidden precedence has no nested stack', () => {
     const source = fs.readFileSync(path.join(__dirname, '../src/page-state-main.js'), 'utf8');
-    const adEnter = source.match(/event\.data\.type === REPLAY_AD_ENTER_TYPE[^]*?return;/)?.[0] || '';
+    const adEnter = source.slice(source.indexOf('event.data.type === REPLAY_AD_ENTER_TYPE'), source.indexOf('event.data.type === REPLAY_AD_EXIT_TYPE'));
     assert.match(adEnter, /enterReplaySuspended\('AD'\)/);
     assert.doesNotMatch(adEnter, /startReadLoop|startReplayBootstrap|queueReplayReanchor/);
     const adExitStart = source.indexOf('event.data.type === REPLAY_AD_EXIT_TYPE');
-    const adExitEnd = source.indexOf("event.data.type === REPLAY_DISPLAYED_TYPE", adExitStart);
+    const adExitEnd = source.indexOf("event.data.type === 'LIVEFLOW_REPLAY_DIAGNOSTIC_SCOPE_HELLO'", adExitStart);
     const adExit = source.slice(adExitStart, adExitEnd);
     assert.match(adExit, /document\.hidden \|\| replayProductionControlState\?\.suspendedReason === 'HIDDEN'/);
     assert.match(adExit, /AD_EXIT_READY/);
     assert.match(adExit, /settleReplayAdExit\(\)/);
+    assert.match(adExit, /if \(replayInitialBootstrapIntent\)[^]*resumeInitialReplayBootstrap\(\)/);
     assert.doesNotMatch(adExit, /startReadLoop|startReplayBootstrap|INITIAL_WATCH|pageState\.continuation/);
     assert.doesNotMatch(source, /suspendStack|suspendedReasons|replaySuspendedStack/);
 });
