@@ -20,11 +20,32 @@ function entry(source, name, statement) {
     });
 }
 const trace = (step, fields = '{}') => `initialTrace('${step}', ${fields});`;
+export function instrumentBootstrapInvalidationReason(source) {
+    return once(source,
+        `        if (document.hidden || replayAdIsActive() || navigationPending || !authorityCurrent || !isCurrentPageStateTarget() ||
+            (replayInitialBootstrapWait && (replayInitialBootstrapWait.authority !== replayBootstrapAuthority ||
+                replayInitialBootstrapWait.video !== video))) {`,
+        `        if (initialInvalidationReason('HIDDEN', document.hidden) ||
+            initialInvalidationReason('AD_ACTIVE', replayAdIsActive()) ||
+            initialInvalidationReason('NAVIGATION_PENDING', navigationPending) ||
+            initialInvalidationReason('AUTHORITY_NOT_CURRENT', !authorityCurrent) ||
+            initialInvalidationReason('TARGET_NOT_CURRENT', !isCurrentPageStateTarget()) ||
+            (replayInitialBootstrapWait && (initialInvalidationReason('WAIT_AUTHORITY_CHANGED', replayInitialBootstrapWait.authority !== replayBootstrapAuthority) ||
+                initialInvalidationReason('WAIT_MEDIA_CHANGED', replayInitialBootstrapWait.video !== video)))) {`);
+}
 export function instrumentInitialAuthorityTrace(main, core, identity) {
     main = main.replaceAll('\r\n', '\n'); core = core.replaceAll('\r\n', '\n');
     const collector = once(fs.readFileSync(collectorFile, 'utf8'), 'module.exports = { createInitialAuthorityTrace };', '');
     const setup = collector + `
     const initialAuthorityTrace = createInitialAuthorityTrace(${JSON.stringify(identity)});
+    function initialInvalidationReason(reason, result) {
+        if (result) {
+            // Adjacent START_ENTRY carries scope. Do not reread environment/scope getters here.
+            try { initialAuthorityTrace.record('BOOTSTRAP_INVALIDATION_REASON', { reason }); }
+            catch { try { initialAuthorityTrace.fault(); } catch { /* Diagnostics never escape. */ } }
+        }
+        return result;
+    }
     function initialTrace(step, details = {}) {
         try {
             initialAuthorityTrace.record(step, { lifecycle: pageLifecycleGeneration, revision: pageRevision,
@@ -72,6 +93,7 @@ export function instrumentInitialAuthorityTrace(main, core, identity) {
     });
     main = entry(main, 'startReplayBootstrap', trace('BOOTSTRAP_START_ENTRY'));
     main = edit(main, 'startReplayBootstrap', s => {
+        s = instrumentBootstrapInvalidationReason(s);
         s = once(s, 'replayBootstrapEligibilityLifecycleId !== pageLifecycleGeneration) return false;',
             'replayBootstrapEligibilityLifecycleId !== pageLifecycleGeneration) { ' + trace('BOOTSTRAP_START_REJECTED') + ' return false; }');
         s = once(s, '        if (!grant) {', '        if (!grant) {\n            ' + trace('BOOTSTRAP_NO_GRANT'));
