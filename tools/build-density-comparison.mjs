@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { instrumentInitialAuthorityTrace } from './density-comparison/instrument-initial-authority.mjs';
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -34,7 +35,7 @@ export function verify(directory) {
     if (id !== provenance.extensionID) throw Error('Extension identity mismatch');
     return { candidate: provenance.candidate, sourceSHA: provenance.sourceSHA, buildID: provenance.buildID, packageDigest: provenance.packageDigest, extensionID: id };
 }
-export function build(output = path.join(root, 'build/density-comparison')) {
+export function build(output = path.join(root, 'build/density-comparison'), { initialAuthorityTrace = false } = {}) {
     const resolved = path.resolve(output), allowed = path.join(root, 'build') + path.sep;
     if (!resolved.startsWith(allowed)) throw Error('Output must stay inside ignored workspace build/');
     if (fs.existsSync(resolved)) throw Error('Output exists; choose a fresh build/ directory (never overwrite)');
@@ -45,10 +46,19 @@ export function build(output = path.join(root, 'build/density-comparison')) {
     const inputs = Object.fromEntries(Object.entries(files).map(([k, v]) => [k, hash(v)]));
     const devInputs = ['tools/build-density-comparison.mjs', 'tools/density-comparison/recorder.js',
         'test/fixtures/final-visual-candidates.js', 'test/fixtures/opportunity-aware-density.js'];
+    if (initialAuthorityTrace) devInputs.push('tools/density-comparison/initial-authority-trace.js',
+        'tools/density-comparison/instrument-initial-authority.mjs');
     for (const name of devInputs) inputs[name] = hash(fs.readFileSync(path.join(root, name)));
     const sourceSHA = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
     const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim();
-    const commonBuildID = hash(JSON.stringify({ sourceSHA, inputs }));
+    const traceProfile = initialAuthorityTrace ? 'INITIAL_AUTHORITY_ORDER_V1' : 'NONE';
+    const commonBuildID = hash(JSON.stringify({ sourceSHA, inputs, traceProfile }));
+    const diagnosticCopies = initialAuthorityTrace ? instrumentInitialAuthorityTrace(
+        files['src/page-state-main.js'].toString(), files['src/replay-control-plane-core.js'].toString(),
+        { sourceSHA, commonBuildID }) : null;
+    if (diagnosticCopies) {
+        new vm.Script(diagnosticCopies.main); new vm.Script(diagnosticCopies.core);
+    }
     const { candidates, candidateC } = require('../test/fixtures/final-visual-candidates.js');
     const selector = fs.readFileSync(path.join(root, 'test/fixtures/opportunity-aware-density.js'), 'utf8')
         .replace("require('../../src/scheduler-foundations.js')", 'window.LiveFlowSchedulerFoundations')
@@ -61,7 +71,7 @@ export function build(output = path.join(root, 'build/density-comparison')) {
     for (const candidate of ['B', 'D']) {
         const config = candidate === 'B' ? candidates[2].config : candidateC.config;
         const identity = { candidate, sourceSHA, commonBuildID, buildID: hash(commonBuildID + candidate), packageDigest: digestSlot,
-            selectionPolicy: candidate === 'B' ? 'B_OCCUPANCY' : 'B_OCCUPANCY_THEN_APPROVED_D', typography: 'A' };
+            selectionPolicy: candidate === 'B' ? 'B_OCCUPANCY' : 'B_OCCUPANCY_THEN_APPROVED_D', typography: 'A', traceProfile };
         let source = files['src/youtube-chat.js'].toString();
         for (const stroke of ['1.4px #101010', '1.1px #0b2011', '1.1px #0e2338', '1.1px #302709']) if (!source.includes(stroke)) throw Error('Typography A missing');
         source = replaceOnce(source, '    const phase5Tuning = window.LiveFlowPhase5Tuning?.CURRENT;',
@@ -113,6 +123,10 @@ export function build(output = path.join(root, 'build/density-comparison')) {
         const generatedManifest = { ...manifest, name: 'LiveFlow DEV comparison ' + candidate, key: key.toString('base64'),
             description: 'Development-only B/D comparison. Never distribute as Production.' };
         const generated = { ...files, 'manifest.json': Buffer.from(JSON.stringify(generatedManifest, null, 2) + '\n'), 'src/youtube-chat.js': Buffer.from(source) };
+        if (diagnosticCopies) {
+            generated['src/page-state-main.js'] = Buffer.from(diagnosticCopies.main);
+            generated['src/replay-control-plane-core.js'] = Buffer.from(diagnosticCopies.core);
+        }
         const digest = packageDigest(generated);
         generated['src/youtube-chat.js'] = Buffer.from(source.replace('"packageDigest":"' + digestSlot + '"', '"packageDigest":"' + digest + '"'));
         const provenance = { ...identity, packageDigest: digest, extensionID, dirty, inputs,
@@ -127,6 +141,8 @@ export function build(output = path.join(root, 'build/density-comparison')) {
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     const result = process.argv[2] === '--verify' ? verify(path.resolve(process.argv[3]))
-        : build(process.argv[2]).map(({ candidate, directory, sourceSHA, buildID, packageDigest, extensionID }) => ({ candidate, directory, sourceSHA, buildID, packageDigest, extensionID }));
+        : build(process.argv[2] === '--initial-authority-trace' ? process.argv[3] : process.argv[2],
+            { initialAuthorityTrace: process.argv[2] === '--initial-authority-trace' })
+            .map(({ candidate, directory, sourceSHA, buildID, packageDigest, extensionID, traceProfile }) => ({ candidate, directory, sourceSHA, buildID, packageDigest, extensionID, traceProfile }));
     console.log(JSON.stringify(result, null, 2));
 }
