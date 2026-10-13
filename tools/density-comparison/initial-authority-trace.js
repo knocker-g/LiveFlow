@@ -29,6 +29,7 @@ function createInitialAuthorityTrace(identity) {
         'capability', 'failure', 'mismatch', 'retention', 'inFlight']);
     for (const reason of ['NAVIGATION_PENDING', 'AUTHORITY_NOT_CURRENT', 'TARGET_NOT_CURRENT',
         'WAIT_AUTHORITY_CHANGED', 'WAIT_MEDIA_CHANGED']) enums.add(reason);
+    for (const reason of ['WINDOW_OR_ORIGIN', 'SOURCE_GUARD', 'EXPECTED_LIFECYCLE', 'REEVALUATION_DISABLED']) enums.add(reason);
     function record(step, details = {}) {
         try {
             // Step labels are compile-time instrumentation constants, not arbitrary payload strings.

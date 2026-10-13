@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { instrumentInitialAuthorityTrace } from './density-comparison/instrument-initial-authority.mjs';
+import { instrumentInitialRequestMain, instrumentInitialRequestContent } from './density-comparison/instrument-initial-request.mjs';
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -47,7 +48,7 @@ export function build(output = path.join(root, 'build/density-comparison'), { in
     const devInputs = ['tools/build-density-comparison.mjs', 'tools/density-comparison/recorder.js',
         'test/fixtures/final-visual-candidates.js', 'test/fixtures/opportunity-aware-density.js'];
     if (initialAuthorityTrace) devInputs.push('tools/density-comparison/initial-authority-trace.js',
-        'tools/density-comparison/instrument-initial-authority.mjs');
+        'tools/density-comparison/instrument-initial-authority.mjs', 'tools/density-comparison/instrument-initial-request.mjs');
     for (const name of devInputs) inputs[name] = hash(fs.readFileSync(path.join(root, name)));
     const sourceSHA = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
     const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim();
@@ -57,6 +58,7 @@ export function build(output = path.join(root, 'build/density-comparison'), { in
         files['src/page-state-main.js'].toString(), files['src/replay-control-plane-core.js'].toString(),
         { sourceSHA, commonBuildID }) : null;
     if (diagnosticCopies) {
+        diagnosticCopies.main = instrumentInitialRequestMain(diagnosticCopies.main);
         new vm.Script(diagnosticCopies.main); new vm.Script(diagnosticCopies.core);
     }
     const { candidates, candidateC } = require('../test/fixtures/final-visual-candidates.js');
@@ -116,6 +118,7 @@ export function build(output = path.join(root, 'build/density-comparison'), { in
         source = replaceOnce(source, "        return { status: 'rendered' };", "        if (!comparisonNodes.has(node)) comparisonNodes.set(node, ++comparisonNextID);\n        comparisonRecorder.launch({ at: commitAt, observationID: comparisonNodes.get(node), rectangle: commitRectangle, lane: launchProof.lane, interleaved: launchProof.interleaved, density: launchProof.density, geometryRevision: launchProof.geometryRevision, surfaceBounds: launchProof.surfaceBounds, clearanceRectangle: launchProof.clearanceRectangle, hardExclusions: launchProof.hardExclusions });\n        return { status: 'rendered' };");
         source = replaceOnce(source, '        animation.finished.then(() => {', '        animation.finished.then(() => {\n            comparisonRecorder.exit({ at: performance.now(), observationID: comparisonNodes.get(node), reason: "ANIMATION_FINISHED", rectangle: { left: node.getBoundingClientRect().left, width: commentWidth } });');
         source = replaceOnce(source, '    function cleanupOverlay() {', '    function cleanupOverlay() {\n        comparisonRecorder.event({ type: "LIFECYCLE_CLEAR" }); comparisonRecorder.stop();');
+        if (initialAuthorityTrace) source = instrumentInitialRequestContent(source, { sourceSHA, commonBuildID });
         new vm.Script(source);
         const { publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
         const key = publicKey.export({ type: 'spki', format: 'der' });
