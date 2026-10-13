@@ -40,6 +40,7 @@ async function harness(traced, { paused = true, hidden = false, collectorThrows 
         diagnosticScopes: { currentEpoch: () => 0 }, replayControlPlaneCore: counted,
         replayProductionControlState: api.createReplayState('STOPPED'), replayConsumedAuthorityRegistry: api.createConsumedAuthorityRegistry(),
         replayBootstrapAuthority: null, replayBootstrapEligibilityLifecycleId: -1, replaySeekAuthority: null,
+        replayInitialBootstrapWait: null, runtimeUserEnabled: true,
         replayPausedSequentialAuthority: null, replayReanchorLock: false, replayPlayerSeekDiagnosticLock: false,
         readRequestInFlight: false, navigationPending: false, pageState: { mode: 'replay', targetIdentity: 'fixture', context: {}, continuation: '' },
         replayRestartDiagnostic: { sequence: 1 }, replayPending: [], replayStartTimeSeconds: 0,
@@ -70,7 +71,8 @@ async function harness(traced, { paused = true, hidden = false, collectorThrows 
         traced ? (step, details) => context.initialTrace(step, details) : undefined);
     const functions = ['currentReplayAuthorityBinding', 'createReplayPipelineDiagnostic', 'createReplayForegroundRecoveryDiagnostic',
         'observeReplayControlShadow', 'authorizeReplayAuthority', 'acceptReplayBootstrapCandidate', 'startReplayBootstrap',
-        'invalidateAuthorityHandle', 'enterReplaySuspended', 'resumeReadAfterVisibility', 'startReadLoop', 'postLifecycleDiagnostic'];
+        'invalidateAuthorityHandle', 'invalidateReplayBootstrapAuthority', 'restartReplayFromCurrentPosition',
+        'enterReplaySuspended', 'resumeReadAfterVisibility', 'startReadLoop', 'postLifecycleDiagnostic'];
     vm.runInContext(functions.map(n => fn(main, n)).join('\n') +
         '\nreplayPipelineDiagnostic = createReplayPipelineDiagnostic();\nreplayForegroundRecoveryDiagnostic = createReplayForegroundRecoveryDiagnostic();', context);
     const originalLoop = context.startReadLoop;
@@ -81,6 +83,133 @@ async function harness(traced, { paused = true, hidden = false, collectorThrows 
             generation: context.currentLoopGeneration, active: context.activeLoopGeneration, readCount: context.readCount,
             registry: context.replayConsumedAuthorityRegistry.diagnostic() })) };
 }
+
+function enablePlay(h) {
+    h.video.paused = false;
+    h.c.beginReplayRestart = () => {};
+    h.c.respond = () => false;
+    h.doc.querySelector = () => null;
+    h.c.window.queueMicrotask = callback => callback();
+    h.c.restartReplayFromCurrentPosition({ type: 'play', target: h.video });
+}
+
+test('paused bootstrap hands original unused Authority to genuine play once; duplicates cannot amplify READ', async () => {
+    const h = await harness(true); h.c.acceptReplayBootstrapCandidate('PRIVATE');
+    const original = h.c.replayBootstrapAuthority;
+    h.c.startReplayBootstrap(0); h.c.startReplayBootstrap(0);
+    assert.equal(h.c.currentLoopGeneration, 0); assert.equal(h.c.readCount, 0);
+    assert.equal(h.c.lastGrant, undefined); assert.equal(h.c.replayInitialBootstrapWait.authority, original);
+    assert.equal(h.c.replayProductionControlState.phase, 'BOOTSTRAPPING');
+    enablePlay(h); await h.c.running;
+    assert.equal(original.diagnostic().authorityState, 'CONSUMED');
+    assert.equal(h.c.lastGrant.diagnostic().state, 'CLAIMED');
+    assert.equal(h.c.replayInitialBootstrapWait, null);
+    assert.equal(h.snapshot().firstMismatch, null);
+    enablePlay(h); h.c.startReplayBootstrap(0); h.c.acceptReplayBootstrapCandidate('OTHER');
+    assert.equal(h.calls.filter(c => c.name === 'authorizeAuthorityRequest').length, 1);
+    assert.equal(h.calls.filter(c => c.name === 'claimAuthorityRequestGrant').length, 1);
+    assert.equal(h.calls.filter(c => c.name === 'performRead').length, 1);
+});
+
+test('deferred bootstrap invalidates for HIDDEN/AD and cannot resurrect', async () => {
+    for (const reason of ['HIDDEN', 'AD']) {
+        const h = await harness(false); h.c.acceptReplayBootstrapCandidate('PRIVATE'); h.c.startReplayBootstrap(0);
+        const handle = h.c.replayBootstrapAuthority;
+        h.c.enterReplaySuspended(reason);
+        assert.equal(handle.diagnostic().authorityState, 'INVALID');
+        assert.equal(h.c.replayInitialBootstrapWait, null);
+        enablePlay(h); h.c.startReplayBootstrap(0);
+        assert.equal(h.c.acceptReplayBootstrapCandidate('OTHER'), false);
+        assert.equal(h.calls.filter(c => c.name === 'performRead').length, 0);
+    }
+});
+
+test('paused handoff fails closed for currentness, ownership, context, capabilities and exclusion conflicts', async () => {
+    const changes = {
+        lifecycle: h => h.c.pageLifecycleGeneration++, revision: h => h.c.pageRevision++,
+        target: h => h.c.pageState.targetIdentity = 'other', generation: h => h.c.currentLoopGeneration++,
+        ownership: h => h.c.getCurrentMainVideo = () => ({ ...h.video }),
+        targetFacts: h => h.c.isCurrentPageStateTarget = () => false,
+        context: h => h.c.pageState.context = null,
+        capability: h => h.c.replayControlPlaneCore.canUseCapabilityPath = () => ({ allowed: false }),
+        hidden: h => h.doc.hidden = true, ad: h => h.c.replayAdIsActive = () => true,
+        navigation: h => h.c.navigationPending = true,
+        disabled: h => h.c.runtimeUserEnabled = false,
+        ended: h => h.video.ended = true, seeking: h => h.video.seeking = true,
+        timing: h => h.video.currentTime = NaN,
+        inFlight: h => h.c.readRequestInFlight = true, active: h => h.c.activeLoopGeneration = 7,
+        reanchor: h => h.c.replayReanchorLock = true, diagnostic: h => h.c.replayPlayerSeekDiagnosticLock = true
+    };
+    for (const [name, change] of Object.entries(changes)) {
+        const h = await harness(false); h.c.acceptReplayBootstrapCandidate('PRIVATE'); h.c.startReplayBootstrap(0);
+        change(h); h.video.paused = false; const generation = h.c.currentLoopGeneration;
+        h.c.startReplayBootstrap(h.c.pageLifecycleGeneration);
+        assert.equal(h.calls.filter(c => c.name === 'authorizeAuthorityRequest').length, 0, name);
+        assert.equal(h.calls.filter(c => c.name === 'performRead').length, 0, name);
+        assert.equal(h.c.currentLoopGeneration, generation, name);
+    }
+});
+
+test('navigation and target transition use bootstrap invalidation, never a grant retention path', () => {
+    for (const name of ['invalidatePageLifecycle', 'applyLiveToReplayModeTransition', 'respond']) {
+        assert.match(fn(originalMain, name), /invalidateReplayBootstrapAuthority\(\)/);
+    }
+    assert.match(fn(originalMain, 'invalidateReplayBootstrapAuthority'), /invalidateAuthorityHandle\(replayBootstrapAuthority\)/);
+    assert.match(fn(originalMain, 'respond'), /pageState\.targetIdentity !== targetIdentity\) invalidateReplayBootstrapAuthority\(\)/);
+});
+
+test('actual navigation invalidates original deferred bootstrap before any later play', async () => {
+    const h = await harness(false); h.c.acceptReplayBootstrapCandidate('PRIVATE'); h.c.startReplayBootstrap(0);
+    const handle = h.c.replayBootstrapAuthority;
+    for (const name of ['observeReplayRuntimeAccounting', 'terminateReplayForegroundRetainedDiagnostic',
+        'abortReplayPlayerSeekDiagnostic', 'invalidateReplayCredentiallessSchemaDiagnostic', 'invalidateReplaySeekAuthority',
+        'openReplayDiagnosticScope', 'resetReplayGapOriginDiagnostic', 'disconnectWatchRootObserver', 'postLifecycleInvalidated']) h.c[name] = () => {};
+    h.c.createReplayTemporalStarvationDiagnostic = h.c.createReplayTimingDiagnosticSeen = () => ({});
+    h.c.establishedTargetIdentity = 'fixture';
+    vm.runInContext(fn(originalMain, 'invalidatePageLifecycle'), h.c);
+    h.c.invalidatePageLifecycle();
+    assert.equal(handle.diagnostic().authorityState, 'INVALID');
+    assert.equal(h.c.replayInitialBootstrapWait, null);
+    assert.equal(h.c.startReplayBootstrap(h.c.pageLifecycleGeneration), false);
+    assert.equal(h.calls.filter(c => c.name === 'performRead').length, 0);
+});
+
+test('initial waiting reducer keeps BOOTSTRAPPING with no request intent; saved sequential semantics stay separate', async () => {
+    const h = await harness(false), core = h.c.replayControlPlaneCore;
+    for (const event of ['MEDIA_PAUSE', 'MEDIA_PLAY']) {
+        const r = core.reduceReplayControlState(core.createReplayState('BOOTSTRAPPING'), event, { initialBootstrap: true });
+        assert.equal(r.nextState.phase, 'BOOTSTRAPPING'); assert.equal(r.requestIntent, 'NONE');
+        assert.equal(r.failure, 'NO_OP');
+        assert.equal(core.reduceReplayControlState(core.createReplayState('BOOTSTRAPPING'), event).failure, 'FORBIDDEN_EVENT');
+    }
+    const reading = core.reduceReplayControlState(core.createReplayState('READING'), 'MEDIA_PAUSE').nextState;
+    assert.equal(reading.suspendedReason, 'MEDIA_PAUSED');
+    assert.equal(core.reduceReplayControlState(reading, 'MEDIA_PLAY').nextState.phase, 'READING');
+});
+
+test('downstream final media gate remains; post-authorization rejection never refunds Authority or stores a grant', async () => {
+    const h = await harness(false, { paused: false }); h.c.acceptReplayBootstrapCandidate('PRIVATE');
+    const base = h.c.window.LiveFlowChatReadCore.canStartReadLoop;
+    h.c.window.LiveFlowChatReadCore.canStartReadLoop = f => { h.video.paused = true; return base(f); };
+    h.c.startReplayBootstrap(0); await h.c.running;
+    assert.equal(h.c.replayBootstrapAuthority.diagnostic().authorityState, 'CONSUMED');
+    assert.equal(h.c.lastGrant.diagnostic().state, 'AUTHORIZED');
+    assert.equal(h.c.replayInitialBootstrapWait, null);
+    assert.equal(h.calls.filter(c => c.name === 'performRead').length, 0);
+    h.video.paused = false; h.c.startReplayBootstrap(0);
+    assert.equal(h.calls.filter(c => c.name === 'authorizeAuthorityRequest').length, 1);
+});
+
+test('stale bootstrap response stays behind the original commit fence', async () => {
+    const h = await harness(false, { paused: false }); h.c.acceptReplayBootstrapCandidate('PRIVATE');
+    h.c.performRead = async () => { h.c.pageRevision++; return { ok: true, messages: [{ private: true }] }; };
+    h.c.startReplayBootstrap(0); await h.c.running;
+    assert.equal(h.c.readCount, 1);
+    assert.equal(h.calls.filter(c => c.name === 'canScheduleNextRead').at(-1).facts.revision, 0);
+    assert.equal(h.calls.filter(c => c.name === 'canScheduleNextRead').at(-1).facts.currentRevision, 1);
+    assert.equal(h.c.replayPipelineDiagnostic.receivedActions, 0);
+    assert.equal(h.c.replayPending.length, 0);
+});
 test('fixed ring bounds, sanitization, detached snapshots and fault flag', () => {
     const c = createInitialAuthorityTrace({ ...identity, secret: 'NEVER_EXPORT' });
     for (let i = 0; i < 300; i++) c.record('SAFE_EVENT', { lifecycle: 0, get token() { throw Error('must never read token'); }, reason: 'https://private.invalid', readCount: i });
@@ -100,18 +229,17 @@ test('trace enum allowlist preserves every existing Control Plane event and mism
     assert.deepEqual(rows.filter(r => r.event).map(r => r.event), Object.values(api.ReplayEvent));
     assert.deepEqual(rows.filter(r => r.mismatch).map(r => r.mismatch), Object.values(api.ShadowMismatch));
 });
-test('TRACE_INSTALLED precedes bootstrap; paused-after-authorize is consumed Authority but unclaimed authorized Grant', async () => {
+test('TRACE_INSTALLED precedes bootstrap; paused initial media preserves unused Authority without Grant', async () => {
     const h = await harness(true); assert.equal(h.c.acceptReplayBootstrapCandidate('SYNTHETIC_TOKEN_NEVER_EXPORT'), true);
-    assert.equal(h.c.startReplayBootstrap(0), true); await h.c.running;
+    assert.equal(h.c.startReplayBootstrap(0), false);
     const s = h.snapshot(), rows = s.rows;
     assert.equal(rows[0].step, 'TRACE_INSTALLED');
-    const auth = rows.find(r => r.step === 'AUTHORIZATION_RESULT');
-    assert.equal(auth.authorityState, 'CONSUMED'); assert.equal(auth.grantState, 'AUTHORIZED');
-    assert.equal(h.c.replayBootstrapAuthority.diagnostic().authorityState, 'CONSUMED');
-    assert.ok(rows.find(r => r.step === 'GRANT_KIND_AT_READ_LOOP' && r.kind === 'BOOTSTRAP'));
-    assert.equal(h.c.lastGrant.diagnostic().state, 'AUTHORIZED');
-    const media = rows.find(r => r.step === 'READ_LOOP_REJECTED_MEDIA'); assert.equal(media.media, 'PAUSED');
-    assert.ok(auth.sequence < media.sequence); assert.equal(rows.some(r => r.step === 'GRANT_CLAIM_RESULT'), false);
+    assert.equal(rows.some(r => r.step === 'AUTHORIZATION_RESULT'), false);
+    assert.equal(h.c.replayBootstrapAuthority.diagnostic().authorityState, 'OBSERVED_UNUSED');
+    assert.equal(h.c.lastGrant, undefined);
+    assert.equal(h.c.currentLoopGeneration, 0);
+    assert.equal(rows.find(r => r.step === 'BOOTSTRAP_MEDIA_DEFERRED').media, 'PAUSED');
+    assert.equal(rows.some(r => r.step === 'GRANT_CLAIM_RESULT'), false);
     assert.equal(h.calls.filter(c => c.name === 'performRead').length, 0);
     assert.ok(!JSON.stringify(s).includes('SYNTHETIC_TOKEN_NEVER_EXPORT'));
 });
@@ -152,16 +280,15 @@ test('existing status getter remains read-only and exports detached anonymous tr
     assert.equal(status.initialAuthorityTrace.identity.sourceSHA, identity.sourceSHA);
     assert.ok(!JSON.stringify(status).includes('SYNTHETIC_TOKEN_NEVER_EXPORT'));
 });
-test('hidden media gate after successful authorization leaves grant unclaimed and consumed bootstrap terminal', async () => {
+test('hidden preauthorization gate invalidates bootstrap without a grant', async () => {
     const h = await harness(true); h.c.acceptReplayBootstrapCandidate('SYNTHETIC_TOKEN_NEVER_EXPORT');
-    h.doc.hidden = true; h.doc.visibilityState = 'hidden'; h.c.startReplayBootstrap(0); await h.c.running;
-    const rows = h.snapshot().rows, rejection = rows.find(r => r.step === 'READ_LOOP_REJECTED_PRECONDITION');
-    assert.equal(rejection.visibility, 'HIDDEN');
-    assert.equal(h.c.lastGrant.diagnostic().state, 'AUTHORIZED');
+    const handle = h.c.replayBootstrapAuthority;
+    h.doc.hidden = true; h.doc.visibilityState = 'hidden'; h.c.startReplayBootstrap(0);
+    assert.equal(h.c.lastGrant, undefined);
+    assert.equal(handle.diagnostic().authorityState, 'INVALID');
     h.c.enterReplaySuspended('HIDDEN');
-    assert.equal(h.c.lastGrant.diagnostic().state, 'AUTHORIZED');
     const invalidation = h.snapshot().rows.find(r => r.step === 'AUTHORITY_INVALIDATION' && r.kind === 'BOOTSTRAP');
-    assert.equal(invalidation.beforeState, 'CONSUMED'); assert.equal(invalidation.afterState, 'CONSUMED'); assert.equal(invalidation.outcome, 'NO_OP');
+    assert.equal(invalidation.beforeState, 'OBSERVED_UNUSED'); assert.equal(invalidation.afterState, 'INVALID'); assert.equal(invalidation.outcome, 'SUCCESS');
     assert.equal(h.calls.filter(c => c.name === 'performRead').length, 0);
 });
 test('actual early rejection branches retain behavior and event attribution', async () => {

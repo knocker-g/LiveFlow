@@ -613,7 +613,7 @@ test('bootstrap lifecycle eligibility is terminal within a lifecycle and resets 
     assert.match(source, /if \(replayBootstrapEligibilityLifecycleId === pageLifecycleGeneration\) return false/);
     assert.equal((source.match(/replayBootstrapEligibilityLifecycleId = pageLifecycleGeneration/g) || []).length, 1);
     assert.equal((source.match(/replayBootstrapEligibilityLifecycleId\s*=\s*-1/g) || []).length, 1);
-    assert.match(source, /pageLifecycleGeneration \+= 1;\s*replayBootstrapAuthority = null/);
+    assert.match(source, /pageLifecycleGeneration \+= 1;\s*invalidateReplayBootstrapAuthority\(\)/);
     assert.doesNotMatch(source, /replayBootstrapConsumedLifecycleGeneration/);
 });
 

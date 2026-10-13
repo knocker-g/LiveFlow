@@ -75,6 +75,7 @@ export function instrumentInitialAuthorityTrace(main, core, identity) {
         s = once(s, 'replayBootstrapEligibilityLifecycleId !== pageLifecycleGeneration) return false;',
             'replayBootstrapEligibilityLifecycleId !== pageLifecycleGeneration) { ' + trace('BOOTSTRAP_START_REJECTED') + ' return false; }');
         s = once(s, '        if (!grant) {', '        if (!grant) {\n            ' + trace('BOOTSTRAP_NO_GRANT'));
+        s = once(s, '        if (video.paused) {', '        if (video.paused) {\n            ' + trace('BOOTSTRAP_MEDIA_DEFERRED', "{ media: 'PAUSED', authorityState: 'OBSERVED_UNUSED' }"));
         return once(s, "        if (snapshot) replayControlShadow?.compareCapability?.('BOOTSTRAP', snapshot, binding, true);",
             "        " + trace('BOOTSTRAP_ENVIRONMENT', "{ media: !video ? 'ABSENT' : video.paused ? 'PAUSED' : video.ended ? 'ENDED' : video.seeking ? 'SEEKING' : 'PLAYING', ownership: snapshot?.capabilities?.mainContentOwnership, currentness: snapshot?.capabilities?.targetIdentity }") + "\n        if (snapshot) replayControlShadow?.compareCapability?.('BOOTSTRAP', snapshot, binding, true);");
     });
@@ -86,8 +87,8 @@ export function instrumentInitialAuthorityTrace(main, core, identity) {
         return s;
     });
     main = entry(main, 'enterReplaySuspended', trace('SUSPEND_ENTRY', '{ reason }'));
-    main = edit(main, 'enterReplaySuspended', s => once(s, '        replayBootstrapAuthority = null;',
-        '        replayBootstrapAuthority = null;\n        ' + trace('BOOTSTRAP_HANDLE_CLEARED', "{ reason: effectiveReason, retention: retainReanchor ? 'PRESENT' : 'ABSENT' }")));
+    main = edit(main, 'invalidateReplayBootstrapAuthority', s => once(s, '        replayBootstrapAuthority = null;',
+        '        replayBootstrapAuthority = null;\n        ' + trace('BOOTSTRAP_HANDLE_CLEARED')));
     main = entry(main, 'resumeReadAfterVisibility', trace('FOREGROUND_ENTRY'));
     main = edit(main, 'resumeReadAfterVisibility', s => {
         s = once(s, "document.visibilityState !== 'visible') return false;",

@@ -26,6 +26,7 @@
     let navigationCompletionTargetIdentity = '';
     let deferredReadStartGeneration = null;
     let replayBootstrapAuthority = null;
+    let replayInitialBootstrapWait = null;
     let replayBootstrapEligibilityLifecycleId = -1;
     let lastEstablishedWatchRoot = null;
     let lastEstablishedVideo = null;
@@ -194,13 +195,21 @@
         if (requestedLifecycleGeneration !== pageLifecycleGeneration || pageState.mode !== 'replay' ||
             replayBootstrapEligibilityLifecycleId !== pageLifecycleGeneration) return false;
         const binding = currentReplayAuthorityBinding();
-        const grant = authorizeReplayAuthority(replayBootstrapAuthority, 'BOOTSTRAP', binding, 0);
-        if (!grant) {
-            observeReplayControlShadow('BOOTSTRAP_FAILED');
-            setReplayRestartStage('FAILED_CLOSED', 'OTHER');
+        const video = getCurrentMainVideo();
+        const authorityCurrent = replayBootstrapAuthority?.diagnostic?.(binding)?.authorityCurrent === true;
+        if (document.hidden || replayAdIsActive() || navigationPending || !authorityCurrent || !isCurrentPageStateTarget() ||
+            (replayInitialBootstrapWait && (replayInitialBootstrapWait.authority !== replayBootstrapAuthority ||
+                replayInitialBootstrapWait.video !== video))) {
+            invalidateReplayBootstrapAuthority();
             return false;
         }
-        const video = getCurrentMainVideo();
+        if (replayProductionControlState?.phase !== 'BOOTSTRAPPING' || runtimeUserEnabled !== true ||
+            !pageState.context || readRequestInFlight || activeLoopGeneration !== 0 ||
+            replayReanchorLock || replayPlayerSeekDiagnosticLock) return false;
+        if (replayControlPlaneCore?.inspectAuthorityRequestEligibility?.({
+            authority: replayBootstrapAuthority, expectedKind: 'BOOTSTRAP', currentBinding: binding,
+            consumedRegistry: replayConsumedAuthorityRegistry
+        })?.ok !== true) return false;
         const snapshot = replayControlPlaneCore?.createCapabilitySnapshot?.({
             binding, evidenceEpoch: pageRevision,
             capabilities: {
@@ -210,9 +219,30 @@
                 playerTiming: Number.isFinite(video?.currentTime) ? 'SUPPORTED' : 'UNKNOWN'
             }
         })?.snapshot;
+        if (replayControlPlaneCore?.canUseCapabilityPath?.('BOOTSTRAP', snapshot, binding)?.allowed !== true ||
+            !video || video.ended || video.seeking || !Number.isFinite(video.currentTime)) return false;
+        if (video.paused) {
+            replayInitialBootstrapWait = { authority: replayBootstrapAuthority, video };
+            observeReplayControlShadow('MEDIA_PAUSE', { initialBootstrap: true });
+            setReplayRestartStage('WAITING_MEDIA');
+            return false;
+        }
+        replayInitialBootstrapWait = null;
+        const grant = authorizeReplayAuthority(replayBootstrapAuthority, 'BOOTSTRAP', binding, 0);
+        if (!grant) {
+            observeReplayControlShadow('BOOTSTRAP_FAILED');
+            setReplayRestartStage('FAILED_CLOSED', 'OTHER');
+            return false;
+        }
         if (snapshot) replayControlShadow?.compareCapability?.('BOOTSTRAP', snapshot, binding, true);
         startReadLoop(requestedLifecycleGeneration, 'INITIAL_WATCH', grant);
         return true;
+    }
+
+    function invalidateReplayBootstrapAuthority() {
+        invalidateAuthorityHandle(replayBootstrapAuthority);
+        replayBootstrapAuthority = null;
+        replayInitialBootstrapWait = null;
     }
 
     function invalidateAuthorityHandle(authority) {
@@ -321,8 +351,7 @@
         const effectiveReason = document.hidden || replayProductionControlState?.suspendedReason === 'HIDDEN' ? 'HIDDEN' : reason;
         const hiddenOwnedVideo = effectiveReason === 'HIDDEN' ? getCurrentMainVideo() : null;
         const retainReanchor = effectiveReason === 'HIDDEN' && replaySeekAuthorityEligibleForHidden(hiddenOwnedVideo);
-        invalidateAuthorityHandle(replayBootstrapAuthority);
-        replayBootstrapAuthority = null;
+        invalidateReplayBootstrapAuthority();
         invalidateAuthorityHandle(replayPausedSequentialAuthority);
         if (effectiveReason === 'HIDDEN') {
             const rehiddenRecovery = replayForegroundRecoveryDiagnostic.foregroundRecoveryStarted &&
@@ -1274,7 +1303,7 @@
         replayAwaitingFirstFreshSequentialResponse = false;
         pageRevision += 1;
         pageLifecycleGeneration += 1;
-        replayBootstrapAuthority = null;
+        invalidateReplayBootstrapAuthority();
         replayConsumedAuthorityRegistry = replayControlPlaneCore?.createConsumedAuthorityRegistry?.() || null;
         window.LiveFlowChatFrameRole?.beginGeneration?.(pageLifecycleGeneration);
         navigationPending = true;
@@ -1303,7 +1332,7 @@
         stopReadLoop('mode-transition');
         pageRevision += 1;
         pageLifecycleGeneration += 1;
-        replayBootstrapAuthority = null;
+        invalidateReplayBootstrapAuthority();
         replayConsumedAuthorityRegistry = replayControlPlaneCore?.createConsumedAuthorityRegistry?.() || null;
         readAttemptedRevision = -1;
         readCount = 0;
@@ -1327,7 +1356,7 @@
                 stopReadLoop('navigation');
                 pageRevision = revisionState?.revision || pageRevision + 1;
                 pageLifecycleGeneration += 1;
-                replayBootstrapAuthority = null;
+                invalidateReplayBootstrapAuthority();
                 replayConsumedAuthorityRegistry = replayControlPlaneCore?.createConsumedAuthorityRegistry?.() || null;
                 navigationPending = true;
                 navigationPageDataUpdated = false;
@@ -1423,6 +1452,7 @@
         lastEstablishedWatchRoot = watchRoot;
         lastEstablishedVideo = currentVideo;
         const shadowLifecycleStart = pageState.mode !== 'replay' || pageState.targetIdentity !== targetIdentity;
+        if (pageState.mode === 'replay' && pageState.targetIdentity !== targetIdentity) invalidateReplayBootstrapAuthority();
         pageState = {
             continuation: chatMode === 'live' && typeof continuation === 'string' ? continuation : '',
             context,
@@ -2910,6 +2940,7 @@
         respond({ ownershipMutation: true, eventSource: 'chat-frame-role', expectedLifecycleGeneration: pageLifecycleGeneration });
     });
     window.addEventListener('pagehide', () => {
+        invalidateReplayBootstrapAuthority();
         observeReplayRuntimeAccounting('pagehide');
         terminateReplayForegroundRetainedDiagnostic('STALE_BINDING', true);
         observeReplayControlShadow('NAVIGATION', {}, 'STOPPED');
@@ -2932,7 +2963,7 @@
     window.addEventListener('pause', (event) => {
         if (event.target !== getCurrentMainVideo()) return;
         cancelReplayTemporalWakeup();
-        observeReplayControlShadow('MEDIA_PAUSE');
+        observeReplayControlShadow('MEDIA_PAUSE', { initialBootstrap: Boolean(replayInitialBootstrapWait) });
         suspendReplayForMediaPause();
     }, true);
     for (const type of ['waiting', 'stalled']) window.addEventListener(type, (event) => {
@@ -2966,6 +2997,11 @@
     }, true);
     function restartReplayFromCurrentPosition(event, explicitReason = null) {
         if (event && event.target !== getCurrentMainVideo()) return;
+        if (event?.type === 'play' && replayInitialBootstrapWait) {
+            observeReplayControlShadow('MEDIA_PLAY', { initialBootstrap: true });
+            startReplayBootstrap(pageLifecycleGeneration);
+            return;
+        }
         if (event?.type === 'seeked') {
             replaySeekInProgress = false;
             observeReplayControlShadow('SEEK_COMPLETED');

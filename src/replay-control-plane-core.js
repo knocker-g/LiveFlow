@@ -328,6 +328,9 @@
             if (event === ReplayEvent.LIFECYCLE_START) return result(createReplayState(ReplayPhase.BOOTSTRAPPING), AuthorityAction.NONE, PendingAction.CLEAR);
             return event === ReplayEvent.DISABLE ? stopped() : result(state, AuthorityAction.NONE, PendingAction.NONE, RequestIntent.NONE, TransitionFailure.FORBIDDEN_EVENT);
         case ReplayPhase.BOOTSTRAPPING:
+            // Initial paused media holds the original unused bootstrap, not a saved SEQUENTIAL/grant.
+            // MEDIA_PLAY only permits fresh readiness revalidation; authorization remains separate.
+            if (['MEDIA_PAUSE', 'MEDIA_PLAY'].includes(event) && facts.initialBootstrap === true) return noOp(state);
             if (event === ReplayEvent.BOOTSTRAP_AUTHORIZED) return result(state, AuthorityAction.KEEP, PendingAction.KEEP, RequestIntent.REQUEST_BOOTSTRAP);
             if (event === ReplayEvent.BOOTSTRAP_SUCCEEDED) return result(createReplayState(ReplayPhase.READING), AuthorityAction.ACCEPT_FRESH_SEQUENTIAL, PendingAction.RECLASSIFY);
             if (event === ReplayEvent.INITIAL_ALIGNMENT_REQUIRED) return result(createReplayState(ReplayPhase.REANCHORING), AuthorityAction.INVALIDATE_ACTIVE, PendingAction.CLEAR);
