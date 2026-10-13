@@ -76,7 +76,7 @@ export function build(output = path.join(root, 'build/density-comparison')) {
             '            viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio }, settings: runtimeSettings, generation: rendererGeneration,\n' +
             '            captions: media ? isCaptionTrackEnabled(media.player) : null, surface: surface ? { left: surface.left, top: surface.top, right: surface.right, bottom: surface.bottom } : null,\n' +
             '            boxes: surface ? snapshotActiveGeometry(surface)?.map((box, index) => { const node = [...activeDanmaku.values()][index].node; if (!comparisonNodes.has(node)) comparisonNodes.set(node, ++comparisonNextID); return { ...box, observationID: comparisonNodes.get(node) }; }) : null, scheduler: phase3Runtime?.status?.() ?? null };\n' +
-            '    }, { setInterval, clearInterval, now: () => performance.now() });\n' +
+            '    }, { setInterval: (callback, delay) => window.setInterval(callback, delay), clearInterval: handle => window.clearInterval(handle), now: () => performance.now() });\n' +
             '    document.addEventListener("DOMContentLoaded", installComparisonPanel, { once: true });\n' +
             '    if (document.readyState !== "loading") installComparisonPanel();\n' +
             '    function installComparisonPanel() {\n' +

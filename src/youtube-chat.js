@@ -101,6 +101,7 @@
         return {
             pendingCurrent: 0,
             schedulerLifecycleDiscarded: 0,
+            schedulerStructuralDiscarded: 0,
             opportunitiesArmed: 0,
             opportunitiesEvaluated: 0,
             stalePruned: 0,
@@ -234,6 +235,9 @@
         }
         if (event.type === 'CAPACITY_DROPPED') {
             replaySchedulerDiagnostic.capacityDropped += Number.isInteger(event.count) ? event.count : 0;
+        }
+        if (event.type === 'STRUCTURAL_DROPPED') {
+            replaySchedulerDiagnostic.schedulerStructuralDiscarded += Number.isInteger(event.count) ? event.count : 0;
         }
         if (event.type === 'EMERGENCY_PENDING_DROPPED') {
             replaySchedulerDiagnostic.emergencyPendingDropped += Number.isInteger(event.count) ? event.count : 0;

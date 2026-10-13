@@ -122,7 +122,8 @@
                 cohortMaximumItems: config.cohortMaximumItems,
                 cohortMaximumSpan: config.cohortMaximumSpan,
                 isSafe: (item) => isSafe(item, density.level),
-                policy
+                policy,
+                onDiscard: removal => notify({ type: 'STRUCTURAL_DROPPED', state, ...removal })
             });
             const nextDelay = pacing?.interval;
 

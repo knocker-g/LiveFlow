@@ -83,7 +83,7 @@
             return Object.freeze(dropped);
         }
 
-        function evaluate({ scanDepth, cohortMaximumItems, cohortMaximumSpan, isSafe, policy } = {}) {
+        function evaluate({ scanDepth, cohortMaximumItems, cohortMaximumSpan, isSafe, policy, onDiscard } = {}) {
             if (!Number.isInteger(scanDepth) || scanDepth <= 0 ||
                 !Number.isInteger(cohortMaximumItems) || cohortMaximumItems <= 0 ||
                 !Number.isFinite(cohortMaximumSpan) || cohortMaximumSpan < 0 ||
@@ -100,12 +100,18 @@
                 const item = items[index];
                 const verdict = isSafe(item);
                 if (verdict === true) safeCandidates.push(Object.freeze({ index, item, inTemporalCohort: cohortIndexes.has(index) }));
-                else if (verdict?.discard === true) structurallyDiscarded.push(item);
+                else if (verdict?.discard === true) structurallyDiscarded.push({ item,
+                    reason: verdict.reason === 'UNREPRESENTABLE_SPECIAL' ? verdict.reason : 'UNKNOWN' });
             }
             if (structurallyDiscarded.length > 0) {
-                for (const item of structurallyDiscarded) {
+                const reasons = new Map();
+                for (const { item, reason } of structurallyDiscarded) {
                     const index = items.indexOf(item);
-                    if (index >= 0) items.splice(index, 1);
+                    if (index >= 0) { items.splice(index, 1); reasons.set(reason, (reasons.get(reason) || 0) + 1); }
+                }
+                // Publish actual terminal removals only after queue ownership has changed.
+                if (typeof onDiscard === 'function') for (const [reason, count] of reasons) {
+                    try { onDiscard(Object.freeze({ reason, count, pendingCount: items.length })); } catch {}
                 }
             }
             if (safeCandidates.length === 0) {

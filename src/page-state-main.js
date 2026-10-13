@@ -413,6 +413,7 @@
             reanchorPlayerSeekContinuationObserved: false,
             launched: 0, firstLaunchObserved: false, pendingCurrent: 0, opportunitiesArmed: 0, opportunitiesEvaluated: 0,
             schedulerLifecycleDiscarded: 0,
+            schedulerStructuralDiscarded: 0,
             stalePruned: 0, capacityDropped: 0, emergencyPendingDropped: 0,
             sourceActivityBand: 'LOW', densityProvenance: 'NONE',
             selectionNone: 0, collisionBlocked: 0, geometryUnknown: 0, generationInvalidated: 0,
@@ -672,7 +673,7 @@
             schedulerEligible: replayPipelineDiagnostic.enqueued, selected: replayPipelineDiagnostic.launchCommitted,
             staleDropped: replayPipelineDiagnostic.stalePruned,
             schedulerExplicitDrop: replayPipelineDiagnostic.capacityDropped + replayPipelineDiagnostic.emergencyPendingDropped +
-                replayPipelineDiagnostic.schedulerLifecycleDiscarded,
+                replayPipelineDiagnostic.schedulerLifecycleDiscarded + replayPipelineDiagnostic.schedulerStructuralDiscarded,
             schedulerRetained,
             launched: replayPipelineDiagnostic.launchCommitted, displayed: replayPipelineDiagnostic.launched
         }) || { stages: {}, lostUnaccounted: 0, overflowUnaccounted: 0, valid: false };
@@ -2829,7 +2830,7 @@
             }
             const scheduler = event.data.scheduler;
             if (scheduler && typeof scheduler === 'object') {
-                for (const key of ['pendingCurrent', 'schedulerLifecycleDiscarded', 'opportunitiesArmed', 'opportunitiesEvaluated', 'stalePruned', 'capacityDropped', 'emergencyPendingDropped', 'staleAfterCollision', 'staleAfterPacing', 'staleAfterSelectionMiss', 'staleAlreadyOnEnqueue', 'staleOther', 'selectionNone', 'selectionNoneNoPending', 'selectionNoneCollisionBlocked', 'selectionNoneNoEligible', 'collisionBlocked', 'geometryUnknown', 'generationInvalidated', 'geometryInvalidated', 'launchAttempted', 'launchRejected', 'launchCommitted', 'collisionActiveDanmaku', 'collisionSubtitle', 'collisionCandidateGeometry', 'collisionNoUsableLane', 'collisionOther']) {
+                for (const key of ['pendingCurrent', 'schedulerLifecycleDiscarded', 'schedulerStructuralDiscarded', 'opportunitiesArmed', 'opportunitiesEvaluated', 'stalePruned', 'capacityDropped', 'emergencyPendingDropped', 'staleAfterCollision', 'staleAfterPacing', 'staleAfterSelectionMiss', 'staleAlreadyOnEnqueue', 'staleOther', 'selectionNone', 'selectionNoneNoPending', 'selectionNoneCollisionBlocked', 'selectionNoneNoEligible', 'collisionBlocked', 'geometryUnknown', 'generationInvalidated', 'geometryInvalidated', 'launchAttempted', 'launchRejected', 'launchCommitted', 'collisionActiveDanmaku', 'collisionSubtitle', 'collisionCandidateGeometry', 'collisionNoUsableLane', 'collisionOther']) {
                     if (Number.isInteger(scheduler[key]) && scheduler[key] >= 0) replayPipelineDiagnostic[key] = scheduler[key];
                 }
                 if (['IDLE', 'ARMED', 'EVALUATING'].includes(scheduler.schedulerState)) replayPipelineDiagnostic.schedulerState = scheduler.schedulerState;
