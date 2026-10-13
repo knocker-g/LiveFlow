@@ -30,6 +30,7 @@
                 "src/schema-diagnostics-core.js",
                 "src/replay-control-plane-core.js",
                 "src/chat-read-core.js",
+                "src/diagnostic-scope-core.js",
                 "src/page-state-main.js"
             ],
             "world": "MAIN",

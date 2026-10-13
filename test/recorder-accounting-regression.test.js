@@ -36,8 +36,10 @@ test('generated recorder respects native Window receiver through start/stop and 
 });
 test('actual structural SPECIAL removal reaches scheduler ledger exactly once, including no selection', () => {
     const messages = [], context = vm.createContext({ core, currentChatMode: 'replay', currentPageLifecycleGeneration: 1,
+        replayDiagnosticEpoch: 0, replayDiagnosticLifecycle: 1, replayDiagnosticSequence: 0,
+        replayDiagnosticBatch: {}, replayDiagnosticDisplayed: 0, replayDiagnosticIncomplete: false,
         REPLAY_PIPELINE_DIAGNOSTIC_TYPE: 'pipeline', window: { location: { origin: 'https://www.youtube.com' }, postMessage: m => messages.push(m) }, updateReplayLaunchGap() {} });
-    vm.runInContext(['createReplaySchedulerDiagnostic', 'publishReplaySchedulerDiagnostic', 'observeReplayScheduler'].map(n => functionSource(content, n)).join('\n') +
+    vm.runInContext(['createReplaySchedulerDiagnostic', 'publishReplayScopeSnapshot', 'publishReplaySchedulerDiagnostic', 'observeReplayScheduler'].map(n => functionSource(content, n)).join('\n') +
         '\nreplaySchedulerDiagnostic = createReplaySchedulerDiagnostic();\n' + functionSource(main, 'createReplayPipelineDiagnostic') + '\nreplayPipelineDiagnostic = createReplayPipelineDiagnostic();', context);
     let timer, now = 0;
     const adapter = createSubtitleGeometryAdapter({ authority: createGeometryAuthority({ epsilon: 1 }), readGeometry: () => ({ state: 'KNOWN_EMPTY', exclusionRegions: [], capabilityAvailable: true }) });
@@ -50,9 +52,13 @@ test('actual structural SPECIAL removal reaches scheduler ledger exactly once, i
             density: { attackThresholds: [.5,.7,.9], releaseThresholds: [.2,.3,.4], minimumAttackResidence: 1, releaseDwell: 3 },
             collisionAllowances: { CONSERVATIVE: {} } } });
     context.phase3Runtime = runtime;
-    const receiver = main.match(/for \(const key of \['pendingCurrent'[^]*?\n                \}/)[0];
+    vm.runInContext(functionSource(main, 'applyReplayDiagnosticSnapshot'), context);
     const ledgerCall = main.match(/core\?\.computeReplayAccountingLedger\?\.\(\{[^]*?\}\)/)[0];
-    const ledger = () => { context.scheduler = messages.at(-1)?.scheduler || context.replaySchedulerDiagnostic; vm.runInContext(receiver, context); return vm.runInContext(`schedulerRetained = replayPipelineDiagnostic.pendingCurrent; ${ledgerCall}`, context); };
+    const ledger = () => {
+        context.diagnostic = context.replayPipelineDiagnostic;
+        context.applyReplayDiagnosticSnapshot(context.diagnostic, messages.at(-1) || { scheduler: context.replaySchedulerDiagnostic });
+        return vm.runInContext(`schedulerRetained = diagnostic.pendingCurrent; ${ledgerCall}`, context);
+    };
     assert.equal(ledger().lostUnaccounted, 0);
     for (let n = 1; n <= 6; n++) {
         Object.assign(context.replayPipelineDiagnostic, { receivedActions:n, messagesObserved:n, bridged:n, enqueued:n });

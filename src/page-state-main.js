@@ -7,7 +7,6 @@
     const RESUME_READ_LOOP_TYPE = 'LIVEFLOW_RESUME_CHAT_READ_AFTER_VISIBILITY';
     const NAVIGATION_INVALIDATED_TYPE = 'LIVEFLOW_PAGE_LIFECYCLE_INVALIDATED';
     const LIFECYCLE_DIAGNOSTIC_TYPE = 'LIVEFLOW_READ_LIFECYCLE_DIAGNOSTIC';
-    const REPLAY_DISPLAYED_TYPE = 'LIVEFLOW_REPLAY_DANMAKU_DISPLAYED';
     const REPLAY_AD_ENTER_TYPE = 'LIVEFLOW_REPLAY_AD_ENTER';
     const REPLAY_AD_EXIT_TYPE = 'LIVEFLOW_REPLAY_AD_EXIT';
     const REPLAY_PIPELINE_DIAGNOSTIC_TYPE = 'LIVEFLOW_REPLAY_PIPELINE_DIAGNOSTIC';
@@ -65,6 +64,40 @@
     const REPLAY_REANCHOR_FAILURE_REASONS = new Set(['NONE', 'NO_AUTHORITY', 'AUTHORITY_STALE', 'RELATION_ALL_BEFORE', 'RELATION_UNKNOWN', 'REANCHOR_SCHEMA_INVALID', 'NO_FRESH_CHAIN', 'OTHER']);
     let replayProductionReanchorReason = 'NONE';
     let replayPipelineDiagnostic = createReplayPipelineDiagnostic();
+    const diagnosticScopes = window.LiveFlowDiagnosticScopeCore.createScopes(0, replayPipelineDiagnostic,
+        applyReplayDiagnosticSnapshot, { closureValid: replayDiagnosticClosureValid });
+
+    function replayDiagnosticClosureValid(diagnostic) {
+        const status = replayAccountingStatus(diagnostic, false);
+        return Object.values(status.stages).every(stage => stage.valid === true) &&
+            status.lostUnaccounted === 0 && status.overflowUnaccounted === 0 && status.schedulerRetained === 0;
+    }
+
+    function postReplayDiagnosticScope(previousEpoch = null) {
+        window.postMessage({ source: 'liveflow-page-state', type: 'LIVEFLOW_REPLAY_DIAGNOSTIC_SCOPE_OPEN',
+            pageLifecycleGeneration, diagnosticScopeEpoch: diagnosticScopes.currentEpoch(), previousEpoch }, window.location.origin);
+    }
+
+    function openReplayDiagnosticScope(nextLifecycle = pageLifecycleGeneration) {
+        const previousEpoch = diagnosticScopes.currentEpoch();
+        replayPipelineDiagnostic = createReplayPipelineDiagnostic();
+        diagnosticScopes.open(nextLifecycle, replayPipelineDiagnostic);
+        return previousEpoch;
+    }
+
+    function replayDiagnosticScopeStatus() {
+        const status = diagnosticScopes.status();
+        const scopes = status.scopes.map(({ value, ...scope }) => {
+            const ledger = replayAccountingStatus(value, false);
+            return { ...scope, scheduler: ledger.stages.scheduler, lostUnaccounted: ledger.lostUnaccounted,
+                overflowUnaccounted: ledger.overflowUnaccounted,
+                accountingValid: Object.values(ledger.stages).every(stage => stage.valid === true) &&
+                    ledger.lostUnaccounted === 0 && ledger.overflowUnaccounted === 0 };
+        });
+        return { ...status, scopes, incomplete: status.incomplete || scopes.some(scope =>
+            scope.epoch !== status.epoch && !scope.accountingValid) };
+    }
+
     let replayTemporalStarvationDiagnostic = createReplayTemporalStarvationDiagnostic();
     let replayGapOriginDiagnostic = createReplayGapOriginDiagnostic();
     let replayGapEvidence = window.LiveFlowChatReadCore?.createReplayGapEvidenceState?.() || null;
@@ -654,84 +687,122 @@
         observeReplayRuntimeAccounting('response-accepted');
     }
 
-    function replayAccountingStatus() {
+    function applyReplayDiagnosticSnapshot(diagnostic, snapshot) {
+        for (const [eventKey, diagnosticKey] of [['inputCount', 'bridgeInput'], ['enqueuedCount', 'enqueued'],
+            ['visibilityFiltered', 'visibilityFiltered'], ['enqueueRejected', 'enqueueRejected'],
+            ['exactIdDedupedCount', 'bridgeDeduped'], ['lifecycleDiscarded', 'lifecycleDiscarded'],
+            ['lifecycleDiscardedDisplayDisabled', 'lifecycleDiscardedDisplayDisabled'],
+            ['lifecycleDiscardedMediaMissing', 'lifecycleDiscardedMediaMissing'],
+            ['lifecycleDiscardedMediaPaused', 'lifecycleDiscardedMediaPaused'],
+            ['lifecycleDiscardedMediaEnded', 'lifecycleDiscardedMediaEnded'],
+            ['lifecycleDiscardedMediaNotReady', 'lifecycleDiscardedMediaNotReady'],
+            ['lifecycleDiscardedAdShowing', 'lifecycleDiscardedAdShowing'],
+            ['lifecycleDiscardedAdInterrupting', 'lifecycleDiscardedAdInterrupting']]) {
+            if (Number.isInteger(snapshot.batch?.[eventKey]) && snapshot.batch?.[eventKey] >= 0) diagnostic[diagnosticKey] = snapshot.batch[eventKey];
+        }
+        const scheduler = snapshot.scheduler;
+        if (scheduler && typeof scheduler === 'object') {
+            for (const key of ['pendingCurrent', 'schedulerLifecycleDiscarded', 'schedulerStructuralDiscarded', 'opportunitiesArmed', 'opportunitiesEvaluated', 'stalePruned', 'capacityDropped', 'emergencyPendingDropped', 'staleAfterCollision', 'staleAfterPacing', 'staleAfterSelectionMiss', 'staleAlreadyOnEnqueue', 'staleOther', 'selectionNone', 'selectionNoneNoPending', 'selectionNoneCollisionBlocked', 'selectionNoneNoEligible', 'collisionBlocked', 'geometryUnknown', 'generationInvalidated', 'geometryInvalidated', 'launchAttempted', 'launchRejected', 'launchCommitted', 'collisionActiveDanmaku', 'collisionSubtitle', 'collisionCandidateGeometry', 'collisionNoUsableLane', 'collisionOther']) {
+                if (Number.isInteger(scheduler[key]) && scheduler[key] >= 0) diagnostic[key] = scheduler[key];
+            }
+            if (['IDLE', 'ARMED', 'EVALUATING'].includes(scheduler.schedulerState)) diagnostic.schedulerState = scheduler.schedulerState;
+            if (['LOW', 'MEDIUM', 'HIGH', 'BURST'].includes(scheduler.sourceActivityBand)) diagnostic.sourceActivityBand = scheduler.sourceActivityBand;
+            if (['NONE', 'SOURCE_ACTIVITY', 'PRESSURE_RESCUE', 'BOTH'].includes(scheduler.densityProvenance)) diagnostic.densityProvenance = scheduler.densityProvenance;
+            if (['NONE', 'SHORT', 'NOTICEABLE', 'LONG'].includes(scheduler.launchGapClass)) diagnostic.launchGapClass = scheduler.launchGapClass;
+            const gapCause = scheduler.launchGapCause === 'NO_DUE_COMMENT' && replayPending.length > 0 ? 'WAITING_FOR_FUTURE' : scheduler.launchGapCause;
+            if (['NO_DUE_COMMENT', 'WAITING_FOR_FUTURE', 'PACING', 'COLLISION_BLOCKED', 'SELECTION_NONE', 'GEOMETRY', 'STALE_ONLY', 'UNKNOWN'].includes(gapCause)) diagnostic.launchGapCause = gapCause;
+            for (const key of ['launchGapDuePending', 'launchGapEligibleCandidate', 'launchGapActiveDanmaku', 'launchGapCollisionBlocked']) {
+                if (typeof scheduler[key] === 'boolean') diagnostic[key] = scheduler[key];
+            }
+            if (['IDLE', 'ARMED', 'EVALUATING'].includes(scheduler.launchGapSchedulerState)) diagnostic.launchGapSchedulerState = scheduler.launchGapSchedulerState;
+            if (['NORMAL', 'COMPACT', 'DENSE', 'MAX_READABLE'].includes(scheduler.launchGapDensityLevel)) diagnostic.launchGapDensityLevel = scheduler.launchGapDensityLevel;
+            diagnostic.launchGapNearestFutureClass = diagnostic.nearestFutureClass;
+        }
+
+        if (Number.isInteger(snapshot.displayedCount) && snapshot.displayedCount >= 0) diagnostic.launched = snapshot.displayedCount;
+    }
+
+    function replayAccountingStatus(diagnostic = replayPipelineDiagnostic, includeScope = true) {
         const core = window.LiveFlowChatReadCore;
-        const temporalDisplayable = replayPipelineDiagnostic.uniqueTimingFiltered + replayPipelineDiagnostic.bridged +
-            replayPipelineDiagnostic.timingPending + replayPipelineDiagnostic.uniqueTimingCapacityDropped;
-        const schedulerRetained = replayPipelineDiagnostic.pendingCurrent;
+        const temporalDisplayable = diagnostic.uniqueTimingFiltered + diagnostic.bridged +
+            diagnostic.timingPending + diagnostic.uniqueTimingCapacityDropped;
+        const schedulerRetained = diagnostic.pendingCurrent;
         const ledger = core?.computeReplayAccountingLedger?.({
-            receivedActions: replayPipelineDiagnostic.receivedActions, parsed: replayPipelineDiagnostic.messagesObserved,
-            parseFailed: replayPipelineDiagnostic.parseFailed,
-            displayable: replayPipelineDiagnostic.messagesObserved,
-            dueClassified: replayPipelineDiagnostic.bridged, futureClassified: replayPipelineDiagnostic.timingPending + replayPipelineDiagnostic.uniqueTimingCapacityDropped,
-            beforeStartFiltered: replayPipelineDiagnostic.uniqueTimingFiltered,
-            dueBridged: replayPipelineDiagnostic.bridged,
-            futureQueued: replayPipelineDiagnostic.timingPending, capacityDropped: replayPipelineDiagnostic.uniqueTimingCapacityDropped,
-            enqueued: replayPipelineDiagnostic.enqueued, bridgeFiltered: replayPipelineDiagnostic.visibilityFiltered,
-            bridgeDeduped: replayPipelineDiagnostic.bridgeDeduped, lifecycleDiscarded: replayPipelineDiagnostic.lifecycleDiscarded,
-            pendingExplicitDrop: replayPipelineDiagnostic.enqueueRejected,
-            schedulerEligible: replayPipelineDiagnostic.enqueued, selected: replayPipelineDiagnostic.launchCommitted,
-            staleDropped: replayPipelineDiagnostic.stalePruned,
-            schedulerExplicitDrop: replayPipelineDiagnostic.capacityDropped + replayPipelineDiagnostic.emergencyPendingDropped +
-                replayPipelineDiagnostic.schedulerLifecycleDiscarded + replayPipelineDiagnostic.schedulerStructuralDiscarded,
+            receivedActions: diagnostic.receivedActions, parsed: diagnostic.messagesObserved,
+            parseFailed: diagnostic.parseFailed,
+            displayable: diagnostic.messagesObserved,
+            dueClassified: diagnostic.bridged, futureClassified: diagnostic.timingPending + diagnostic.uniqueTimingCapacityDropped,
+            beforeStartFiltered: diagnostic.uniqueTimingFiltered,
+            dueBridged: diagnostic.bridged,
+            futureQueued: diagnostic.timingPending, capacityDropped: diagnostic.uniqueTimingCapacityDropped,
+            enqueued: diagnostic.enqueued, bridgeFiltered: diagnostic.visibilityFiltered,
+            bridgeDeduped: diagnostic.bridgeDeduped, lifecycleDiscarded: diagnostic.lifecycleDiscarded,
+            pendingExplicitDrop: diagnostic.enqueueRejected,
+            schedulerEligible: diagnostic.enqueued, selected: diagnostic.launchCommitted,
+            staleDropped: diagnostic.stalePruned,
+            schedulerExplicitDrop: diagnostic.capacityDropped + diagnostic.emergencyPendingDropped +
+                diagnostic.schedulerLifecycleDiscarded + diagnostic.schedulerStructuralDiscarded,
             schedulerRetained,
-            launched: replayPipelineDiagnostic.launchCommitted, displayed: replayPipelineDiagnostic.launched
+            launched: diagnostic.launchCommitted, displayed: diagnostic.launched
         }) || { stages: {}, lostUnaccounted: 0, overflowUnaccounted: 0, valid: false };
         const currentWindow = {
             input: temporalDisplayable,
             displayable: temporalDisplayable,
-            due: replayPipelineDiagnostic.bridged,
-            enqueued: replayPipelineDiagnostic.enqueued,
-            selected: replayPipelineDiagnostic.launchCommitted,
-            displayed: replayPipelineDiagnostic.launched
+            due: diagnostic.bridged,
+            enqueued: diagnostic.enqueued,
+            selected: diagnostic.launchCommitted,
+            displayed: diagnostic.launched
         };
         const blankCause = core?.classifyReplayBlankCause?.({
             conservationValid: ledger.valid, lostUnaccounted: ledger.lostUnaccounted,
-            lifecycleDiscarded: replayPipelineDiagnostic.lifecycleDiscarded,
-            generationDiscarded: replayPipelineDiagnostic.pendingGenerationMismatch + replayPipelineDiagnostic.generationInvalidated,
+            lifecycleDiscarded: diagnostic.lifecycleDiscarded,
+            generationDiscarded: diagnostic.pendingGenerationMismatch + diagnostic.generationInvalidated,
             currentWindowInput: currentWindow.input, currentWindowDisplayable: currentWindow.displayable,
             currentWindowDue: currentWindow.due, currentWindowDisplayed: currentWindow.displayed,
-            selected: replayPipelineDiagnostic.launchCommitted, launched: replayPipelineDiagnostic.launchCommitted,
-            schedulerRetained, schedulerBlocked: replayPipelineDiagnostic.selectionNoneCollisionBlocked,
-            staleDropped: replayPipelineDiagnostic.stalePruned, capacityDropped: replayPipelineDiagnostic.uniqueTimingCapacityDropped,
-            futureQueued: replayPipelineDiagnostic.timingPending,
-            beforeStartFiltered: replayPipelineDiagnostic.uniqueTimingFiltered,
-            acquisitionForward: replayPipelineDiagnostic.sequentialTemporalProgress === 'FORWARD',
-            coverageGap: ['LONG_GAP', 'VERY_LONG_GAP'].includes(replayPipelineDiagnostic.nearestFutureClass)
+            selected: diagnostic.launchCommitted, launched: diagnostic.launchCommitted,
+            schedulerRetained, schedulerBlocked: diagnostic.selectionNoneCollisionBlocked,
+            staleDropped: diagnostic.stalePruned, capacityDropped: diagnostic.uniqueTimingCapacityDropped,
+            futureQueued: diagnostic.timingPending,
+            beforeStartFiltered: diagnostic.uniqueTimingFiltered,
+            acquisitionForward: diagnostic.sequentialTemporalProgress === 'FORWARD',
+            coverageGap: ['LONG_GAP', 'VERY_LONG_GAP'].includes(diagnostic.nearestFutureClass)
         }) || 'UNKNOWN';
         const ratio = (numerator, denominator) => denominator > 0 ? numerator / denominator : null;
+        const scope = includeScope ? replayDiagnosticScopeStatus() : null;
         return Object.freeze({
-            receivedActions: replayPipelineDiagnostic.receivedActions,
-            parsed: replayPipelineDiagnostic.messagesObserved,
-            parseFailed: replayPipelineDiagnostic.parseFailed,
-            displayable: replayPipelineDiagnostic.messagesObserved,
+            diagnosticScope: scope,
+            accountingComplete: scope ? !scope.incomplete : true,
+            receivedActions: diagnostic.receivedActions,
+            parsed: diagnostic.messagesObserved,
+            parseFailed: diagnostic.parseFailed,
+            displayable: diagnostic.messagesObserved,
             invalid: 0,
             unsupported: 0,
-            beforeStartFiltered: replayPipelineDiagnostic.uniqueTimingFiltered,
-            staleDropped: replayPipelineDiagnostic.stalePruned,
-            schedulerCapacityDropped: replayPipelineDiagnostic.capacityDropped,
-            emergencyPendingDropped: replayPipelineDiagnostic.emergencyPendingDropped,
+            beforeStartFiltered: diagnostic.uniqueTimingFiltered,
+            staleDropped: diagnostic.stalePruned,
+            schedulerCapacityDropped: diagnostic.capacityDropped,
+            emergencyPendingDropped: diagnostic.emergencyPendingDropped,
             exactIdDeduped: replayGapEvidence?.exactIdDeduped === true ? 1 : 0,
-            dueClassified: replayPipelineDiagnostic.uniqueTimingDue,
-            dueBridged: replayPipelineDiagnostic.bridged,
-            futureClassified: replayPipelineDiagnostic.uniqueTimingFutureBuffered,
-            futureQueued: replayPipelineDiagnostic.timingPending,
-            capacityDropped: replayPipelineDiagnostic.uniqueTimingCapacityDropped,
-            schedulerEligible: replayPipelineDiagnostic.enqueued,
-            schedulerBlocked: replayPipelineDiagnostic.selectionNoneCollisionBlocked,
-            selectionAttempts: replayPipelineDiagnostic.launchAttempted,
-            schedulerSelected: replayPipelineDiagnostic.launchCommitted,
-            collisionDropped: replayPipelineDiagnostic.staleAfterCollision,
+            dueClassified: diagnostic.uniqueTimingDue,
+            dueBridged: diagnostic.bridged,
+            futureClassified: diagnostic.uniqueTimingFutureBuffered,
+            futureQueued: diagnostic.timingPending,
+            capacityDropped: diagnostic.uniqueTimingCapacityDropped,
+            schedulerEligible: diagnostic.enqueued,
+            schedulerBlocked: diagnostic.selectionNoneCollisionBlocked,
+            selectionAttempts: diagnostic.launchAttempted,
+            schedulerSelected: diagnostic.launchCommitted,
+            collisionDropped: diagnostic.staleAfterCollision,
             readabilityDropped: 0,
             densityDropped: 0,
             subtitleDropped: 0,
             hardSafetyDropped: 0,
-            launched: replayPipelineDiagnostic.launchCommitted,
-            displayed: replayPipelineDiagnostic.launched,
-            launchRejected: replayPipelineDiagnostic.launchRejected,
-            rendererDropped: Math.max(0, replayPipelineDiagnostic.launchCommitted - replayPipelineDiagnostic.launched),
-            lifecycleDiscarded: replayPipelineDiagnostic.lifecycleDiscarded + replayPipelineDiagnostic.schedulerLifecycleDiscarded,
-            generationDiscarded: replayPipelineDiagnostic.pendingGenerationMismatch + replayPipelineDiagnostic.generationInvalidated,
+            launched: diagnostic.launchCommitted,
+            displayed: diagnostic.launched,
+            launchRejected: diagnostic.launchRejected,
+            rendererDropped: Math.max(0, diagnostic.launchCommitted - diagnostic.launched),
+            lifecycleDiscarded: diagnostic.lifecycleDiscarded + diagnostic.schedulerLifecycleDiscarded,
+            generationDiscarded: diagnostic.pendingGenerationMismatch + diagnostic.generationInvalidated,
             stages: ledger.stages,
             parserLost: ledger.stages?.parser?.lost || 0,
             classificationLost: ledger.stages?.classification?.lost || 0,
@@ -741,9 +812,9 @@
             rendererLost: (ledger.stages?.launch?.lost || 0) + (ledger.stages?.renderer?.lost || 0),
             lostUnaccounted: ledger.lostUnaccounted,
             overflowUnaccounted: ledger.overflowUnaccounted,
-            displayableToSelected: ratio(replayPipelineDiagnostic.launchCommitted, temporalDisplayable),
-            displayableToDisplayed: ratio(replayPipelineDiagnostic.launched, temporalDisplayable),
-            launchedToDisplayed: ratio(replayPipelineDiagnostic.launched, replayPipelineDiagnostic.launchCommitted),
+            displayableToSelected: ratio(diagnostic.launchCommitted, temporalDisplayable),
+            displayableToDisplayed: ratio(diagnostic.launched, temporalDisplayable),
+            launchedToDisplayed: ratio(diagnostic.launched, diagnostic.launchCommitted),
             currentWindowInputCountClass: core?.classifyReplayCount?.(currentWindow.input) || 'UNKNOWN',
             currentWindowDisplayableCountClass: core?.classifyReplayCount?.(currentWindow.displayable) || 'UNKNOWN',
             currentWindowDueCountClass: core?.classifyReplayCount?.(currentWindow.due) || 'UNKNOWN',
@@ -757,12 +828,12 @@
             currentWindowSelected: currentWindow.selected,
             currentWindowDisplayed: currentWindow.displayed,
             schedulerRetained,
-            acquisitionForward: replayPipelineDiagnostic.sequentialTemporalProgress === 'FORWARD',
-            coverageGap: ['LONG_GAP', 'VERY_LONG_GAP'].includes(replayPipelineDiagnostic.nearestFutureClass),
+            acquisitionForward: diagnostic.sequentialTemporalProgress === 'FORWARD',
+            coverageGap: ['LONG_GAP', 'VERY_LONG_GAP'].includes(diagnostic.nearestFutureClass),
             sourceSparse: replayGapOriginStatus().gapOriginClass === 'SOURCE_SPARSE',
             blankCause,
-            warning: ledger.valid !== true || ledger.lostUnaccounted > 0 || ledger.overflowUnaccounted > 0 ||
-                replayPipelineDiagnostic.launchCommitted > replayPipelineDiagnostic.launched ||
+            warning: scope?.incomplete === true || ledger.valid !== true || ledger.lostUnaccounted > 0 || ledger.overflowUnaccounted > 0 ||
+                diagnostic.launchCommitted > diagnostic.launched ||
                 (currentWindow.displayable > 0 && currentWindow.displayed === 0)
         });
     }
@@ -1089,11 +1160,13 @@
     }
 
     function postLifecycleInvalidated() {
+        if (diagnosticScopes.currentLifecycle() !== pageLifecycleGeneration) openReplayDiagnosticScope();
         window.postMessage({
             source: 'liveflow-page-state',
             type: NAVIGATION_INVALIDATED_TYPE,
             pageRevision,
-            pageLifecycleGeneration
+            pageLifecycleGeneration,
+            diagnosticScopeEpoch: diagnosticScopes.currentEpoch()
         }, window.location.origin);
     }
 
@@ -1189,7 +1262,7 @@
         invalidateReplaySeekAuthority();
         const abortIssued = Boolean(activeAbortController);
         stopReadLoop('navigation');
-        replayPipelineDiagnostic = createReplayPipelineDiagnostic();
+        openReplayDiagnosticScope(pageLifecycleGeneration + 1);
         replayTemporalStarvationDiagnostic = createReplayTemporalStarvationDiagnostic();
         resetReplayGapOriginDiagnostic();
         replayEarlyResumeCoverageBefore = null;
@@ -2807,46 +2880,20 @@
             }
             return;
         }
-        if (event.data.type === REPLAY_DISPLAYED_TYPE && pageState.mode === 'replay' && event.data.pageLifecycleGeneration === pageLifecycleGeneration) {
-            replayRestartDiagnostic.displayedSinceRestart = true;
-            replayPipelineDiagnostic.launched += 1;
-            replayPipelineDiagnostic.firstLaunchObserved = true;
-            observeReplayRuntimeAccounting('displayed');
+        if (event.data.type === 'LIVEFLOW_REPLAY_DIAGNOSTIC_SCOPE_HELLO') {
+            postReplayDiagnosticScope();
             return;
         }
-        if (event.data.type === REPLAY_PIPELINE_DIAGNOSTIC_TYPE && pageState.mode === 'replay' &&
-            event.data.pageLifecycleGeneration === pageLifecycleGeneration) {
-            for (const [eventKey, diagnosticKey] of [['inputCount', 'bridgeInput'], ['enqueuedCount', 'enqueued'],
-                ['visibilityFiltered', 'visibilityFiltered'], ['enqueueRejected', 'enqueueRejected'],
-                ['exactIdDedupedCount', 'bridgeDeduped'], ['lifecycleDiscarded', 'lifecycleDiscarded'],
-                ['lifecycleDiscardedDisplayDisabled', 'lifecycleDiscardedDisplayDisabled'],
-                ['lifecycleDiscardedMediaMissing', 'lifecycleDiscardedMediaMissing'],
-                ['lifecycleDiscardedMediaPaused', 'lifecycleDiscardedMediaPaused'],
-                ['lifecycleDiscardedMediaEnded', 'lifecycleDiscardedMediaEnded'],
-                ['lifecycleDiscardedMediaNotReady', 'lifecycleDiscardedMediaNotReady'],
-                ['lifecycleDiscardedAdShowing', 'lifecycleDiscardedAdShowing'],
-                ['lifecycleDiscardedAdInterrupting', 'lifecycleDiscardedAdInterrupting']]) {
-                if (Number.isInteger(event.data[eventKey]) && event.data[eventKey] >= 0) replayPipelineDiagnostic[diagnosticKey] += event.data[eventKey];
-            }
-            const scheduler = event.data.scheduler;
-            if (scheduler && typeof scheduler === 'object') {
-                for (const key of ['pendingCurrent', 'schedulerLifecycleDiscarded', 'schedulerStructuralDiscarded', 'opportunitiesArmed', 'opportunitiesEvaluated', 'stalePruned', 'capacityDropped', 'emergencyPendingDropped', 'staleAfterCollision', 'staleAfterPacing', 'staleAfterSelectionMiss', 'staleAlreadyOnEnqueue', 'staleOther', 'selectionNone', 'selectionNoneNoPending', 'selectionNoneCollisionBlocked', 'selectionNoneNoEligible', 'collisionBlocked', 'geometryUnknown', 'generationInvalidated', 'geometryInvalidated', 'launchAttempted', 'launchRejected', 'launchCommitted', 'collisionActiveDanmaku', 'collisionSubtitle', 'collisionCandidateGeometry', 'collisionNoUsableLane', 'collisionOther']) {
-                    if (Number.isInteger(scheduler[key]) && scheduler[key] >= 0) replayPipelineDiagnostic[key] = scheduler[key];
+        if (event.data.type === REPLAY_PIPELINE_DIAGNOSTIC_TYPE) {
+            const before = replayPipelineDiagnostic.launched;
+            if (diagnosticScopes.receive(event.data)) {
+                if (replayPipelineDiagnostic.launched > before) {
+                    replayRestartDiagnostic.displayedSinceRestart = true;
+                    observeReplayRuntimeAccounting('displayed');
+                } else {
+                    observeReplayRuntimeAccounting('scheduler');
                 }
-                if (['IDLE', 'ARMED', 'EVALUATING'].includes(scheduler.schedulerState)) replayPipelineDiagnostic.schedulerState = scheduler.schedulerState;
-                if (['LOW', 'MEDIUM', 'HIGH', 'BURST'].includes(scheduler.sourceActivityBand)) replayPipelineDiagnostic.sourceActivityBand = scheduler.sourceActivityBand;
-                if (['NONE', 'SOURCE_ACTIVITY', 'PRESSURE_RESCUE', 'BOTH'].includes(scheduler.densityProvenance)) replayPipelineDiagnostic.densityProvenance = scheduler.densityProvenance;
-                if (['NONE', 'SHORT', 'NOTICEABLE', 'LONG'].includes(scheduler.launchGapClass)) replayPipelineDiagnostic.launchGapClass = scheduler.launchGapClass;
-                const gapCause = scheduler.launchGapCause === 'NO_DUE_COMMENT' && replayPending.length > 0 ? 'WAITING_FOR_FUTURE' : scheduler.launchGapCause;
-                if (['NO_DUE_COMMENT', 'WAITING_FOR_FUTURE', 'PACING', 'COLLISION_BLOCKED', 'SELECTION_NONE', 'GEOMETRY', 'STALE_ONLY', 'UNKNOWN'].includes(gapCause)) replayPipelineDiagnostic.launchGapCause = gapCause;
-                for (const key of ['launchGapDuePending', 'launchGapEligibleCandidate', 'launchGapActiveDanmaku', 'launchGapCollisionBlocked']) {
-                    if (typeof scheduler[key] === 'boolean') replayPipelineDiagnostic[key] = scheduler[key];
-                }
-                if (['IDLE', 'ARMED', 'EVALUATING'].includes(scheduler.launchGapSchedulerState)) replayPipelineDiagnostic.launchGapSchedulerState = scheduler.launchGapSchedulerState;
-                if (['NORMAL', 'COMPACT', 'DENSE', 'MAX_READABLE'].includes(scheduler.launchGapDensityLevel)) replayPipelineDiagnostic.launchGapDensityLevel = scheduler.launchGapDensityLevel;
-                replayPipelineDiagnostic.launchGapNearestFutureClass = replayPipelineDiagnostic.nearestFutureClass;
             }
-            observeReplayRuntimeAccounting('scheduler');
             return;
         }
         if (event.data.type === RESUME_READ_LOOP_TYPE) {
@@ -2908,7 +2955,8 @@
             replaySeekEpoch += 1;
             observeReplayRuntimeAccounting('seek');
             observeReplayControlShadow('SEEK_STARTED');
-            replayPipelineDiagnostic = createReplayPipelineDiagnostic();
+            const previousDiagnosticEpoch = openReplayDiagnosticScope();
+            postReplayDiagnosticScope(previousDiagnosticEpoch);
             replayTimingDiagnosticSeen = createReplayTimingDiagnosticSeen();
             replayAwaitingFirstFreshSequentialResponse = false;
             replayReanchorIntent = null;

@@ -654,27 +654,29 @@ test('actual overlay cleanup publishes lifecycle removal to the Replay scheduler
     const messages = [];
     const context = vm.createContext({
         core, currentChatMode: 'replay', currentPageLifecycleGeneration: 1,
+        replayDiagnosticEpoch: 0, replayDiagnosticLifecycle: 1, replayDiagnosticSequence: 0,
+        replayDiagnosticBatch: {}, replayDiagnosticDisplayed: 0, replayDiagnosticIncomplete: false,
         REPLAY_PIPELINE_DIAGNOSTIC_TYPE: 'LIVEFLOW_REPLAY_PIPELINE_DIAGNOSTIC',
         window: { location: { origin: 'https://www.youtube.com' }, postMessage: (message) => messages.push(message) },
         updateReplayLaunchGap() {}, disconnectSubtitleGeometryObservers() {},
         rendererGeneration: 1, activeDanmaku: new Map(), laneStates: [],
         overlayRoot: null, overlaySurface: null
     });
-    vm.runInContext(['createReplaySchedulerDiagnostic', 'publishReplaySchedulerDiagnostic',
+    vm.runInContext(['createReplaySchedulerDiagnostic', 'publishReplayScopeSnapshot', 'publishReplaySchedulerDiagnostic',
         'observeReplayScheduler', 'cleanupOverlay'].map((name) => functionSource(content, name)).join('\n') +
         '\nreplaySchedulerDiagnostic = createReplaySchedulerDiagnostic();', context);
     const h = harness({ observe: (event) => context.observeReplayScheduler(event) });
     context.phase3Runtime = h.runtime;
     for (const id of ['one', 'two', 'three']) h.enqueue(id);
-    const receiver = main.match(/for \(const key of \['pendingCurrent'[^]*?\n                \}/)[0];
+    vm.runInContext(functionSource(main, 'applyReplayDiagnosticSnapshot'), context);
     vm.runInContext(functionSource(main, 'createReplayPipelineDiagnostic') +
         '\nreplayPipelineDiagnostic = createReplayPipelineDiagnostic();', context);
     Object.assign(context.replayPipelineDiagnostic, { receivedActions: 3, messagesObserved: 3, bridged: 3, enqueued: 3 });
     const ledgerCall = main.match(/core\?\.computeReplayAccountingLedger\?\.\(\{[^]*?\}\)/)[0];
-    const ledger = () => vm.runInContext(`schedulerRetained = replayPipelineDiagnostic.pendingCurrent; ${ledgerCall}`, context);
+    context.diagnostic = context.replayPipelineDiagnostic;
+    const ledger = () => vm.runInContext(`schedulerRetained = diagnostic.pendingCurrent; ${ledgerCall}`, context);
     const receive = () => {
-        context.scheduler = messages.at(-1).scheduler;
-        vm.runInContext(receiver, context);
+        context.applyReplayDiagnosticSnapshot(context.diagnostic, messages.at(-1));
     };
     receive();
     // Establish the coherent pre-cleanup snapshot; this fixture isolates clear attribution.

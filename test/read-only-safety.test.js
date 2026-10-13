@@ -462,7 +462,7 @@ test('Replay post-reanchor pipeline diagnostic is shape-only, seek-scoped, and r
     assert.doesNotMatch(pageStateSource, /freshChainSource = '(?:OLD|INITIAL|WATCH|NATIVE)/);
     assert.match(pageStateSource, /event\.target !== getCurrentMainVideo\(\)[^]*ownedVideoTimeupdateObserved \+= 1[^]*flushReplayPending\([^]*'timeupdate'/);
     assert.match(pageStateSource, /bridged \+= selection\.due\.length/);
-    assert.match(pageStateSource, /addEventListener\('seeking'[^]*replayPipelineDiagnostic = createReplayPipelineDiagnostic\(\)/);
+    assert.match(pageStateSource, /addEventListener\('seeking'[^]*openReplayDiagnosticScope\(\)[^]*postReplayDiagnosticScope\(previousDiagnosticEpoch\)/);
     assert.match(contentSource, /enqueuedCount \+= 1/);
     assert.match(contentSource, /type: REPLAY_PIPELINE_DIAGNOSTIC_TYPE[^]*enqueuedCount/);
     assert.match(contentSource, /pendingCurrent:[^]*opportunitiesArmed:[^]*opportunitiesEvaluated:[^]*stalePruned:[^]*selectionNone:[^]*collisionBlocked:[^]*geometryUnknown:[^]*generationInvalidated:[^]*geometryInvalidated:[^]*launchCommitted:[^]*schedulerState: 'IDLE'/);
@@ -471,7 +471,7 @@ test('Replay post-reanchor pipeline diagnostic is shape-only, seek-scoped, and r
     assert.match(runtimeSource, /isOutsideHardExclusions/);
     assert.match(contentSource, /blockedReason: 'CANDIDATE_GEOMETRY_INVALID'/);
     assert.match(contentSource, /generated\.candidates\.length === 0[^]*blockedReason: hardExclusions\.length \? 'SUBTITLE_EXCLUSION' : 'NO_USABLE_LANE'/);
-    assert.match(contentSource, /event\.type === 'seeking'[^]*replaySchedulerDiagnostic = createReplaySchedulerDiagnostic\(\)/);
+    assert.match(contentSource, /cleanupOverlay\(\);\s+if \(event\.type === 'seeking'\) closeReplayDiagnosticScope\(\)/);
     assert.match(contentSource, /observe: observeReplayScheduler/);
     assert.match(contentSource, /function getCandidateProof[^]*applyOverlaySurfaceRect\(surface\)[^]*overlaySurface\.appendChild\(probe\)[^]*probe\.getBoundingClientRect\(\)/);
     assert.match(pageStateSource, /LiveFlowReplayPipelineDiagnostic = Object\.freeze\([^]*return Object\.freeze\(\{ \.\.\.replayPipelineDiagnostic \}\)/);
@@ -571,14 +571,14 @@ test('Replay bootstrap mode does not require Native Chat iframe to be open', () 
 });
 
 test('Replay accounting ledger is aggregate-only and detects unaccounted boundaries', () => {
-    const ledger = pageStateSource.match(/function replayAccountingStatus\(\) \{[^]*?\n    \}/)?.[0] || '';
+    const ledger = pageStateSource.match(/function replayAccountingStatus\([^]*?\n    \}/)?.[0] || '';
     assert.match(ledger, /computeReplayAccountingLedger/);
     assert.match(ledger, /lostUnaccounted: ledger\.lostUnaccounted/);
     assert.match(pageStateSource, /LiveFlowReplayAccountingDiagnostic = Object\.freeze/);
     assert.match(pageStateSource, /receivedActions[^]*parseFailed[^]*displayable[^]*beforeStartFiltered[^]*capacityDropped/);
     assert.match(contentSource, /event\.type === 'CAPACITY_DROPPED'[^]*capacityDropped \+=/);
     assert.match(contentSource, /event\.type === 'EMERGENCY_PENDING_DROPPED'[^]*emergencyPendingDropped \+=/);
-    assert.match(ledger, /schedulerExplicitDrop: replayPipelineDiagnostic\.capacityDropped \+ replayPipelineDiagnostic\.emergencyPendingDropped/);
+    assert.match(ledger, /schedulerExplicitDrop: diagnostic\.capacityDropped \+ diagnostic\.emergencyPendingDropped/);
     assert.doesNotMatch(ledger, /opaqueToken|continuation|timestamp|offsetMsec|author|targetIdentity|url/i);
     assert.doesNotMatch(ledger, /fetch\(|performRead\(|setTimeout|setInterval|requestAnimationFrame/);
 });

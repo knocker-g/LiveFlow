@@ -8,7 +8,6 @@
     const RESUME_READ_LOOP_TYPE = 'LIVEFLOW_RESUME_CHAT_READ_AFTER_VISIBILITY';
     const NAVIGATION_INVALIDATED_TYPE = 'LIVEFLOW_PAGE_LIFECYCLE_INVALIDATED';
     const LIFECYCLE_DIAGNOSTIC_TYPE = 'LIVEFLOW_READ_LIFECYCLE_DIAGNOSTIC';
-    const REPLAY_DISPLAYED_TYPE = 'LIVEFLOW_REPLAY_DANMAKU_DISPLAYED';
     const REPLAY_AD_ENTER_TYPE = 'LIVEFLOW_REPLAY_AD_ENTER';
     const REPLAY_AD_EXIT_TYPE = 'LIVEFLOW_REPLAY_AD_EXIT';
     const REPLAY_PIPELINE_DIAGNOSTIC_TYPE = 'LIVEFLOW_REPLAY_PIPELINE_DIAGNOSTIC';
@@ -92,6 +91,66 @@
     let livePresentationResumeGateActive = false;
     let livePresentationAccounting = createLivePresentationAccounting();
     let replaySchedulerDiagnostic = createReplaySchedulerDiagnostic();
+    let replayDiagnosticEpoch = null;
+    let replayDiagnosticLifecycle = 0;
+    let replayDiagnosticSequence = 0;
+    let replayDiagnosticBatch = {};
+    let replayDiagnosticDisplayed = 0;
+    let replayDiagnosticAwaiting = null;
+    let replayDiagnosticIncomplete = false;
+
+    function publishReplayScopeSnapshot(terminal = false) {
+        if (replayDiagnosticEpoch === null) return;
+        window.postMessage({ source: 'liveflow-content-script', type: REPLAY_PIPELINE_DIAGNOSTIC_TYPE,
+            pageLifecycleGeneration: replayDiagnosticLifecycle, diagnosticScopeEpoch: replayDiagnosticEpoch,
+            diagnosticSequence: ++replayDiagnosticSequence, diagnosticTerminal: terminal,
+            diagnosticIncomplete: replayDiagnosticIncomplete, batch: { ...replayDiagnosticBatch },
+            displayedCount: replayDiagnosticDisplayed, scheduler: { ...replaySchedulerDiagnostic } }, window.location.origin);
+    }
+
+    function resetReplayDiagnosticCounters() {
+        replayDiagnosticSequence = 0;
+        replayDiagnosticBatch = {};
+        replayDiagnosticDisplayed = 0;
+        replaySchedulerDiagnostic = createReplaySchedulerDiagnostic();
+        resetReplayLaunchGapDiagnostic();
+    }
+
+    function closeReplayDiagnosticScope() {
+        if (replayDiagnosticEpoch === null) {
+            // A second transition before binding cannot be represented as a complete scope.
+            replayDiagnosticIncomplete = true;
+            return;
+        }
+        publishReplayScopeSnapshot(true);
+        replayDiagnosticAwaiting = replayDiagnosticEpoch;
+        replayDiagnosticEpoch = null;
+        resetReplayDiagnosticCounters();
+    }
+
+    function handleReplayDiagnosticScopeOpen(event) {
+        if (event.source !== window || event.origin !== window.location.origin) return;
+        const data = event.data;
+        if (data?.source !== 'liveflow-page-state' || data.type !== 'LIVEFLOW_REPLAY_DIAGNOSTIC_SCOPE_OPEN' ||
+            !Number.isSafeInteger(data.diagnosticScopeEpoch) || data.diagnosticScopeEpoch < 0 ||
+            data.pageLifecycleGeneration !== currentPageLifecycleGeneration) return;
+        if (replayDiagnosticEpoch === data.diagnosticScopeEpoch ||
+            (replayDiagnosticAwaiting !== null && data.diagnosticScopeEpoch <= replayDiagnosticAwaiting) ||
+            (replayDiagnosticEpoch !== null && data.diagnosticScopeEpoch < replayDiagnosticEpoch)) return;
+        const initialBinding = replayDiagnosticEpoch === null && replayDiagnosticAwaiting === null && data.previousEpoch === null;
+        const expectedHandoff = replayDiagnosticEpoch === null && replayDiagnosticAwaiting !== null &&
+            data.previousEpoch === replayDiagnosticAwaiting;
+        if (!initialBinding && !expectedHandoff) {
+            // Never clear runtime here: a missed close only invalidates diagnostics.
+            replayDiagnosticIncomplete = true;
+            resetReplayDiagnosticCounters();
+        }
+        replayDiagnosticEpoch = data.diagnosticScopeEpoch;
+        replayDiagnosticLifecycle = data.pageLifecycleGeneration;
+        replayDiagnosticAwaiting = null;
+        publishReplayScopeSnapshot();
+    }
+
     let userEnabled = true;
     let nativeChatVisible = true;
     let nativeChatKnown = false;
@@ -212,12 +271,7 @@
 
     function publishReplaySchedulerDiagnostic() {
         if (currentChatMode !== 'replay') return;
-        window.postMessage({
-            source: 'liveflow-content-script',
-            type: REPLAY_PIPELINE_DIAGNOSTIC_TYPE,
-            pageLifecycleGeneration: currentPageLifecycleGeneration,
-            scheduler: { ...replaySchedulerDiagnostic }
-        }, window.location.origin);
+        publishReplayScopeSnapshot();
     }
 
     function observeReplayScheduler(event) {
@@ -1388,7 +1442,8 @@
                 semanticClass: special ? 'SPECIAL' : 'NORMAL' })
         });
         if (currentChatMode === 'replay') {
-            window.postMessage({ source: 'liveflow-content-script', type: REPLAY_DISPLAYED_TYPE, pageLifecycleGeneration: currentPageLifecycleGeneration }, window.location.origin);
+            replayDiagnosticDisplayed += 1;
+            publishReplaySchedulerDiagnostic();
         }
         animation.finished.then(() => {
             activeDanmaku.delete(token);
@@ -1504,8 +1559,10 @@
     }
 
     function publishReplayBatchAccounting(fields) {
-        window.postMessage({ source: 'liveflow-content-script', type: REPLAY_PIPELINE_DIAGNOSTIC_TYPE,
-            pageLifecycleGeneration: currentPageLifecycleGeneration, ...fields }, window.location.origin);
+        for (const [key, value] of Object.entries(fields)) {
+            if (Number.isInteger(value) && value >= 0) replayDiagnosticBatch[key] = (replayDiagnosticBatch[key] || 0) + value;
+        }
+        publishReplaySchedulerDiagnostic();
     }
 
     function handleInitialContinuation(event) {
@@ -1528,6 +1585,9 @@
             : null;
         currentPageRevision = Number.isInteger(event.data.pageRevision) ? event.data.pageRevision : currentPageRevision;
         currentPageLifecycleGeneration = event.data.pageLifecycleGeneration;
+        if (replayDiagnosticEpoch === null && replayDiagnosticAwaiting === null) {
+            window.postMessage({ source: 'liveflow-content-script', type: 'LIVEFLOW_REPLAY_DIAGNOSTIC_SCOPE_HELLO' }, window.location.origin);
+        }
         currentChatMode = ['live', 'replay'].includes(event.data.mode) ? event.data.mode : 'unknown';
         acceptingReadResults = true;
         logInfo(`New page established: revision=${currentPageRevision}, generation=${currentPageLifecycleGeneration}`);
@@ -1695,6 +1755,19 @@
         currentMessages = [];
         currentChatMode = 'unknown';
         cleanupOverlay();
+        if (Number.isSafeInteger(event.data.diagnosticScopeEpoch) &&
+            event.data.pageLifecycleGeneration === currentPageLifecycleGeneration &&
+            event.data.diagnosticScopeEpoch > (replayDiagnosticEpoch ?? replayDiagnosticAwaiting ?? -1)) {
+            closeReplayDiagnosticScope();
+            resetReplayDiagnosticCounters();
+            replayDiagnosticEpoch = event.data.diagnosticScopeEpoch;
+            replayDiagnosticLifecycle = event.data.pageLifecycleGeneration;
+            replayDiagnosticAwaiting = null;
+            replayDiagnosticIncomplete = false;
+            publishReplayScopeSnapshot();
+        } else {
+            publishReplayScopeSnapshot();
+        }
         logInfo(`Page lifecycle invalidated: revision=${event.data.pageRevision}, generation=${event.data.pageLifecycleGeneration}`);
     }
 
@@ -1733,15 +1806,13 @@
             return;
         }
         if (currentChatMode !== 'replay') return;
-        if (event.type === 'seeking') {
-            replaySchedulerDiagnostic = createReplaySchedulerDiagnostic();
-            resetReplayLaunchGapDiagnostic();
-            publishReplaySchedulerDiagnostic();
-        }
         currentMessages = [];
         cleanupOverlay();
+        if (event.type === 'seeking') closeReplayDiagnosticScope();
     }
 
+    window.addEventListener('message', handleReplayDiagnosticScopeOpen);
+    window.postMessage({ source: 'liveflow-content-script', type: 'LIVEFLOW_REPLAY_DIAGNOSTIC_SCOPE_HELLO' }, window.location.origin);
     window.addEventListener('message', handleInitialContinuation);
     window.addEventListener('message', handleReadResult);
     window.addEventListener('message', handlePageLifecycleInvalidated);
