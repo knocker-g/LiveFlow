@@ -3041,7 +3041,9 @@
     window.addEventListener('pause', (event) => {
         if (event.target !== getCurrentMainVideo()) return;
         cancelReplayTemporalWakeup();
-        observeReplayControlShadow('MEDIA_PAUSE', { initialBootstrap: Boolean(replayInitialBootstrapWait) });
+        observeReplayControlShadow('MEDIA_PAUSE', { initialBootstrap: Boolean(replayInitialBootstrapWait || (replayProductionControlState?.phase === 'BOOTSTRAPPING' &&
+            replayInitialBootstrapCancelledLifecycleId !== pageLifecycleGeneration &&
+            replayBootstrapEligibilityLifecycleId !== pageLifecycleGeneration && initialReplayBootstrapIntentIsCurrent())) });
         suspendReplayForMediaPause();
     }, true);
     for (const type of ['waiting', 'stalled']) window.addEventListener(type, (event) => {

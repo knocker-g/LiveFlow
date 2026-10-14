@@ -71,6 +71,14 @@ export function instrumentInitialAuthorityTrace(main, core, identity) {
     main = once(main, "                transitionCount: 0, mismatchCount: 0, latestMismatch: 'NONE'\n            });",
         "                transitionCount: 0, mismatchCount: 0, latestMismatch: 'NONE'\n            });\n            return Object.freeze({ ...initialShadowStatus, initialAuthorityTrace: initialTraceSnapshot() });");
 
+    main = edit(main, 'deferReplayInitialBootstrap', s => once(s, '        return true;',
+        '        ' + trace('INITIAL_INTENT_DEFERRED') + '\n        return true;'));
+    main = entry(main, 'resumeInitialReplayBootstrap', trace('INITIAL_INTENT_RESUME_ENTRY'));
+    main = entry(main, 'settleReplayAdExit', trace('INITIAL_READY_EVENT'));
+    for (const type of ['REPLAY_AD_ENTER_TYPE', 'REPLAY_AD_EXIT_TYPE']) main = once(main,
+        '        if (event.data.type === ' + type + ') {',
+        '        if (event.data.type === ' + type + ') {\n            ' + trace('INITIAL_AD_SIGNAL',
+            "{ event: '" + (type === 'REPLAY_AD_ENTER_TYPE' ? 'AD_ENTER' : 'AD_EXIT_READY') + "' }"));
     main = entry(main, 'acceptReplayBootstrapCandidate', trace('BOOTSTRAP_CANDIDATE'));
     main = once(main, '        if (event.data.type === READ_REQUEST_TYPE) {',
         '        if (event.data.type === READ_REQUEST_TYPE) {\n            ' + trace('READ_REQUEST_RECEIVED'));
@@ -148,7 +156,7 @@ export function instrumentInitialAuthorityTrace(main, core, identity) {
     main = entry(main, 'postLifecycleDiagnostic', trace('READ_LIFECYCLE_EVENT', '{ event: eventName, generation: details.readGeneration ?? currentLoopGeneration, reason: details.rejectionReason, readCount }'));
     main = entry(main, 'observeReplayControlShadow', "const initialBeforePhase = replayProductionControlState?.phase;");
     main = edit(main, 'observeReplayControlShadow', s => once(s, '        return replayControlShadow?.dispatch?.(event, facts, legacyPhase) || null;',
-        '        ' + trace('CONTROL_TRANSITION', '{ event, beforePhase: initialBeforePhase, afterPhase: replayProductionControlState?.phase, failure: productionTransition?.failure }') + '\n        return replayControlShadow?.dispatch?.(event, facts, legacyPhase) || null;'));
+        '        ' + trace('CONTROL_TRANSITION', "{ event, beforePhase: initialBeforePhase, afterPhase: replayProductionControlState?.phase, failure: productionTransition?.failure, initialBootstrap: facts.initialBootstrap === true ? 'PRESENT' : 'ABSENT', initialIntent: replayInitialBootstrapIntent ? 'PRESENT' : 'ABSENT', bootstrapWait: replayInitialBootstrapWait ? 'PRESENT' : 'ABSENT' }") + '\n        return replayControlShadow?.dispatch?.(event, facts, legacyPhase) || null;'));
 
     core = once(core, 'function createShadowController(initialState = createReplayState(ReplayPhase.STOPPED)) {',
         'function createShadowController(initialState = createReplayState(ReplayPhase.STOPPED), initialTraceObserver = null) {');
@@ -156,7 +164,7 @@ export function instrumentInitialAuthorityTrace(main, core, identity) {
         s = once(s, '        function dispatch(event, facts = {}, legacyPhase = null) {',
             '        function dispatch(event, facts = {}, legacyPhase = null) {\n            const initialBeforePhase = state.phase, initialBeforeMismatch = mismatchCount;');
         s = once(s, '            return status();',
-            "            const initialStatus = status();\n            try { initialTraceObserver?.('SHADOW_DISPATCH', { event, beforePhase: initialBeforePhase, afterPhase: state.phase, failure: transition.failure, mismatch: latestMismatch, transitionCount, mismatchCount, mismatchDelta: mismatchCount - initialBeforeMismatch }); } catch { /* Diagnostics never escape into Product. */ }\n            return initialStatus;");
+            "            const initialStatus = status();\n            try { initialTraceObserver?.('SHADOW_DISPATCH', { event, beforePhase: initialBeforePhase, afterPhase: state.phase, failure: transition.failure, initialBootstrap: facts.initialBootstrap === true ? 'PRESENT' : 'ABSENT', mismatch: latestMismatch, transitionCount, mismatchCount, mismatchDelta: mismatchCount - initialBeforeMismatch }); } catch { /* Diagnostics never escape into Product. */ }\n            return initialStatus;");
         s = once(s, '        function compareCapability(path, snapshot, currentBinding, legacyAllowed) {',
             '        function compareCapability(path, snapshot, currentBinding, legacyAllowed) {\n            const initialBeforeMismatch = mismatchCount;');
         return once(s, '            return Object.freeze({ shadowAllowed: evaluation.allowed, legacyAllowed: legacyAllowed === true });',
