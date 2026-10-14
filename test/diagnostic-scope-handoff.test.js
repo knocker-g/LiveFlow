@@ -25,7 +25,7 @@ function harness() {
         logInfo() {},
         replayDiagnosticEpoch: null, replayDiagnosticLifecycle: 0, replayDiagnosticSequence: 0,
         replayDiagnosticBatch: {}, replayDiagnosticDisplayed: 0, replayDiagnosticAwaiting: null,
-        replayDiagnosticIncomplete: false, replayGapEvidence: null, rendererGeneration: 0,
+        replayDiagnosticIncomplete: false, replayDiagnosticBatchInProgress: false, replayGapEvidence: null, rendererGeneration: 0,
         activeDanmaku: new Map(), overlaySurface: null, overlayRoot: null,
         replayGapOriginStatus: () => ({ gapOriginClass: 'UNKNOWN' }),
         updateReplayLaunchGap() {}, resetReplayLaunchGapDiagnostic() {}, disconnectSubtitleGeometryObservers() {},
@@ -108,6 +108,7 @@ test('late old snapshots and duplicate terminal do not change current ledger', (
 });
 test('ordinary cumulative input/displayed diagnostics preserve baseline accounting, independently of B/D policy', () => {
     const h = harness(); h.enqueue(2);
+    h.c.phase3Runtime = null; // Synthetic completed-runtime snapshot; no live queue in this counter-only fixture.
     h.c.replaySchedulerDiagnostic.pendingCurrent = 0;
     h.c.replaySchedulerDiagnostic.launchCommitted = 2;
     h.c.replayDiagnosticDisplayed = 2; h.c.publishReplaySchedulerDiagnostic(); h.flush();

@@ -37,7 +37,7 @@ test('generated recorder respects native Window receiver through start/stop and 
 test('actual structural SPECIAL removal reaches scheduler ledger exactly once, including no selection', () => {
     const messages = [], context = vm.createContext({ core, currentChatMode: 'replay', currentPageLifecycleGeneration: 1,
         replayDiagnosticEpoch: 0, replayDiagnosticLifecycle: 1, replayDiagnosticSequence: 0,
-        replayDiagnosticBatch: {}, replayDiagnosticDisplayed: 0, replayDiagnosticIncomplete: false,
+        replayDiagnosticBatch: {}, replayDiagnosticDisplayed: 0, replayDiagnosticIncomplete: false, replayDiagnosticBatchInProgress: false,
         REPLAY_PIPELINE_DIAGNOSTIC_TYPE: 'pipeline', window: { location: { origin: 'https://www.youtube.com' }, postMessage: m => messages.push(m) }, updateReplayLaunchGap() {} });
     vm.runInContext(['createReplaySchedulerDiagnostic', 'publishReplayScopeSnapshot', 'publishReplaySchedulerDiagnostic', 'observeReplayScheduler'].map(n => functionSource(content, n)).join('\n') +
         '\nreplaySchedulerDiagnostic = createReplaySchedulerDiagnostic();\n' + functionSource(main, 'createReplayPipelineDiagnostic') + '\nreplayPipelineDiagnostic = createReplayPipelineDiagnostic();', context);

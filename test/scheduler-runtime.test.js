@@ -655,7 +655,7 @@ test('actual overlay cleanup publishes lifecycle removal to the Replay scheduler
     const context = vm.createContext({
         core, currentChatMode: 'replay', currentPageLifecycleGeneration: 1,
         replayDiagnosticEpoch: 0, replayDiagnosticLifecycle: 1, replayDiagnosticSequence: 0,
-        replayDiagnosticBatch: {}, replayDiagnosticDisplayed: 0, replayDiagnosticIncomplete: false,
+        replayDiagnosticBatch: {}, replayDiagnosticDisplayed: 0, replayDiagnosticIncomplete: false, replayDiagnosticBatchInProgress: false,
         REPLAY_PIPELINE_DIAGNOSTIC_TYPE: 'LIVEFLOW_REPLAY_PIPELINE_DIAGNOSTIC',
         window: { location: { origin: 'https://www.youtube.com' }, postMessage: (message) => messages.push(message) },
         updateReplayLaunchGap() {}, disconnectSubtitleGeometryObservers() {},

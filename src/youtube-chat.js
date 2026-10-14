@@ -98,6 +98,7 @@
     let replayDiagnosticDisplayed = 0;
     let replayDiagnosticAwaiting = null;
     let replayDiagnosticIncomplete = false;
+    let replayDiagnosticBatchInProgress = false;
 
     function publishReplayScopeSnapshot(terminal = false) {
         if (replayDiagnosticEpoch === null) return;
@@ -269,8 +270,12 @@
         }) || 'UNKNOWN';
     }
 
-    function publishReplaySchedulerDiagnostic() {
-        if (currentChatMode !== 'replay') return;
+    function publishReplaySchedulerDiagnostic(stableEvaluationBoundary = false) {
+        if (currentChatMode !== 'replay' || replayDiagnosticBatchInProgress) return;
+        const status = phase3Runtime?.status?.();
+        // Counters still update at every original event. Publish only a coherent event/batch boundary.
+        if (status?.state === 'EVALUATING' && !stableEvaluationBoundary) return;
+        if (Number.isInteger(status?.pendingCount)) replaySchedulerDiagnostic.pendingCurrent = status.pendingCount;
         publishReplayScopeSnapshot();
     }
 
@@ -340,7 +345,7 @@
             ? status.densityProvenance : 'NONE';
         replaySchedulerDiagnostic.schedulerState = ['IDLE', 'ARMED', 'EVALUATING'].includes(status?.state)
             ? status.state : ['IDLE', 'ARMED', 'EVALUATING'].includes(event.state) ? event.state : replaySchedulerDiagnostic.schedulerState;
-        publishReplaySchedulerDiagnostic();
+        publishReplaySchedulerDiagnostic(['LAUNCH_COMMITTED', 'LAUNCH_REJECTED', 'SELECTION_NONE', 'GENERATION_INVALIDATED', 'GEOMETRY_INVALIDATED'].includes(event.type));
     }
     let observedWatchRoot = null;
     let visibilityEvaluationQueued = false;
@@ -1518,7 +1523,8 @@
             : [];
         observeCurrentWindowSourceActivity(runtime, visibleMessages, media);
         let enqueuedCount = 0;
-        visibleMessages.forEach((message, index) => {
+        replayDiagnosticBatchInProgress = true;
+        try { visibleMessages.forEach((message, index) => {
             if (runtime.enqueue({
             message,
             generation: scheduledGeneration,
@@ -1535,7 +1541,7 @@
                 ? { width: 520, height: 68, kind: 'SPECIAL' }
                 : { width: 720, height: phase5Tuning.lineHeight, kind: 'NORMAL' }
             })) enqueuedCount += 1;
-        });
+        }); } finally { replayDiagnosticBatchInProgress = false; }
         if (currentChatMode === 'replay') {
             publishReplayBatchAccounting({ inputCount, visibleCount: visibleMessages.length, enqueuedCount,
                 visibilityFiltered: inputCount - visibleMessages.length, enqueueRejected: visibleMessages.length - enqueuedCount });
