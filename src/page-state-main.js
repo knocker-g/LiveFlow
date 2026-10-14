@@ -67,13 +67,15 @@
     const REPLAY_REANCHOR_FAILURE_REASONS = new Set(['NONE', 'NO_AUTHORITY', 'AUTHORITY_STALE', 'RELATION_ALL_BEFORE', 'RELATION_UNKNOWN', 'REANCHOR_SCHEMA_INVALID', 'NO_FRESH_CHAIN', 'OTHER']);
     let replayProductionReanchorReason = 'NONE';
     let replayPipelineDiagnostic = createReplayPipelineDiagnostic();
+    let replayTemporalPendingDiagnostic = null;
     const diagnosticScopes = window.LiveFlowDiagnosticScopeCore.createScopes(0, replayPipelineDiagnostic,
         applyReplayDiagnosticSnapshot, { closureValid: replayDiagnosticClosureValid });
 
     function replayDiagnosticClosureValid(diagnostic) {
         const status = replayAccountingStatus(diagnostic, false);
-        return Object.values(status.stages).every(stage => stage.valid === true) &&
-            status.lostUnaccounted === 0 && status.overflowUnaccounted === 0 && status.schedulerRetained === 0;
+        return status.accountingComplete && Object.values(status.stages).every(stage => stage.valid === true) &&
+            status.lostUnaccounted === 0 && status.overflowUnaccounted === 0 && status.schedulerRetained === 0 && status.futureQueued === 0 &&
+            status.temporalUnclassified === 0 && status.temporalPendingUnclassified === 0 && status.temporalDueAwaitingBridge === 0;
     }
 
     function postReplayDiagnosticScope(previousEpoch = null) {
@@ -94,7 +96,7 @@
             const ledger = replayAccountingStatus(value, false);
             return { ...scope, scheduler: ledger.stages.scheduler, lostUnaccounted: ledger.lostUnaccounted,
                 overflowUnaccounted: ledger.overflowUnaccounted,
-                accountingValid: Object.values(ledger.stages).every(stage => stage.valid === true) &&
+                accountingValid: ledger.accountingComplete && Object.values(ledger.stages).every(stage => stage.valid === true) &&
                     ledger.lostUnaccounted === 0 && ledger.overflowUnaccounted === 0 };
         });
         return { ...status, scopes, incomplete: status.incomplete || scopes.some(scope =>
@@ -472,6 +474,7 @@
         }
         replayPausedSequentialAuthority = null;
         replayAcquisitionPausedForBuffer = false;
+        observeReplayTemporalPendingRemoval('FAIL_CLOSED');
         replayPending = [];
         replaySequentialResumeHandoff = false;
         replayPipelineDiagnostic.bufferPauseActive = false;
@@ -497,6 +500,10 @@
         return {
             responsesObserved: 0, receivedActions: 0, messagesObserved: 0, parseFailed: 0,
             timingFiltered: 0, timingPending: 0, timingCapacityDropped: 0,
+            temporalBeforeStart: 0, temporalInvalid: 0, temporalDeduped: 0, temporalDiscarded: 0,
+            temporalPending: 0, temporalPendingUnclassified: 0, temporalUnclassified: 0, temporalDueAwaitingBridge: 0, temporalAccountingIncomplete: false,
+            temporalRemovalReasons: { HIDDEN: 0, AD: 0, NAVIGATION: 0, SEEK: 0, FAIL_CLOSED: 0,
+                READ_START_RESET: 0, REANCHOR_REPLACED: 0, NO_FRESH_CHAIN: 0, USER_DISABLED: 0, PAGEHIDE: 0, MODE_TRANSITION: 0, RATE_CHANGE: 0, EXPLICIT: 0, OTHER: 0 },
             replayPendingPromoted: 0, replayPendingFlushCalls: 0, replayPendingFlushFromTimeupdate: 0,
             ownedVideoTimeupdateObserved: 0, timingDueObserved: 0, timingFutureObserved: 0,
             pendingAuthorityMismatch: 0, pendingGenerationMismatch: 0, bridged: 0, enqueued: 0,
@@ -771,6 +778,34 @@
         status() { return Object.freeze({ ...replayTemporalLeadShadowDiagnostic }); }
     });
 
+    // Occurrences, not distinct IDs. Diagnostic ownership follows the queue across scope openings.
+    function recordReplayTemporalDiscard(diagnostic, count, reason) {
+        diagnostic.temporalDiscarded += count;
+        diagnostic.temporalRemovalReasons[Object.hasOwn(diagnostic.temporalRemovalReasons, reason) ? reason : 'OTHER'] += count;
+    }
+
+    function observeReplayTemporalPendingRemoval(reason) {
+        const diagnostic = replayTemporalPendingDiagnostic || replayPipelineDiagnostic;
+        if (diagnostic.temporalPending !== replayPending.length) diagnostic.temporalAccountingIncomplete = true;
+        recordReplayTemporalDiscard(diagnostic, replayPending.length, reason);
+        diagnostic.temporalPending = 0;
+        diagnostic.temporalPendingUnclassified = 0;
+        replayTemporalPendingDiagnostic = null;
+    }
+
+    function observeReplayTemporalPendingMerge(acceptedCount) {
+        if (replayTemporalPendingDiagnostic && replayTemporalPendingDiagnostic !== replayPipelineDiagnostic &&
+            replayTemporalPendingDiagnostic.temporalPending > 0) {
+            replayTemporalPendingDiagnostic.temporalAccountingIncomplete = true;
+            replayPipelineDiagnostic.temporalAccountingIncomplete = true;
+        }
+        if (acceptedCount > replayPipelineDiagnostic.temporalUnclassified) replayPipelineDiagnostic.temporalAccountingIncomplete = true;
+        replayPipelineDiagnostic.temporalUnclassified -= acceptedCount;
+        replayPipelineDiagnostic.temporalPendingUnclassified += acceptedCount;
+        replayPipelineDiagnostic.temporalPending = replayPending.length;
+        replayTemporalPendingDiagnostic = replayPipelineDiagnostic;
+    }
+
     function observeReplayPipelineResponse(result) {
         if (!result?.ok || !Array.isArray(result.messages)) return;
         replayPipelineDiagnostic.responsesObserved += 1;
@@ -778,6 +813,7 @@
             ? result.summary.actionCount : result.messages.length;
         replayPipelineDiagnostic.receivedActions += receivedActions;
         replayPipelineDiagnostic.messagesObserved += result.messages.length;
+        replayPipelineDiagnostic.temporalUnclassified += result.messages.length;
         replayPipelineDiagnostic.parseFailed += Math.max(0, receivedActions - result.messages.length);
         observeReplayRuntimeAccounting('response-accepted');
     }
@@ -819,17 +855,21 @@
 
     function replayAccountingStatus(diagnostic = replayPipelineDiagnostic, includeScope = true) {
         const core = window.LiveFlowChatReadCore;
-        const temporalDisplayable = diagnostic.uniqueTimingFiltered + diagnostic.bridged +
-            diagnostic.timingPending + diagnostic.uniqueTimingCapacityDropped;
+        const temporalDisplayable = diagnostic.temporalBeforeStart + diagnostic.temporalInvalid + diagnostic.temporalDeduped +
+            diagnostic.temporalDiscarded + diagnostic.bridged + diagnostic.temporalPending + diagnostic.timingCapacityDropped +
+            diagnostic.temporalUnclassified + diagnostic.temporalDueAwaitingBridge;
         const schedulerRetained = diagnostic.pendingCurrent;
         const ledger = core?.computeReplayAccountingLedger?.({
             receivedActions: diagnostic.receivedActions, parsed: diagnostic.messagesObserved,
             parseFailed: diagnostic.parseFailed,
             displayable: diagnostic.messagesObserved,
-            dueClassified: diagnostic.bridged, futureClassified: diagnostic.timingPending + diagnostic.uniqueTimingCapacityDropped,
-            beforeStartFiltered: diagnostic.uniqueTimingFiltered,
+            dueClassified: diagnostic.bridged, futureClassified: diagnostic.temporalPending - diagnostic.temporalPendingUnclassified + diagnostic.timingCapacityDropped,
+            beforeStartFiltered: diagnostic.temporalBeforeStart,
+            temporalInvalid: diagnostic.temporalInvalid, exactIdDeduped: diagnostic.temporalDeduped,
+            temporalDiscarded: diagnostic.temporalDiscarded,
+            temporalRetained: diagnostic.temporalUnclassified + diagnostic.temporalPendingUnclassified + diagnostic.temporalDueAwaitingBridge,
             dueBridged: diagnostic.bridged,
-            futureQueued: diagnostic.timingPending, capacityDropped: diagnostic.uniqueTimingCapacityDropped,
+            futureQueued: diagnostic.temporalPending - diagnostic.temporalPendingUnclassified, capacityDropped: diagnostic.timingCapacityDropped,
             enqueued: diagnostic.enqueued, bridgeFiltered: diagnostic.visibilityFiltered,
             bridgeDeduped: diagnostic.bridgeDeduped, lifecycleDiscarded: diagnostic.lifecycleDiscarded,
             pendingExplicitDrop: diagnostic.enqueueRejected,
@@ -866,23 +906,31 @@
         const scope = includeScope ? replayDiagnosticScopeStatus() : null;
         return Object.freeze({
             diagnosticScope: scope,
-            accountingComplete: scope ? !scope.incomplete : true,
+            accountingComplete: !diagnostic.temporalAccountingIncomplete && (scope ? !scope.incomplete : true),
             receivedActions: diagnostic.receivedActions,
             parsed: diagnostic.messagesObserved,
             parseFailed: diagnostic.parseFailed,
             displayable: diagnostic.messagesObserved,
             invalid: 0,
             unsupported: 0,
-            beforeStartFiltered: diagnostic.uniqueTimingFiltered,
+            beforeStartFiltered: diagnostic.temporalBeforeStart,
+            uniqueBeforeStartFiltered: diagnostic.uniqueTimingFiltered,
+            temporalInvalid: diagnostic.temporalInvalid, temporalDeduped: diagnostic.temporalDeduped,
+            temporalDiscarded: diagnostic.temporalDiscarded,
+            temporalRemovalReasons: Object.freeze({ ...diagnostic.temporalRemovalReasons }),
+            temporalPending: diagnostic.temporalPending, temporalPendingUnclassified: diagnostic.temporalPendingUnclassified,
+            temporalUnclassified: diagnostic.temporalUnclassified, temporalDueAwaitingBridge: diagnostic.temporalDueAwaitingBridge,
             staleDropped: diagnostic.stalePruned,
             schedulerCapacityDropped: diagnostic.capacityDropped,
             emergencyPendingDropped: diagnostic.emergencyPendingDropped,
-            exactIdDeduped: replayGapEvidence?.exactIdDeduped === true ? 1 : 0,
+            exactIdDeduped: diagnostic.temporalDeduped,
+            nearGapExactIdDeduped: replayGapEvidence?.exactIdDeduped === true ? 1 : 0,
             dueClassified: diagnostic.uniqueTimingDue,
             dueBridged: diagnostic.bridged,
             futureClassified: diagnostic.uniqueTimingFutureBuffered,
-            futureQueued: diagnostic.timingPending,
-            capacityDropped: diagnostic.uniqueTimingCapacityDropped,
+            futureQueued: diagnostic.temporalPending,
+            capacityDropped: diagnostic.timingCapacityDropped,
+            uniqueCapacityDropped: diagnostic.uniqueTimingCapacityDropped,
             schedulerEligible: diagnostic.enqueued,
             schedulerBlocked: diagnostic.selectionNoneCollisionBlocked,
             selectionAttempts: diagnostic.launchAttempted,
@@ -927,7 +975,7 @@
             coverageGap: ['LONG_GAP', 'VERY_LONG_GAP'].includes(diagnostic.nearestFutureClass),
             sourceSparse: replayGapOriginStatus().gapOriginClass === 'SOURCE_SPARSE',
             blankCause,
-            warning: scope?.incomplete === true || ledger.valid !== true || ledger.lostUnaccounted > 0 || ledger.overflowUnaccounted > 0 ||
+            warning: diagnostic.temporalAccountingIncomplete || scope?.incomplete === true || ledger.valid !== true || ledger.lostUnaccounted > 0 || ledger.overflowUnaccounted > 0 ||
                 diagnostic.launchCommitted > diagnostic.launched ||
                 (currentWindow.displayable > 0 && currentWindow.displayed === 0)
         });
@@ -1604,6 +1652,10 @@
         deferredReadStartGeneration = null;
         deferredVisibilityResumeGeneration = null;
         readStopReason = reason;
+        const temporalStopReason = { 'visibility-hidden': 'HIDDEN', 'ad-enter': 'AD', navigation: 'NAVIGATION', seek: 'SEEK',
+            'user-disabled': 'USER_DISABLED', pagehide: 'PAGEHIDE', 'mode-transition': 'MODE_TRANSITION',
+            'playback-rate-change': 'RATE_CHANGE', explicit: 'EXPLICIT' }[reason] || 'OTHER';
+        observeReplayTemporalPendingRemoval(temporalStopReason);
         replayPending = [];
         replayAcquisitionPausedForBuffer = false;
         replayPausedSequentialAuthority = null;
@@ -1726,6 +1778,11 @@
             replayPending, video.currentTime, replayStartTimeSeconds, REPLAY_MAX_PENDING
         );
         if (!selection) return;
+        const temporalInvalidCount = selection.filtered.reduce((count, item) => count + (!Number.isFinite(item.replayOffsetMsec) ? 1 : 0), 0);
+        replayPipelineDiagnostic.temporalInvalid += temporalInvalidCount;
+        replayPipelineDiagnostic.temporalBeforeStart += selection.filteredCount - temporalInvalidCount;
+        replayPipelineDiagnostic.temporalDeduped += selection.deduplicatedCount;
+        replayPipelineDiagnostic.temporalDueAwaitingBridge = selection.due.length;
         replayPipelineDiagnostic.timingFiltered += selection.filteredCount;
         replayPipelineDiagnostic.timingDueObserved += selection.due.length;
         replayPipelineDiagnostic.timingFutureObserved += selection.pending.length;
@@ -1750,6 +1807,9 @@
         replayPipelineDiagnostic.timingCapacityDropped += selection.capacityDropped;
         replayPipelineDiagnostic.timingPending = selection.pending.length;
         replayPending = selection.pending;
+        replayPipelineDiagnostic.temporalPendingUnclassified = 0;
+        replayPipelineDiagnostic.temporalPending = replayPending.length;
+        replayTemporalPendingDiagnostic = replayPipelineDiagnostic;
         replayPipelineDiagnostic.nearestFutureClass = window.LiveFlowChatReadCore?.classifyNearestReplayFuture?.(
             replayPending, video.currentTime
         ) || 'UNKNOWN';
@@ -1773,6 +1833,7 @@
         replayRestartDiagnostic.currentWindowMessagePresent = selection.due.length > 0;
         if (selection.due.length > 0) {
             replayPipelineDiagnostic.bridged += selection.due.length;
+            replayPipelineDiagnostic.temporalDueAwaitingBridge = 0;
             setReplayRestartStage('CURRENT_WINDOW_REACHED', 'NONE', diagnosticSequence);
             postReadResult({ ok: true, status: 200, readNumber: readCount, revision, generation, messages: selection.due, summary: {}, continuationInfo: null }, lifecycleGeneration);
             setReplayRestartStage('LAUNCH_READY', 'NONE', diagnosticSequence);
@@ -2304,6 +2365,7 @@
                 (replayAwaitingFirstFreshSequentialResponse || replaySequentialResumeHandoff);
             if (!preserveSequentialPending) {
                 replayStartTimeSeconds = video.currentTime;
+                observeReplayTemporalPendingRemoval('READ_START_RESET');
                 replayPending = [];
             }
             if (requestAuthorityKind === 'BOOTSTRAP') {
@@ -2487,6 +2549,8 @@
                     ? createSequentialAuthorityCandidate(nextSequentialContinuation, candidateBinding) : null;
                 replayObservedSequentialAuthority = nextSequentialAuthority;
                 if (!nextSequentialAuthority) {
+                    recordReplayTemporalDiscard(replayPipelineDiagnostic, result.messages.length, 'NO_FRESH_CHAIN');
+                    replayPipelineDiagnostic.temporalUnclassified -= result.messages.length;
                     observeReplayControlShadow('AUTHORITY_FAILURE');
                     setReplayRestartStage('FAILED_CLOSED', 'OTHER', diagnosticSequence);
                     break;
@@ -2520,6 +2584,7 @@
                     replayAwaitingFirstFreshSequentialResponse = false;
                 }
                 replayPending = replayPending.concat(result.messages);
+                observeReplayTemporalPendingMerge(result.messages.length);
                 const flushResult = flushReplayPending(generation, revision, lifecycleGeneration, diagnosticSequence);
                 if (continuationSource === 'BUFFER_EARLY_RESUME') {
                     const currentVideo = getCurrentMainVideo();
@@ -2844,8 +2909,10 @@
                 replayPipelineDiagnostic.reanchorPlayerSeekContinuationObserved = result.playerSeekContinuationObserved === true;
                 const priorPending = intent.reason === 'COVERAGE_HOLE' ? replayPending.slice() : [];
                 if (intent.reason !== 'COVERAGE_HOLE') replayStartTimeSeconds = playerOffsetMs / 1000;
+                if (intent.reason !== 'COVERAGE_HOLE') observeReplayTemporalPendingRemoval('REANCHOR_REPLACED');
                 replayPending = intent.reason === 'COVERAGE_HOLE'
                     ? replayPending.concat(result.messages) : result.messages;
+                observeReplayTemporalPendingMerge(result.messages.length);
                 const capacityDroppedBefore = replayPipelineDiagnostic.timingCapacityDropped;
                 flushReplayPending(generation, pageRevision, pageLifecycleGeneration);
                 observeReplayPendingMerge(priorPending, result.messages, capacityDroppedBefore);
@@ -3213,7 +3280,7 @@
     });
     window.LiveFlowReplayPipelineDiagnostic = Object.freeze({
         status() {
-            return Object.freeze({ ...replayPipelineDiagnostic });
+            return Object.freeze({ ...replayPipelineDiagnostic, temporalRemovalReasons: Object.freeze({ ...replayPipelineDiagnostic.temporalRemovalReasons }) });
         }
     });
     window.LiveFlowReplayForegroundRecoveryDiagnostic = Object.freeze({

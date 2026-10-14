@@ -264,7 +264,7 @@
         const classification = conserveReplayBoundary(count('parsed'), count('displayable'),
             count('invalid') + count('unsupported'), count('classificationRetained'));
         const temporal = conserveReplayBoundary(count('displayable'), count('dueClassified') + count('futureClassified'),
-            count('beforeStartFiltered') + count('temporalInvalid') + count('exactIdDeduped'), count('temporalRetained'));
+            count('beforeStartFiltered') + count('temporalInvalid') + count('exactIdDeduped') + count('temporalDiscarded'), count('temporalRetained'));
         const dueBridge = conserveReplayBoundary(count('dueClassified'), count('dueBridged'),
             count('dueDropped'), count('dueRetained'));
         const future = conserveReplayBoundary(count('futureClassified'), count('futurePromoted'),

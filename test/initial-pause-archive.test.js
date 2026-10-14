@@ -41,7 +41,7 @@ function harness({ ad = true, paused = false } = {}) {
         replayRestartDiagnostic: { sequence: 1, restartStage: '' }, replayPlayerSeekDiagnostic: { armed: false, inFlight: false },
         replayCredentiallessSchemaDiagnostic: { armed: false }, replayPending: [], replayStartTimeSeconds: 0,
         replayAwaitingFirstFreshSequentialResponse: false, replaySequentialResumeHandoff: false,
-        activeAbortController: null, deferredVisibilityResumeGeneration: null, deferredReadStartGeneration: null, readStopReason: 'none',
+        replayTemporalPendingDiagnostic: null, activeAbortController: null, deferredVisibilityResumeGeneration: null, deferredReadStartGeneration: null, readStopReason: 'none',
         REQUEST_TYPE: 'INITIAL', READ_REQUEST_TYPE: 'READ', STOP_READ_LOOP_TYPE: 'STOP', REPLAY_AD_ENTER_TYPE: 'AD_ENTER', REPLAY_AD_EXIT_TYPE: 'AD_EXIT',
         REPLAY_PIPELINE_DIAGNOSTIC_TYPE: 'PIPELINE', RESUME_READ_LOOP_TYPE: 'RESUME', RESPONSE_TYPE: 'SNAPSHOT',
         getCurrentMainVideo: () => video, replayAdIsActive: () => c.ad,
@@ -58,7 +58,7 @@ function harness({ ad = true, paused = false } = {}) {
     const names = ['currentReplayAuthorityBinding', 'observeReplayControlShadow', 'authorizeReplayAuthority', 'acceptReplayBootstrapCandidate',
         'deferReplayInitialBootstrap', 'initialReplayBootstrapIntentIsCurrent', 'admitReadyReplayBootstrap', 'resumeInitialReplayBootstrap',
         'startReplayBootstrap', 'invalidateReplayBootstrapAuthority', 'invalidateAuthorityHandle', 'enterReplaySuspended',
-        'respond', 'settleReplayAdExit', 'startReadLoop', 'restartReplayFromCurrentPosition', 'createReplayPipelineDiagnostic', 'createReplayForegroundRecoveryDiagnostic', 'suspendReplayForMediaPause', 'savedSequentialDiagnostic'];
+        'respond', 'settleReplayAdExit', 'recordReplayTemporalDiscard', 'observeReplayTemporalPendingRemoval', 'observeReplayTemporalPendingMerge', 'startReadLoop', 'restartReplayFromCurrentPosition', 'createReplayPipelineDiagnostic', 'createReplayForegroundRecoveryDiagnostic', 'suspendReplayForMediaPause', 'savedSequentialDiagnostic'];
     vm.runInContext(names.map(n => fn(main, n)).join('\n') + '\nreplayPipelineDiagnostic=createReplayPipelineDiagnostic();replayForegroundRecoveryDiagnostic=createReplayForegroundRecoveryDiagnostic();', c);
     const loop = c.startReadLoop;
     c.startReadLoop = function (...args) { c.lastGrant = args[2]; c.running = loop(...args); return c.running; };

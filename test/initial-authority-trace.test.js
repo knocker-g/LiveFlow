@@ -49,7 +49,7 @@ async function harness(traced, { paused = true, hidden = false, collectorThrows 
         replayReanchorIntent: null, replayAdActive: false, replayAdExitNeedsReanchor: false,
         replaySeekInProgress: false, replaySeekNeedsReanchor: false, replaySeekEpoch: 0,
         replayForegroundRecoveryOwnedVideo: null, replayReanchorAbortController: null, replayForegroundRetainedAbortController: null,
-        activeAbortController: null, deferredVisibilityResumeGeneration: null, deferredReadStartGeneration: null, readStopReason: 'none',
+        replayTemporalPendingDiagnostic: null, activeAbortController: null, deferredVisibilityResumeGeneration: null, deferredReadStartGeneration: null, readStopReason: 'none',
         LIFECYCLE_DIAGNOSTIC_TYPE: 'lifecycle',
         getCurrentMainVideo() { calls.push({ name: 'getCurrentMainVideo' }); return video; },
         isCurrentPageStateTarget() { calls.push({ name: 'isCurrentPageStateTarget' }); return true; },
@@ -73,7 +73,7 @@ async function harness(traced, { paused = true, hidden = false, collectorThrows 
     const functions = ['currentReplayAuthorityBinding', 'createReplayPipelineDiagnostic', 'createReplayForegroundRecoveryDiagnostic',
         'observeReplayControlShadow', 'authorizeReplayAuthority', 'acceptReplayBootstrapCandidate', 'startReplayBootstrap',
         'invalidateAuthorityHandle', 'invalidateReplayBootstrapAuthority', 'restartReplayFromCurrentPosition',
-        'enterReplaySuspended', 'resumeReadAfterVisibility', 'startReadLoop', 'postLifecycleDiagnostic'];
+        'enterReplaySuspended', 'resumeReadAfterVisibility', 'recordReplayTemporalDiscard', 'observeReplayTemporalPendingRemoval', 'observeReplayTemporalPendingMerge', 'startReadLoop', 'postLifecycleDiagnostic'];
     vm.runInContext(functions.map(n => fn(main, n)).join('\n') +
         '\nreplayPipelineDiagnostic = createReplayPipelineDiagnostic();\nreplayForegroundRecoveryDiagnostic = createReplayForegroundRecoveryDiagnostic();', context);
     const originalLoop = context.startReadLoop;
