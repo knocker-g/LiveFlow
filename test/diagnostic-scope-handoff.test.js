@@ -21,6 +21,7 @@ function harness() {
         LiveFlowChatReadCore: core };
     const c = vm.createContext({ window, currentChatMode: 'replay', currentPageLifecycleGeneration: 0,
         pageLifecycleGeneration: 0, REPLAY_PIPELINE_DIAGNOSTIC_TYPE: 'pipeline',
+        replayPendingClearOperations: new Map(), replayContentClearOperations: new Map(),
         NAVIGATION_INVALIDATED_TYPE: 'navigation', pageRevision: 0, minimumAcceptedPageRevision: 0,
         logInfo() {},
         replayDiagnosticEpoch: null, replayDiagnosticLifecycle: 0, replayDiagnosticSequence: 0,
@@ -35,7 +36,8 @@ function harness() {
         'handleReplayDiagnosticScopeOpen', 'observeReplayScheduler', 'cleanupOverlay', 'handleReplayMediaContextChange',
         'handlePageLifecycleInvalidated']
         .map(n => source(content, n)).join('\n') + '\nreplaySchedulerDiagnostic = createReplaySchedulerDiagnostic();', c);
-    vm.runInContext(['createReplayPipelineDiagnostic', 'applyReplayDiagnosticSnapshot', 'openReplayDiagnosticScope',
+    vm.runInContext(['replayPendingClearClosureReady', 'reconcileReplayPendingClear', 'observeReplayPendingClearProof',
+        'createReplayPipelineDiagnostic', 'applyReplayDiagnosticSnapshot', 'openReplayDiagnosticScope',
         'postReplayDiagnosticScope', 'replayAccountingStatus', 'replayDiagnosticScopeStatus', 'replayDiagnosticClosureValid',
         'postLifecycleInvalidated']
         .map(n => source(main, n)).join('\n') + '\nreplayPipelineDiagnostic = createReplayPipelineDiagnostic();', c);
@@ -143,7 +145,8 @@ test('unknown/lifecycle mismatched epochs are rejected; buffer exhaustion and ex
     assert.equal(s.receive(m(42, 1)), false); assert.equal(s.receive(m(0, 1, 1)), false);
     s.receive(m(0, 4)); assert.equal(s.status().incomplete, true); assert.deepEqual(seen, []);
     const t = createScopes(0, {}, () => {}); t.receive({ ...m(0, 1), diagnosticTerminal: true });
-    t.receive(m(0, 2)); assert.equal(t.status().scopes[0].state, 'INCOMPLETE');
+    t.receive(m(0, 2)); assert.equal(t.status().scopes[0].state, 'CLOSED');
+    assert.equal(t.status().incomplete, true); // Late fault cannot rewrite a CLOSED archive.
 });
 test('evicted unresolved archives remain INCOMPLETE rather than silently restoring PASS', () => {
     const s = createScopes(0, {}, () => {}, { maximumArchives: 1 });

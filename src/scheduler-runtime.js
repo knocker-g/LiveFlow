@@ -260,10 +260,25 @@
                 pendingCount: 0, reason: 'LIFECYCLE_SUPPRESSED' });
         }
 
+        function removePendingOwner(binding) {
+            // Reentrant mutation during launch/evaluation cannot safely invalidate a selected item.
+            if (scheduler.status().state === 'EVALUATING') return Object.freeze({ status: 'FAILED', count: 0 });
+            const result = queue.removePendingOwner(binding);
+            for (const item of result.removed) { itemDiagnosticState.delete(item); launchProofs.delete(item); }
+            if (result.removed.length) {
+                if (queue.snapshot().length === 0) scheduler.stop();
+                notify({ type: 'PENDING_OWNER_REMOVED', count: result.removed.length,
+                    pendingCount: queue.snapshot().length, reason: 'FAIL_CLOSED',
+                    pendingOwner: pending.clonePendingOwner(binding) });
+            }
+            return Object.freeze({ status: result.status, count: result.removed.length });
+        }
+
         return Object.freeze({
             enqueue,
             observeSourceActivity,
             clear,
+            removePendingOwner,
             markGeometryDirty: geometryAdapter.markDirty,
             status: () => Object.freeze({ ...scheduler.status(), pendingCount: queue.snapshot().length,
                 sourceActivityBand: sourceActivityState?.band || 'LOW', sourceActivityBindingReset }),

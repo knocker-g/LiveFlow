@@ -21,6 +21,10 @@ function harness() {
         LiveFlowChatReadCore: core };
     const c = vm.createContext({ window, currentChatMode: 'replay', currentPageLifecycleGeneration: 0,
         pageLifecycleGeneration: 0, REPLAY_PIPELINE_DIAGNOSTIC_TYPE: 'pipeline',
+        replayPendingOwner: null, replayPendingOwnerSequence: 0, replayPendingOwnerDocument: 'FIXTURE_DOCUMENT',
+        replayPendingOwners: new Map(), replayPendingClearOperations: new Map(), replayPendingClearSequence: 0,
+        replayContentPendingOwners: new Map(), replayContentClearOperations: new Map(), replayPendingClearApplying: null,
+        PENDING_ONLY_CLEAR_TYPE: 'LIVEFLOW_PENDING_ONLY_CLEAR', PENDING_ONLY_CLEAR_ACK_TYPE: 'LIVEFLOW_PENDING_ONLY_CLEAR_ACK',
         NAVIGATION_INVALIDATED_TYPE: 'navigation', pageRevision: 0, minimumAcceptedPageRevision: 0,
         logInfo() {},
         replayDiagnosticEpoch: null, replayDiagnosticLifecycle: 0, replayDiagnosticSequence: 0,
@@ -35,12 +39,14 @@ function harness() {
         'handleReplayDiagnosticScopeOpen', 'observeReplayScheduler', 'cleanupOverlay', 'handleReplayMediaContextChange',
         'handlePageLifecycleInvalidated']
         .map(n => source(content, n)).join('\n') + '\nreplaySchedulerDiagnostic = createReplaySchedulerDiagnostic();', c);
-    vm.runInContext(['createReplayPipelineDiagnostic', 'applyReplayDiagnosticSnapshot', 'openReplayDiagnosticScope',
+    vm.runInContext(['sameReplayPendingOwner', 'replayPendingClearClosureReady', 'reconcileReplayPendingClear',
+        'observeReplayPendingClearProof', 'handleReplayPendingClearAck', 'clearReplayPendingAfterReanchorFailure',
+        'ensureReplayPendingOwner', 'createReplayPipelineDiagnostic', 'applyReplayDiagnosticSnapshot', 'openReplayDiagnosticScope',
         'postReplayDiagnosticScope', 'replayAccountingStatus', 'replayDiagnosticScopeStatus', 'replayDiagnosticClosureValid',
         'postLifecycleInvalidated']
         .map(n => source(main, n)).join('\n') + '\nreplayPipelineDiagnostic = createReplayPipelineDiagnostic();', c);
     c.diagnosticScopes = createScopes(0, c.replayPipelineDiagnostic, c.applyReplayDiagnosticSnapshot,
-        { closureValid: c.replayDiagnosticClosureValid });
+        { closureValid: c.replayDiagnosticClosureValid, closureReady: c.replayPendingClearClosureReady });
     const event = data => ({ source: window, origin: window.location.origin, data });
     function deliver(m) {
         if (m.source === 'liveflow-page-state') {
@@ -81,7 +87,7 @@ function harness() {
 function combined() {
     const h = harness(), c = h.c, video = c.getCurrentMainMedia().video;
     Object.assign(video, { currentTime: 5, paused: false, ended: false });
-    Object.assign(c, { document: { hidden: false }, pageState: { mode: 'replay' },
+    Object.assign(c, { document: { hidden: false }, pageState: { mode: 'replay', targetIdentity: 'FIXTURE' },
         replayProductionControlState: { phase: 'READING' }, replaySeekInProgress: false, replaySeekEpoch: 0,
         replayPending: [], replayTemporalPendingDiagnostic: null, currentLoopGeneration: 0, activeLoopGeneration: 0,
         activeAbortController: null, activeWaitTimer: null, replayRestartDiagnostic: { sequence: 0 },

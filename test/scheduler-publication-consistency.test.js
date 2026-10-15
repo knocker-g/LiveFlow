@@ -22,6 +22,7 @@ function harness({ mode = 'blocked', maximum = 10 } = {}) {
         LiveFlowChatReadCore: core };
     const c = vm.createContext({ window, performance: {now:()=>now}, currentChatMode: 'replay', currentPageLifecycleGeneration: 0,
         pageLifecycleGeneration: 0, REPLAY_PIPELINE_DIAGNOSTIC_TYPE: 'pipeline',
+        replayPendingClearOperations: new Map(), replayContentClearOperations: new Map(),
         NAVIGATION_INVALIDATED_TYPE: 'navigation', pageRevision: 0, minimumAcceptedPageRevision: 0,
         logInfo() {},
         replayDiagnosticEpoch: null, replayDiagnosticLifecycle: 0, replayDiagnosticSequence: 0,
@@ -36,7 +37,8 @@ function harness({ mode = 'blocked', maximum = 10 } = {}) {
         'handleReplayDiagnosticScopeOpen', 'observeReplayScheduler', 'cleanupOverlay', 'handleReplayMediaContextChange',
         'handlePageLifecycleInvalidated']
         .map(n => source(content, n)).join('\n') + '\nreplaySchedulerDiagnostic = createReplaySchedulerDiagnostic();', c);
-    vm.runInContext(['createReplayPipelineDiagnostic', 'applyReplayDiagnosticSnapshot', 'openReplayDiagnosticScope',
+    vm.runInContext(['replayPendingClearClosureReady', 'reconcileReplayPendingClear', 'observeReplayPendingClearProof',
+        'createReplayPipelineDiagnostic', 'applyReplayDiagnosticSnapshot', 'openReplayDiagnosticScope',
         'postReplayDiagnosticScope', 'replayAccountingStatus', 'replayDiagnosticScopeStatus', 'replayDiagnosticClosureValid',
         'postLifecycleInvalidated']
         .map(n => source(main, n)).join('\n') + '\nreplayPipelineDiagnostic = createReplayPipelineDiagnostic();', c);

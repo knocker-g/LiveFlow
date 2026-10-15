@@ -11,6 +11,8 @@
     const REPLAY_AD_ENTER_TYPE = 'LIVEFLOW_REPLAY_AD_ENTER';
     const REPLAY_AD_EXIT_TYPE = 'LIVEFLOW_REPLAY_AD_EXIT';
     const REPLAY_PIPELINE_DIAGNOSTIC_TYPE = 'LIVEFLOW_REPLAY_PIPELINE_DIAGNOSTIC';
+    const PENDING_ONLY_CLEAR_TYPE = 'LIVEFLOW_PENDING_ONLY_CLEAR';
+    const PENDING_ONLY_CLEAR_ACK_TYPE = 'LIVEFLOW_PENDING_ONLY_CLEAR_ACK';
     const MAX_MESSAGES = 500;
     const MANAGEMENT_BAR_ID = 'liveflow-management-bar';
     const MANAGEMENT_STYLE_ID = 'liveflow-management-bar-style';
@@ -99,6 +101,70 @@
     let replayDiagnosticAwaiting = null;
     let replayDiagnosticIncomplete = false;
     let replayDiagnosticBatchInProgress = false;
+    const replayContentPendingOwners = new Map();
+    const replayContentClearOperations = new Map();
+    let replayPendingClearApplying = null;
+
+    function rememberReplayPendingOwner(binding, scope) {
+        if (!binding || binding.lifecycle !== currentPageLifecycleGeneration || binding.revision !== currentPageRevision) return;
+        const key = binding.document + ':' + binding.stream;
+        const existing = replayContentPendingOwners.get(key);
+        if (existing) {
+            if (!window.LiveFlowPendingSelection.samePendingOwner(existing.owner, binding)) replayDiagnosticIncomplete = true;
+            return;
+        }
+        if (replayContentPendingOwners.size >= 64) { replayDiagnosticIncomplete = true; return; }
+        replayContentPendingOwners.set(key, { owner: binding, video: getCurrentMainMedia()?.video,
+            epoch: scope?.epoch, lifecycle: scope?.lifecycle });
+    }
+
+    function handlePendingOnlyClear(event) {
+        if (event.source !== window || event.origin !== window.location.origin) return;
+        const data = event.data;
+        if (data?.source !== 'liveflow-page-state' || data.type !== PENDING_ONLY_CLEAR_TYPE) return;
+        const owner = window.LiveFlowPendingSelection.clonePendingOwner(data.owner);
+        if (!owner || data.document !== owner.document || data.reason !== 'FAIL_CLOSED' ||
+            !Number.isSafeInteger(data.operationId) || data.operationId < 1 ||
+            !Number.isSafeInteger(data.epoch) || data.epoch < 0 || data.lifecycle !== owner.lifecycle) return;
+        const key = data.document + ':' + data.operationId;
+        const previous = replayContentClearOperations.get(key);
+        let result;
+        if (previous) {
+            result = window.LiveFlowPendingSelection.samePendingOwner(previous.owner, owner) &&
+                previous.reason === data.reason && previous.epoch === data.epoch && previous.lifecycle === data.lifecycle
+                ? { ...previous, status: 'DUPLICATE', originalStatus: previous.status }
+                : { operationId: data.operationId, owner, reason: data.reason,
+                    epoch: data.epoch, lifecycle: data.lifecycle, status: 'FAILED', count: 0 };
+        } else {
+            const known = replayContentPendingOwners.get(owner.document + ':' + owner.stream);
+            result = { operationId: data.operationId, owner, reason: data.reason,
+                epoch: data.epoch, lifecycle: data.lifecycle, status: 'NOT_APPLIED_UNKNOWN', count: 0 };
+            if (replayContentClearOperations.size >= 64) {
+                replayDiagnosticIncomplete = true; result.status = 'FAILED';
+            } else {
+                const media = getCurrentMainMedia();
+                if (known && window.LiveFlowPendingSelection.samePendingOwner(known.owner, owner) &&
+                    owner.lifecycle === currentPageLifecycleGeneration && owner.revision === currentPageRevision &&
+                    known.video === media?.video && (!phase3Runtime || phase3RuntimeVideo === media?.video)) {
+                    const applying = { owner, epoch: known.epoch, lifecycle: known.lifecycle, count: 0, fault: false };
+                    const batching = replayDiagnosticBatchInProgress;
+                    replayDiagnosticBatchInProgress = true;
+                    replayPendingClearApplying = applying;
+                    try {
+                        const removed = phase3Runtime?.removePendingOwner(owner) || { status: 'STALE_OR_NOT_FOUND', count: 0 };
+                        result.status = removed.status; result.count = removed.count;
+                        if (applying.count !== removed.count || applying.fault || known.epoch !== data.epoch ||
+                            known.lifecycle !== data.lifecycle) { result.status = 'FAILED'; replayDiagnosticIncomplete = true; }
+                    } catch { result.status = 'FAILED'; replayDiagnosticIncomplete = true; }
+                    finally { replayPendingClearApplying = null; replayDiagnosticBatchInProgress = batching; }
+                }
+                replayContentClearOperations.set(key, Object.freeze(result));
+            }
+            publishReplaySchedulerDiagnostic();
+        }
+        window.postMessage({ source: 'liveflow-content-script', type: PENDING_ONLY_CLEAR_ACK_TYPE,
+            ...result, document: owner.document }, window.location.origin);
+    }
 
     function publishReplayScopeSnapshot(terminal = false) {
         if (replayDiagnosticEpoch === null) return;
@@ -106,6 +172,8 @@
             pageLifecycleGeneration: replayDiagnosticLifecycle, diagnosticScopeEpoch: replayDiagnosticEpoch,
             diagnosticSequence: ++replayDiagnosticSequence, diagnosticTerminal: terminal,
             diagnosticIncomplete: replayDiagnosticIncomplete, batch: { ...replayDiagnosticBatch },
+            pendingClearResults: [...replayContentClearOperations.values()].filter(r =>
+                r.epoch === replayDiagnosticEpoch && r.lifecycle === replayDiagnosticLifecycle),
             displayedCount: replayDiagnosticDisplayed, scheduler: { ...replaySchedulerDiagnostic } }, window.location.origin);
     }
 
@@ -303,6 +371,16 @@
         }
         if (event.type === 'PENDING_CLEARED' && event.reason === 'LIFECYCLE_SUPPRESSED') {
             replaySchedulerDiagnostic.schedulerLifecycleDiscarded += Number.isInteger(event.count) ? event.count : 0;
+        }
+        if (event.type === 'PENDING_OWNER_REMOVED') {
+            const applying = replayPendingClearApplying;
+            if (applying && window.LiveFlowPendingSelection.samePendingOwner(applying.owner, event.pendingOwner) &&
+                Number.isSafeInteger(event.count) && event.count > 0) {
+                applying.count += event.count;
+                if (applying.epoch === replayDiagnosticEpoch && applying.lifecycle === replayDiagnosticLifecycle) {
+                    replaySchedulerDiagnostic.schedulerLifecycleDiscarded += event.count;
+                } else { applying.fault = true; replayDiagnosticIncomplete = true; }
+            } else replayDiagnosticIncomplete = true;
         }
         if (event.type === 'SELECTION_NONE') {
             replaySchedulerDiagnostic.selectionNone += 1;
@@ -1462,7 +1540,7 @@
         return { status: 'rendered' };
     }
 
-    function scheduleDanmakuBatch(messages) {
+    function scheduleDanmakuBatch(messages, pendingOwner = null) {
         const inputCount = Array.isArray(messages) ? messages.length : 0;
         if (!isEffectiveDisplayActive()) {
             observeLivePresentationBatch({ input: inputCount, lifecycleSuppressed: inputCount, suppressedOther: inputCount });
@@ -1527,6 +1605,7 @@
         try { visibleMessages.forEach((message, index) => {
             if (runtime.enqueue({
             message,
+            pendingOwner,
             generation: scheduledGeneration,
             pageLifecycleGeneration: currentPageLifecycleGeneration,
             video: scheduledVideo,
@@ -1682,7 +1761,9 @@
         if (currentMessages.length > MAX_MESSAGES) {
             currentMessages.splice(0, currentMessages.length - MAX_MESSAGES);
         }
-        scheduleDanmakuBatch(newMessages);
+        const pendingOwner = window.LiveFlowPendingSelection.clonePendingOwner(event.data.pendingOwner);
+        rememberReplayPendingOwner(pendingOwner, event.data.pendingOwnerScope);
+        scheduleDanmakuBatch(newMessages, pendingOwner);
         if (currentChatMode === 'replay' && exactIdDedupedCount > 0) publishReplayBatchAccounting({ exactIdDedupedCount });
         logInfo(`READ #${readNumber} completed: HTTP ${event.data.status}`);
         logInfo(`READ #${readNumber} parsed messages: ${event.data.parsedMessageCount ?? messages.length}`);
@@ -1822,6 +1903,7 @@
     window.postMessage({ source: 'liveflow-content-script', type: 'LIVEFLOW_REPLAY_DIAGNOSTIC_SCOPE_HELLO' }, window.location.origin);
     window.addEventListener('message', handleInitialContinuation);
     window.addEventListener('message', handleReadResult);
+    window.addEventListener('message', handlePendingOnlyClear);
     window.addEventListener('message', handlePageLifecycleInvalidated);
     window.addEventListener('message', handleReadLifecycleDiagnostic);
     window.addEventListener('yt-navigate-start', handleNavigationStart);

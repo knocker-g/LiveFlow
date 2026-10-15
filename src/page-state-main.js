@@ -10,6 +10,8 @@
     const REPLAY_AD_ENTER_TYPE = 'LIVEFLOW_REPLAY_AD_ENTER';
     const REPLAY_AD_EXIT_TYPE = 'LIVEFLOW_REPLAY_AD_EXIT';
     const REPLAY_PIPELINE_DIAGNOSTIC_TYPE = 'LIVEFLOW_REPLAY_PIPELINE_DIAGNOSTIC';
+    const PENDING_ONLY_CLEAR_TYPE = 'LIVEFLOW_PENDING_ONLY_CLEAR';
+    const PENDING_ONLY_CLEAR_ACK_TYPE = 'LIVEFLOW_PENDING_ONLY_CLEAR_ACK';
     let pageRevision = 0;
     let pageKey = '';
     let pageState = { continuation: '', context: null, targetIdentity: '', bootstrapTargetMatched: false, mode: 'unknown' };
@@ -41,6 +43,103 @@
     let deferredVisibilityResumeGeneration = null;
     let runtimeUserEnabled = true;
     let replayPending = [];
+    let replayPendingOwner = null;
+    let replayPendingOwnerSequence = 0;
+    let replayPendingOwnerDocument = null;
+    const replayPendingOwners = new Map();
+    const replayPendingClearOperations = new Map();
+    let replayPendingClearSequence = 0;
+    let replayProductionPendingAction = null;
+
+    function sameReplayPendingOwner(a, b) {
+        return Boolean(a && b && ['document', 'stream', 'target', 'lifecycle', 'revision'].every(key => a[key] === b[key]));
+    }
+
+    function replayPendingClearClosureReady(diagnostic) {
+        return !diagnostic.pendingClearPending && !diagnostic.pendingClearFault;
+    }
+
+    function reconcileReplayPendingClear(operation) {
+        if (!operation || operation.resolved || !operation.proof || !operation.ack) return;
+        if (operation.proof.count !== operation.ack.count || operation.proof.status !== operation.ack.status ||
+            !((operation.proof.status === 'APPLIED' && operation.proof.count > 0) ||
+                (operation.proof.status === 'STALE_OR_NOT_FOUND' && operation.proof.count === 0))) {
+            operation.diagnostic.pendingClearFault = true; return;
+        }
+        operation.resolved = true;
+        operation.diagnostic.pendingClearPending -= 1;
+    }
+
+    function observeReplayPendingClearProof(diagnostic, snapshot) {
+        if (!Array.isArray(snapshot.pendingClearResults) || snapshot.pendingClearResults.length > 64) return;
+        for (const result of snapshot.pendingClearResults) {
+            const operation = replayPendingClearOperations.get(result.operationId);
+            if (!operation || operation.resolved || operation.diagnostic !== diagnostic) continue;
+            if (!sameReplayPendingOwner(operation.owner, result.owner) || result.reason !== 'FAIL_CLOSED' ||
+                result.epoch !== operation.epoch || result.lifecycle !== operation.lifecycle ||
+                !Number.isSafeInteger(result.count) || result.count < 0) {
+                diagnostic.pendingClearFault = true; continue;
+            }
+            if (operation.proof && (operation.proof.count !== result.count || operation.proof.status !== result.status)) {
+                diagnostic.pendingClearFault = true; continue;
+            }
+            operation.proof = { count: result.count, status: result.status };
+            reconcileReplayPendingClear(operation);
+        }
+    }
+
+    function handleReplayPendingClearAck(data) {
+        if (data.document !== replayPendingOwnerDocument) return;
+        const operation = replayPendingClearOperations.get(data.operationId);
+        if (!operation || operation.resolved) return;
+        if (data.document !== operation.owner.document || !sameReplayPendingOwner(data.owner, operation.owner) ||
+            data.reason !== 'FAIL_CLOSED' || data.epoch !== operation.epoch || data.lifecycle !== operation.lifecycle ||
+            !Number.isSafeInteger(data.count) || data.count < 0) {
+            operation.diagnostic.pendingClearFault = true; return;
+        }
+        const ack = { count: data.count, status: data.status === 'DUPLICATE' ? data.originalStatus : data.status };
+        if (operation.ack && (operation.ack.count !== ack.count || operation.ack.status !== ack.status)) {
+            operation.diagnostic.pendingClearFault = true; return;
+        }
+        operation.ack = ack;
+        reconcileReplayPendingClear(operation);
+        diagnosticScopes.reconcile();
+    }
+
+    function clearReplayPendingAfterReanchorFailure() {
+        if (replayProductionControlState?.phase !== 'STOPPED' || replayProductionPendingAction !== 'CLEAR') return;
+        cancelReplayTemporalWakeup();
+        observeReplayTemporalPendingRemoval('FAIL_CLOSED');
+        replayPending = [];
+        replayPendingOwner = null;
+        for (const entry of replayPendingOwners.values()) {
+            if (!entry.eligible || entry.operationId || !entry.forwarded ||
+                entry.owner.target !== pageState.targetIdentity || entry.owner.lifecycle !== pageLifecycleGeneration ||
+                entry.owner.revision !== pageRevision) continue;
+            if (replayPendingClearOperations.size >= 64) { entry.diagnostic.pendingClearFault = true; continue; }
+            const operationId = ++replayPendingClearSequence;
+            entry.operationId = operationId;
+            entry.diagnostic.pendingClearPending = (entry.diagnostic.pendingClearPending || 0) + 1;
+            replayPendingClearOperations.set(operationId, { ...entry, resolved: false });
+            window.postMessage({ source: 'liveflow-page-state', type: PENDING_ONLY_CLEAR_TYPE,
+                document: entry.owner.document, operationId, owner: entry.owner, reason: 'FAIL_CLOSED',
+                epoch: entry.epoch, lifecycle: entry.lifecycle }, window.location.origin);
+        }
+    }
+
+    function ensureReplayPendingOwner() {
+        if (replayPendingOwner) return replayPendingOwner;
+        replayPendingOwnerDocument ||= window.crypto.randomUUID();
+        if (!Number.isSafeInteger(replayPendingOwnerSequence + 1)) throw new RangeError('Pending owner sequence exhausted');
+        replayPendingOwner = Object.freeze({ document: replayPendingOwnerDocument,
+            stream: ++replayPendingOwnerSequence, target: pageState.targetIdentity,
+            lifecycle: pageLifecycleGeneration, revision: pageRevision });
+        if (replayPendingOwners.size < 64) replayPendingOwners.set(replayPendingOwner.stream, {
+            owner: replayPendingOwner, diagnostic: replayPipelineDiagnostic,
+            epoch: diagnosticScopes.currentEpoch(), lifecycle: pageLifecycleGeneration, eligible: true, forwarded: false });
+        else replayPipelineDiagnostic.pendingClearFault = true;
+        return replayPendingOwner;
+    }
     let replayStartTimeSeconds = 0;
     let replayAcquisitionPausedForBuffer = false;
     const REPLAY_MAX_PENDING = 100;
@@ -69,7 +168,7 @@
     let replayPipelineDiagnostic = createReplayPipelineDiagnostic();
     let replayTemporalPendingDiagnostic = null;
     const diagnosticScopes = window.LiveFlowDiagnosticScopeCore.createScopes(0, replayPipelineDiagnostic,
-        applyReplayDiagnosticSnapshot, { closureValid: replayDiagnosticClosureValid });
+        applyReplayDiagnosticSnapshot, { closureValid: replayDiagnosticClosureValid, closureReady: replayPendingClearClosureReady });
 
     function replayDiagnosticClosureValid(diagnostic) {
         const status = replayAccountingStatus(diagnostic, false);
@@ -141,6 +240,7 @@
         );
         if (productionTransition && productionTransition.failure !== 'FORBIDDEN_EVENT') {
             replayProductionControlState = productionTransition.nextState;
+            replayProductionPendingAction = productionTransition.pendingAction;
         }
         return replayControlShadow?.dispatch?.(event, facts, legacyPhase) || null;
     }
@@ -476,6 +576,7 @@
         replayAcquisitionPausedForBuffer = false;
         observeReplayTemporalPendingRemoval('FAIL_CLOSED');
         replayPending = [];
+        replayPendingOwner = null;
         replaySequentialResumeHandoff = false;
         replayPipelineDiagnostic.bufferPauseActive = false;
         replayPipelineDiagnostic.unreadSequentialAuthorityAvailable = false;
@@ -851,6 +952,7 @@
         }
 
         if (Number.isInteger(snapshot.displayedCount) && snapshot.displayedCount >= 0) diagnostic.launched = snapshot.displayedCount;
+        observeReplayPendingClearProof(diagnostic, snapshot);
     }
 
     function replayAccountingStatus(diagnostic = replayPipelineDiagnostic, includeScope = true) {
@@ -906,7 +1008,9 @@
         const scope = includeScope ? replayDiagnosticScopeStatus() : null;
         return Object.freeze({
             diagnosticScope: scope,
-            accountingComplete: !diagnostic.temporalAccountingIncomplete && (scope ? !scope.incomplete : true),
+            pendingClear: Object.freeze({ pendingOperations: diagnostic.pendingClearPending || 0,
+                fault: diagnostic.pendingClearFault === true }),
+            accountingComplete: !diagnostic.temporalAccountingIncomplete && replayPendingClearClosureReady(diagnostic) && (scope ? !scope.incomplete : true),
             receivedActions: diagnostic.receivedActions,
             parsed: diagnostic.messagesObserved,
             parseFailed: diagnostic.parseFailed,
@@ -1629,12 +1733,17 @@
 
     function postReadResult(result, lifecycleGeneration) {
         const { continuationInfo, messages, summary, ...safeResult } = result;
+        const owner = pageState.mode === 'replay' && result.ok ? ensureReplayPendingOwner() : null;
+        const entry = owner ? replayPendingOwners.get(owner.stream) : null;
+        if (entry && Array.isArray(messages) && messages.length) entry.forwarded = true;
         window.postMessage({
             source: 'liveflow-page-state',
             type: READ_RESPONSE_TYPE,
             pageRevision: result.revision,
             pageLifecycleGeneration: lifecycleGeneration,
             ...safeResult,
+            pendingOwner: owner,
+            pendingOwnerScope: entry ? { epoch: entry.epoch, lifecycle: entry.lifecycle } : null,
             messages,
             parsedMessageCount: Array.isArray(messages) ? messages.length : 0,
             nextContinuationAvailable: Boolean(continuationInfo?.continuation)
@@ -1657,6 +1766,8 @@
             'playback-rate-change': 'RATE_CHANGE', explicit: 'EXPLICIT' }[reason] || 'OTHER';
         observeReplayTemporalPendingRemoval(temporalStopReason);
         replayPending = [];
+        replayPendingOwner = null;
+        for (const entry of replayPendingOwners.values()) entry.eligible = false;
         replayAcquisitionPausedForBuffer = false;
         replayPausedSequentialAuthority = null;
         invalidateAuthorityHandle(replayObservedSequentialAuthority);
@@ -2367,6 +2478,7 @@
                 replayStartTimeSeconds = video.currentTime;
                 observeReplayTemporalPendingRemoval('READ_START_RESET');
                 replayPending = [];
+                replayPendingOwner = null;
             }
             if (requestAuthorityKind === 'BOOTSTRAP') {
                 initialReplayTargetOffsetMsec = core?.validatePlayerSeekOffset?.(video.currentTime, video.duration);
@@ -2584,6 +2696,7 @@
                     replayAwaitingFirstFreshSequentialResponse = false;
                 }
                 replayPending = replayPending.concat(result.messages);
+                ensureReplayPendingOwner();
                 observeReplayTemporalPendingMerge(result.messages.length);
                 const flushResult = flushReplayPending(generation, revision, lifecycleGeneration, diagnosticSequence);
                 if (continuationSource === 'BUFFER_EARLY_RESUME') {
@@ -2910,6 +3023,8 @@
                 const priorPending = intent.reason === 'COVERAGE_HOLE' ? replayPending.slice() : [];
                 if (intent.reason !== 'COVERAGE_HOLE') replayStartTimeSeconds = playerOffsetMs / 1000;
                 if (intent.reason !== 'COVERAGE_HOLE') observeReplayTemporalPendingRemoval('REANCHOR_REPLACED');
+                if (intent.reason !== 'COVERAGE_HOLE') replayPendingOwner = null;
+                ensureReplayPendingOwner();
                 replayPending = intent.reason === 'COVERAGE_HOLE'
                     ? replayPending.concat(result.messages) : result.messages;
                 observeReplayTemporalPendingMerge(result.messages.length);
@@ -2959,6 +3074,7 @@
             if (!sequentialGrant) {
                 replayProductionReanchorReason = 'NO_FRESH_CHAIN';
                 observeReplayControlShadow('REANCHOR_FAILED');
+                clearReplayPendingAfterReanchorFailure();
                 return false;
             }
             observeReplayControlShadow('REANCHOR_SUCCEEDED');
@@ -2995,6 +3111,9 @@
     window.addEventListener('message', (event) => {
         if (event.source !== window || event.origin !== window.location.origin) return;
         if (event.data?.source !== 'liveflow-content-script') return;
+        if (event.data.type === PENDING_ONLY_CLEAR_ACK_TYPE) {
+            handleReplayPendingClearAck(event.data); return;
+        }
         if (event.data.type === REQUEST_TYPE) {
             if (runtimeUserEnabled === false) beginReplayRestart('ENABLE');
             respond();
@@ -3068,6 +3187,7 @@
                     observeReplayRuntimeAccounting('scheduler');
                 }
             }
+            diagnosticScopes.reconcile();
             return;
         }
         if (event.data.type === RESUME_READ_LOOP_TYPE) {

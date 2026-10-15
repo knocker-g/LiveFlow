@@ -80,7 +80,8 @@ function temporalHarness(){
  for(const name of ['updateReplayTemporalStarvationDiagnostic','updateReplayTemporalLeadShadowDiagnostic','armReplayTemporalWakeup','cancelReplayTemporalWakeup','observeReplayGapPersistence','resetReplayGapOriginDiagnostic','abortReplayPlayerSeekDiagnostic'])c[name]=()=>{};
  c.maybeQueueReplayCoverageHoleRepair=()=>false;c.replayGapOriginStatus=()=>({});
  c.savedSequentialDiagnostic=()=>null;c.postReadResult=result=>{c.forwarded.push(...result.messages);};
- const names=['observeReplayPendingMerge','observeReplayPipelineResponse','flushReplayPending','replayAccountingStatus','stopReadLoop','failClosedSavedSequentialResume'];
+ Object.assign(c,{replayPendingOwner:null,replayPendingOwnerSequence:0,replayPendingOwnerDocument:'FIXTURE_DOCUMENT',replayPendingOwners:new Map(),diagnosticScopes:{currentEpoch:()=>0}});
+ const names=['replayPendingClearClosureReady','ensureReplayPendingOwner','observeReplayPendingMerge','observeReplayPipelineResponse','flushReplayPending','replayAccountingStatus','stopReadLoop','failClosedSavedSequentialResume'];
  for(const name of ['recordReplayTemporalDiscard','observeReplayTemporalPendingRemoval','observeReplayTemporalPendingMerge'])if(main.includes('    function '+name+'('))names.push(name);
  vm.runInContext(names.map(n=>fn(main,n)).join('\n'),c);
  c.pageState={mode:'replay',targetIdentity:'FIXTURE'};c.replayProductionControlState=core.createReplayState('READING');c.replayStartTimeSeconds=4;

@@ -5,6 +5,20 @@
 
     const SEMANTIC_CLASSES = Object.freeze({ SPECIAL: 'SPECIAL', NORMAL: 'NORMAL' });
 
+    function clonePendingOwner(value) {
+        if (!value || typeof value.document !== 'string' || value.document.length < 1 || value.document.length > 128 ||
+            typeof value.target !== 'string' || value.target.length < 1 || value.target.length > 256 ||
+            !Number.isSafeInteger(value.stream) || value.stream < 1 ||
+            !Number.isSafeInteger(value.lifecycle) || value.lifecycle < 0 ||
+            !Number.isSafeInteger(value.revision) || value.revision < 0) return null;
+        return Object.freeze({ document: value.document, stream: value.stream, target: value.target,
+            lifecycle: value.lifecycle, revision: value.revision });
+    }
+
+    function samePendingOwner(a, b) {
+        return Boolean(a && b && ['document', 'stream', 'target', 'lifecycle', 'revision'].every(key => a[key] === b[key]));
+    }
+
     function classifySemanticClass(item) {
         return item?.rendererType === 'liveChatPaidMessageRenderer' ||
             item?.rendererType === 'liveChatPaidStickerRenderer'
@@ -21,6 +35,7 @@
             rendererType,
             semanticClass: classifySemanticClass({ rendererType }),
             payload,
+            pendingOwner: clonePendingOwner(payload?.pendingOwner),
             footprint: Object.freeze({ ...footprint })
         });
     }
@@ -140,6 +155,23 @@
             return true;
         }
 
+        function removePendingOwner(binding) {
+            const owner = clonePendingOwner(binding);
+            if (!owner || items.some(item => !item.pendingOwner)) {
+                return Object.freeze({ status: 'NOT_APPLIED_UNKNOWN', removed: Object.freeze([]) });
+            }
+            const removed = items.filter(item => samePendingOwner(item.pendingOwner, owner));
+            if (removed.length) {
+                for (let i = items.length - 1; i >= 0; i--) {
+                    if (samePendingOwner(items[i].pendingOwner, owner)) items.splice(i, 1);
+                }
+                // Invalidate every outstanding selection; survivor order and launch credit remain unchanged.
+                selectionNonce += 1;
+            }
+            return Object.freeze({ status: removed.length ? 'APPLIED' : 'STALE_OR_NOT_FOUND',
+                removed: Object.freeze(removed) });
+        }
+
         return Object.freeze({
             enqueue,
             pruneStale,
@@ -147,6 +179,7 @@
             relieveSaturation,
             evaluate,
             confirmSuccessfulLaunch,
+            removePendingOwner,
             snapshot: () => Object.freeze(items.slice()),
             successfulLaunchSequence: () => successfulLaunchSequence
         });
@@ -154,6 +187,8 @@
 
     const api = {
         SEMANTIC_CLASSES,
+        clonePendingOwner,
+        samePendingOwner,
         classifySemanticClass,
         createPendingItem,
         createSpecialPreferencePolicy,
