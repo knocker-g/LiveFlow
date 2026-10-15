@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { instrumentInitialAuthorityTrace } from './density-comparison/instrument-initial-authority.mjs';
 import { instrumentInitialRequestMain, instrumentInitialRequestContent } from './density-comparison/instrument-initial-request.mjs';
 import { instrumentArchivedAttribution } from './density-comparison/instrument-archived-attribution.mjs';
+import { instrumentChatReadInitialization, instrumentCoreInitializationStatus } from './density-comparison/instrument-core-initialization.mjs';
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -50,7 +51,7 @@ export function build(output = path.join(root, 'build/density-comparison'), { in
         'test/fixtures/final-visual-candidates.js', 'test/fixtures/opportunity-aware-density.js'];
     if (initialAuthorityTrace) devInputs.push('tools/density-comparison/initial-authority-trace.js',
         'tools/density-comparison/instrument-initial-authority.mjs', 'tools/density-comparison/instrument-initial-request.mjs',
-        'tools/density-comparison/instrument-archived-attribution.mjs');
+        'tools/density-comparison/instrument-archived-attribution.mjs', 'tools/density-comparison/instrument-core-initialization.mjs');
     for (const name of devInputs) inputs[name] = hash(fs.readFileSync(path.join(root, name)));
     const sourceSHA = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
     const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim();
@@ -62,6 +63,9 @@ export function build(output = path.join(root, 'build/density-comparison'), { in
     if (diagnosticCopies) {
         diagnosticCopies.main = instrumentInitialRequestMain(diagnosticCopies.main);
         diagnosticCopies.main = instrumentArchivedAttribution(diagnosticCopies.main);
+        diagnosticCopies.main = instrumentCoreInitializationStatus(diagnosticCopies.main);
+        diagnosticCopies.chatRead = instrumentChatReadInitialization(files['src/chat-read-core.js'].toString());
+        new vm.Script(diagnosticCopies.chatRead);
         new vm.Script(diagnosticCopies.main); new vm.Script(diagnosticCopies.core);
     }
     const { candidates, candidateC } = require('../test/fixtures/final-visual-candidates.js');
@@ -130,6 +134,7 @@ export function build(output = path.join(root, 'build/density-comparison'), { in
             description: 'Development-only B/D comparison. Never distribute as Production.' };
         const generated = { ...files, 'manifest.json': Buffer.from(JSON.stringify(generatedManifest, null, 2) + '\n'), 'src/youtube-chat.js': Buffer.from(source) };
         if (diagnosticCopies) {
+            generated['src/chat-read-core.js'] = Buffer.from(diagnosticCopies.chatRead);
             generated['src/page-state-main.js'] = Buffer.from(diagnosticCopies.main);
             generated['src/replay-control-plane-core.js'] = Buffer.from(diagnosticCopies.core);
         }
