@@ -60,6 +60,11 @@ function harness({ ad = true, paused = false } = {}) {
         'startReplayBootstrap', 'invalidateReplayBootstrapAuthority', 'invalidateAuthorityHandle', 'enterReplaySuspended',
         'respond', 'settleReplayAdExit', 'recordReplayTemporalDiscard', 'observeReplayTemporalPendingRemoval', 'observeReplayTemporalPendingMerge', 'startReadLoop', 'restartReplayFromCurrentPosition', 'createReplayPipelineDiagnostic', 'createReplayForegroundRecoveryDiagnostic', 'suspendReplayForMediaPause', 'savedSequentialDiagnostic'];
     vm.runInContext(names.map(n => fn(main, n)).join('\n') + '\nreplayPipelineDiagnostic=createReplayPipelineDiagnostic();replayForegroundRecoveryDiagnostic=createReplayForegroundRecoveryDiagnostic();', c);
+    // The real MAIN message guard now recognizes typed cleanup ACKs. Use the
+    // Product declaration, as the cleanup integration transport does; no ACK is sent.
+    const ackType = main.match(/^    const PENDING_ONLY_CLEAR_ACK_TYPE = '[^']+';$/m);
+    assert.ok(ackType, 'Product ACK type declaration');
+    vm.runInContext(ackType[0], c);
     const loop = c.startReadLoop;
     c.startReadLoop = function (...args) { c.lastGrant = args[2]; c.running = loop(...args); return c.running; };
     c.window.addEventListener = (type, cb) => { if(type==='message') c.listener=cb; else c.pauseListener=cb; };
