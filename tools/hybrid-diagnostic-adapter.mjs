@@ -1,4 +1,4 @@
-import { EXPECTED } from './hybrid-seek-scenario.mjs';
+import { EXPECTED, bindExpectedIdentity } from './hybrid-seek-scenario.mjs';
 const count = n => Number.isSafeInteger(n) && n >= 0;
 const stageNames = ['parser','classification','temporal','dueBridge','future','bridge','pending','scheduler','launch','renderer'];
 const conserved = s => s && ['input','forwarded','explicitRemoval','retained','lost','overflow'].every(k=>count(s[k])) &&
@@ -284,9 +284,12 @@ export function opportunityExpression({before,expected,timeoutMs}) {
         env:{window,origin:location.origin,now:()=>performance.now(),addEventListener:window.addEventListener.bind(window),removeEventListener:window.removeEventListener.bind(window),queueMicrotask:window.queueMicrotask.bind(window),setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)}});})()`;
 }
 
-export function createDiagnosticCapture({expected=EXPECTED}={}) {
+export function createDiagnosticCapture({expected:requestedExpected}={}) {
+    const expected=bindExpectedIdentity(requestedExpected);
     let before;
-    return async (page,{phase,timeoutMs})=>{
+    const capture=async (page,{phase,timeoutMs,expected:packetExpected})=>{
+        if(!expected)return {adapterStatus:'BLOCKED',adapterBoundary:'EXPECTED_IDENTITY_INVALID'};
+        if(packetExpected&&(!bindExpectedIdentity(packetExpected)||Object.entries(expected).some(([k,v])=>packetExpected[k]!==v)))return {adapterStatus:'BLOCKED',adapterBoundary:'EXPECTED_CAPTURE_MISMATCH'};
         const ms=Math.min(phase==='POST'?10000:phase==='OPPORTUNITY'?5000:2000,timeoutMs);
         if(!Number.isFinite(ms)||ms<=0||!['PRE','ACTION_GATE','POST','OPPORTUNITY'].includes(phase)) return {adapterStatus:'BLOCKED',adapterBoundary:'CAPTURE_CONTRACT'};
         let timer;
@@ -311,4 +314,6 @@ export function createDiagnosticCapture({expected=EXPECTED}={}) {
         }catch{return {adapterStatus:'BLOCKED',adapterBoundary:'READ_REJECTED_OR_TIMEOUT'};}
         finally{clearTimeout(timer);}
     };
+    Object.defineProperty(capture,'expectedIdentity',{value:expected});
+    return capture;
 }

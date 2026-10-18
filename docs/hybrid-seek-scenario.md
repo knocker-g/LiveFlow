@@ -26,7 +26,7 @@ phases. It must use existing MAIN/Content read-only getters in the same document
 return a normalized snapshot, and complete/cancel within the deadline. Never add
 listeners, modify globals, execute Core predicates, request READ, poll or retry.
 Promise deadlines bound runner waiting; they cannot cancel a misbehaving adapter.
-P1.5 adds `createDiagnosticCapture()` in `hybrid-diagnostic-adapter.mjs` as the
+P1.5 adds `createDiagnosticCapture({ expected })` in `hybrid-diagnostic-adapter.mjs` as the
 scenario-specific surface mapper; pass it as `capture`. It does not introduce
 a generic KNO-215 harness. Existing CDP harness was inspected
 as source only, never executed/imported. It creates its own connection and has
@@ -237,3 +237,17 @@ The scenario runner's receipt-only re-projection also retains this schema; arbit
 `evidence.identity.datasetIdentity` describes only the bounded DOM dataset read/parse/identity and its relationship to MAIN provenance. `validatedContentExport` describes only `initialRequestDispatch.content.identity`, its relationship to MAIN, document correspondence and the existing identity-admission predicate. Neither fills the other's missing values. The legacy `content` arm is now an alias of validated-export identity only. Dataset PASS with validated-export MISSING remains IDENTITY_MISSING and is visible as such in the runner receipt. Admission here means the identity arm, not full document/Authority/Accounting qualification.
 
 Commit dependency closure for this review candidate is exactly the adapter, runner, this documentation, `test/hybrid-observability-retention.test.mjs`, and `test/fixtures/hybrid-diagnostic-reading.json`. The JSON is a historical sanitized diagnostic projection from `.playwright-mcp/kno208-core-init-authorized-reload-after.json` (media omitted, pipeline reduced); it contains no source comments/tokens/URLs and is not current runtime qualification. Test controls explicitly replace expected identity/current-version facts. The fixture needs only Node builtins, the two local tooling modules and that JSON. Existing P1.x regression test files are separate uncommitted evidence assets, not hidden dependencies; their checkpoint should be reviewed separately.
+
+## Explicit runtime expected identity binding
+
+`runSeekScenario(page, { expected, packet, acceptanceScope, approval, ready, capture })` and `createDiagnosticCapture({ expected })` require an explicit complete fingerprint: lowercase hex `prefix` (12), `sourceSHA` (40), and `commonBuildID` (64). Both clone/freeze these three fields before async work. Missing/partial/malformed fields stop before capture/action; there is no runtime legacy default. `EXPECTED` remains historical fixture data, usable only by explicitly passing it for a legacy packet.
+
+Use the same expected object to construct the adapter and invoke the runner. The adapter exposes its immutable expected binding; runner checks it before PRE, passes the fixed binding to each capture, and compares exact snapshot identity at PRE/OPPORTUNITY/ACTION_GATE/POST. Receipt expectedIdentity uses that same binding. This is existing prefix/source/common validation; full buildID/package digest are package-verifier provenance, not newly claimed runtime fields. Captured facts and supplied expected must agree; syntactic validity alone does not prove package provenance. New D uses prefix `b919fdf34325`, Product source `c880919dea33d406aaa98d1377e6888ce131d08b`, common `5b414f33d781d654178e5e9c4131b243fee34f8eee52830422fe97d102c634c6`; repository tooling HEAD is separate.
+
+Legacy invocation helpers in the runner, adapter, A/B and POST fixtures now explicitly supply historical EXPECTED; deliberate missing/malformed contract tests remain negative cases. New runtime packets must not source-rewrite EXPECTED or relabel new captures as old identity. Action approval/READY, A/B scope and all opportunity/POST bounds remain required and unchanged.
+
+## 2026-10-19 interrupted contract closure
+
+The identity migration snapshot includes eight paths: this document, both tooling modules, the expected-identity fixture and the four migrated runner/adapter/A-B/POST test files. Those previously untracked legacy fixtures are included because their invocation setups are mechanically coupled to the now-required expected contract. Test assertions and action/acceptance semantics are unchanged; only explicit historical expected setup is added. They are no longer deferred as an optional baseline checkpoint for this commit.
+
+The import/read closure additionally uses already committed `test/fixtures/hybrid-diagnostic-reading.json` and `src/diagnostic-scope-core.js`, plus Node builtins. It does not require schema-probe dirty work, external browsers, packages or local receipt files. Runtime runner/factory invocations always bind expected explicitly. Pure mapper helpers retain historical unit-test defaults, but the runtime capture factory always supplies its validated binding; the defaults are not a runtime admission fallback. Deliberate missing/partial/malformed expected tests remain invalid-input controls.
