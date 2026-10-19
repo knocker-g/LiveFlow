@@ -48,8 +48,13 @@ not sufficient for Product acceptance. Cross-world ordering stays UNORDERED.
 
 MAIN Shadow status supplies initialAuthorityTrace identity/ring/criticalArchive
 and initialRequestDispatch's CURRENT_DOCUMENT_DOM_EXPORT Content trace identity.
-The Content panel's fixed DEV D prefix identifies the candidate; MAIN has no
-separate candidate prefix getter. Both sourceSHA/commonBuildID must match.
+The Content panel's exact `DEV B / <12 lowercase hex>` or `DEV D / <12 lowercase hex>`
+text supplies the observed candidate and prefix independently of expected. A missing,
+malformed, repeated or conflicting panel is rejected; the live read requires exactly
+one panel belonging to the current document. MAIN has no separate candidate prefix
+getter. MAIN and validated Content export sourceSHA/commonBuildID must both match
+the explicitly supplied expected identity. Receipts retain only the candidate enum,
+panel count and identity predicate results, not raw panel text or identity values.
 `performance.timeOrigin` is a local document join key, not exported in receipts.
 
 Accounting status supplies diagnosticScope.{epoch,scopes,incomplete,

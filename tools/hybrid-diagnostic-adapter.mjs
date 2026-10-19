@@ -9,6 +9,14 @@ const ringValid = t => t && t.collectorFault === false && Array.isArray(t.rows) 
     count(t.total) && t.rows.at(-1).sequence === t.total && t.rows.every((r,i)=>r.sequence === t.total-t.rows.length+i+1) &&
     (t.truncated === false && t.rows[0].sequence === 1 || t.truncated === true && t.rows.length === 256);
 
+// Exact generated panel grammar; neither candidate nor prefix comes from expected.
+export function parsePanelIdentity(panel, facts) {
+    if(typeof panel!=='string'||panel.length>64)return null;
+    if(facts&&(facts.ownerDocumentMatch===false||('matches' in facts&&facts.matches!==1)))return null;
+    const match=/^DEV ([BD]) \/ ([a-f0-9]{12})[ \t]*$/.exec(panel);
+    return match?{candidate:match[1],prefix:match[2]}:null;
+}
+
 // Fixed-shape diagnostics, including failures. No arbitrary keys or enum text.
 export function incompleteEvidence(raw, expected = EXPECTED) {
     const n=x=>count(x)?x:'UNKNOWN', b=x=>typeof x==='boolean'?x:'UNKNOWN';
@@ -17,7 +25,7 @@ export function incompleteEvidence(raw, expected = EXPECTED) {
     const trIdentity=tr?.identity, content=raw?.shadow?.initialRequestDispatch?.content;
     const datasetIdentity=raw?.readFacts?.dataset?.identity;
     const contentIdentity=content?.identity;
-    const prefix=/^DEV D \/ ([a-f0-9]{12})\s*$/.exec(raw?.panel ?? '')?.[1];
+    const panelIdentity=parsePanelIdentity(raw?.panel,raw?.readFacts?.panel),prefix=panelIdentity?.prefix;
     const predicate=(present,valid,match)=>present===false?'MISSING':present!==true?'UNKNOWN':valid===false?'INVALID':valid!==true?'UNKNOWN':match===true?'PASS':match===false?'MISMATCH':'UNKNOWN';
     const identity=(x,observable=true)=>{const present=observable?x!=null:'UNKNOWN',valid=typeof x?.sourceSHA==='string'&&/^[a-f0-9]{40}$/.test(x.sourceSHA)&&typeof x?.commonBuildID==='string'&&/^[a-f0-9]{64}$/.test(x.commonBuildID);const match=valid?x.sourceSHA===expected.sourceSHA&&x.commonBuildID===expected.commonBuildID:'UNKNOWN';return {present,expectedMatch:match,predicate:predicate(present,valid,match)};};
     const phases=['READING','REANCHORING','STOPPED','SUSPENDED','BOOTSTRAPPING','BUFFER_PAUSED'];
@@ -30,7 +38,7 @@ export function incompleteEvidence(raw, expected = EXPECTED) {
     const getter=x=>({present:b(x?.present),statusPresent:b(x?.statusPresent),classification:e(x?.classification,['MISSING','ACCESSOR','INVALID','THREW','OK']),statusType:e(x?.statusType,['OBJECT','NULL','OTHER','UNKNOWN'])});
     const first=tr?.firstMismatch;
     const shadowCount=raw?.shadow?.mismatchCount;
-    return {authority:{state:e(raw?.reanchor?.authorityState,['OBSERVED_UNUSED','CONSUMED','INVALID']),available:b(raw?.reanchor?.authorityAvailable),current:b(raw?.reanchor?.authorityCurrent),lifecycleCurrent:b(raw?.reanchor?.lifecycleCurrent),revisionCurrent:b(raw?.reanchor?.revisionCurrent),targetCurrent:b(raw?.reanchor?.targetCurrent),generationCurrent:b(raw?.reanchor?.generationCurrent),requestInFlight:b(raw?.reanchor?.requestInFlight)},identity:{panel:{exists:b(facts?.panel?.exists),ownerDocumentMatch:b(facts?.panel?.ownerDocumentMatch),patternMatch:typeof raw?.panel==='string'?Boolean(prefix):'UNKNOWN',expectedMatch:prefix?prefix===expected.prefix:'UNKNOWN',predicate:predicate(raw?.panel!=null,Boolean(prefix),prefix?prefix===expected.prefix:'UNKNOWN')},main:{...identity(trIdentity,!facts||facts.getters?.shadow?.classification==='OK'),getter:getter(facts?.getters?.shadow)},content:{...identity(contentIdentity,!facts||facts.getters?.shadow?.classification==='OK')},datasetIdentity:{...identity(datasetIdentity,Boolean(facts)&&['VALID','MISSING'].includes(facts.dataset?.parse)),datasetPresent:b(facts?.dataset?.present),withinLimit:b(facts?.dataset?.withinLimit),parse:e(facts?.dataset?.parse,['VALID','INVALID','OVERSIZE','MISSING','UNKNOWN']),provenance:!facts||!['VALID','MISSING'].includes(facts.dataset?.parse)?'UNKNOWN':!datasetIdentity?'MISSING':!trIdentity?'UNKNOWN':datasetIdentity.sourceSHA===trIdentity.sourceSHA&&datasetIdentity.commonBuildID===trIdentity.commonBuildID?'MATCH_MAIN':'MISMATCH_MAIN'},validatedContentExport:{...identity(contentIdentity,!facts||facts.getters?.shadow?.classification==='OK'),provenance:!facts||facts.getters?.shadow?.classification==='OK'?(!contentIdentity?'MISSING':!trIdentity?'UNKNOWN':contentIdentity.sourceSHA===trIdentity.sourceSHA&&contentIdentity.commonBuildID===trIdentity.commonBuildID?'MATCH_MAIN':'MISMATCH_MAIN'):'UNKNOWN',documentCorrespondence:e(raw?.shadow?.initialRequestDispatch?.documentCorrespondence,['CURRENT_DOCUMENT_DOM_EXPORT','NOT_OBSERVED','INCONCLUSIVE']),admission:facts&&facts.getters?.shadow?.classification!=='OK'?'UNKNOWN':!contentIdentity?'MISSING':contentIdentity.sourceSHA===expected.sourceSHA&&contentIdentity.commonBuildID===expected.commonBuildID?'PASS':'MISMATCH'},documentCorrespondence:e(raw?.shadow?.initialRequestDispatch?.documentCorrespondence,['CURRENT_DOCUMENT_DOM_EXPORT','NOT_OBSERVED','INCONCLUSIVE'])},
+    return {authority:{state:e(raw?.reanchor?.authorityState,['OBSERVED_UNUSED','CONSUMED','INVALID']),available:b(raw?.reanchor?.authorityAvailable),current:b(raw?.reanchor?.authorityCurrent),lifecycleCurrent:b(raw?.reanchor?.lifecycleCurrent),revisionCurrent:b(raw?.reanchor?.revisionCurrent),targetCurrent:b(raw?.reanchor?.targetCurrent),generationCurrent:b(raw?.reanchor?.generationCurrent),requestInFlight:b(raw?.reanchor?.requestInFlight)},identity:{panel:{candidate:e(panelIdentity?.candidate,['B','D']),matches:n(raw?.readFacts?.panel?.matches),exists:b(facts?.panel?.exists),ownerDocumentMatch:b(facts?.panel?.ownerDocumentMatch),patternMatch:typeof raw?.panel==='string'?Boolean(prefix):'UNKNOWN',expectedMatch:prefix?prefix===expected.prefix:'UNKNOWN',predicate:predicate(raw?.panel!=null,Boolean(prefix),prefix?prefix===expected.prefix:'UNKNOWN')},main:{...identity(trIdentity,!facts||facts.getters?.shadow?.classification==='OK'),getter:getter(facts?.getters?.shadow)},content:{...identity(contentIdentity,!facts||facts.getters?.shadow?.classification==='OK')},datasetIdentity:{...identity(datasetIdentity,Boolean(facts)&&['VALID','MISSING'].includes(facts.dataset?.parse)),datasetPresent:b(facts?.dataset?.present),withinLimit:b(facts?.dataset?.withinLimit),parse:e(facts?.dataset?.parse,['VALID','INVALID','OVERSIZE','MISSING','UNKNOWN']),provenance:!facts||!['VALID','MISSING'].includes(facts.dataset?.parse)?'UNKNOWN':!datasetIdentity?'MISSING':!trIdentity?'UNKNOWN':datasetIdentity.sourceSHA===trIdentity.sourceSHA&&datasetIdentity.commonBuildID===trIdentity.commonBuildID?'MATCH_MAIN':'MISMATCH_MAIN'},validatedContentExport:{...identity(contentIdentity,!facts||facts.getters?.shadow?.classification==='OK'),provenance:!facts||facts.getters?.shadow?.classification==='OK'?(!contentIdentity?'MISSING':!trIdentity?'UNKNOWN':contentIdentity.sourceSHA===trIdentity.sourceSHA&&contentIdentity.commonBuildID===trIdentity.commonBuildID?'MATCH_MAIN':'MISMATCH_MAIN'):'UNKNOWN',documentCorrespondence:e(raw?.shadow?.initialRequestDispatch?.documentCorrespondence,['CURRENT_DOCUMENT_DOM_EXPORT','NOT_OBSERVED','INCONCLUSIVE']),admission:facts&&facts.getters?.shadow?.classification!=='OK'?'UNKNOWN':!contentIdentity?'MISSING':contentIdentity.sourceSHA===expected.sourceSHA&&contentIdentity.commonBuildID===expected.commonBuildID?'PASS':'MISMATCH'},documentCorrespondence:e(raw?.shadow?.initialRequestDispatch?.documentCorrespondence,['CURRENT_DOCUMENT_DOM_EXPORT','NOT_OBSERVED','INCONCLUSIVE'])},
         getterFacts:Object.fromEntries(['shadow','accounting','pipeline','reanchor','restart'].map(k=>[k,getter(facts?.getters?.[k])])),
         ownership:{mainContent:b(raw?.reanchor?.mainContentOwnershipValid),playerTiming:b(raw?.reanchor?.playerTimingValid),navigationPending:b(raw?.reanchor?.navigationPending),adActive:b(raw?.reanchor?.adActive),seekActive:b(raw?.reanchor?.seekActive),generationCurrent:b(raw?.restart?.generationCurrent),frameRoleCurrent:b(raw?.restart?.frameRoleCurrent),sameSnapshotCurrent:b(raw?.restart?.sameSnapshotCurrent)},
         pending:{temporal:n(a?.temporalPending),unclassified:n(a?.temporalUnclassified),due:n(a?.temporalDueAwaitingBridge),scheduler:n(a?.schedulerRetained)},
@@ -61,7 +69,7 @@ export function mapDiagnostics(raw, { expected = EXPECTED, before } = {}) {
     if (!raw || raw.readFault) return fail('MISSING_EXPORT_OR_REJECTED_READ');
     const sh=raw.shadow, tr=sh?.initialAuthorityTrace, dispatch=sh?.initialRequestDispatch, ct=dispatch?.content;
     const a=raw.accounting, ds=a?.diagnosticScope;
-    const prefix=/^DEV D \/ ([a-f0-9]{12})\s*$/.exec(raw.panel ?? '')?.[1];
+    const panelIdentity=parsePanelIdentity(raw.panel,raw.readFacts?.panel),prefix=panelIdentity?.prefix;
     if (!prefix || !tr?.identity || !ct?.identity) return fail('IDENTITY_MISSING');
     if (prefix !== expected.prefix || [tr.identity,ct.identity].some(x=>x.sourceSHA!==expected.sourceSHA || x.commonBuildID!==expected.commonBuildID)) return fail('IDENTITY_MISMATCH');
     if (!Number.isFinite(raw.documentTimeOrigin) || dispatch.documentCorrespondence!=='CURRENT_DOCUMENT_DOM_EXPORT' || dispatch.crossWorldOrdering!=='UNORDERED') return fail('DOCUMENT_UNPROVEN');
@@ -96,7 +104,7 @@ export function mapDiagnostics(raw, { expected = EXPECTED, before } = {}) {
     if(raw.visibility!=='visible' || r.visibility!=='VISIBLE') return fail('HIDDEN');
     if(!stageNames.every(k=>conserved(a.stages?.[k])) || a.accountingComplete!==true || a.lostUnaccounted!==0 || a.overflowUnaccounted!==0) return fail('CANONICAL_ACCOUNTING');
     if(!count(a.temporalPending)||!count(a.temporalUnclassified)||!count(a.temporalDueAwaitingBridge)||!count(a.temporalPendingUnclassified)||a.temporalPendingUnclassified>a.temporalPending || !count(a.schedulerRetained) || a.schedulerRetained!==a.stages.scheduler.retained || raw.pipeline?.pendingCurrent!==a.schedulerRetained) return fail('PENDING_PUBLICATION');
-    const out={ adapterStatus:'READY', adapterBoundary:null, main:{...expected},content:{...expected},documentKey,
+    const out={ adapterStatus:'READY', adapterBoundary:null, main:{prefix,sourceSHA:tr.identity.sourceSHA,commonBuildID:tr.identity.commonBuildID},content:{prefix,sourceSHA:ct.identity.sourceSHA,commonBuildID:ct.identity.commonBuildID},documentKey,
         visibility:raw.visibility,phase:r.controlPhase,lifecycle:current.lifecycle,epoch:ds.epoch,diagnosticSequence:current.sequence,scopeComplete:true,
         authorityOK:true,currentnessOK:true,adActive:false,mismatch:0,fault:false,traceComplete:true,accountingComplete:true,conservation:true,loss:0,overflow:0,
         temporalPending:a.temporalPending+a.temporalUnclassified+a.temporalDueAwaitingBridge,schedulerPending:a.schedulerRetained,
@@ -192,6 +200,8 @@ export function readDiagnosticPage() {
         }catch{f.classification='THREW';return null;}
     };
     const panel=document.getElementById('liveflow-dev-comparison');
+    let panelMatches='UNKNOWN';
+    try{if(typeof document.querySelectorAll==='function')panelMatches=document.querySelectorAll('#liveflow-dev-comparison').length;}catch{ /* Evidence stays UNKNOWN. */ }
     const dataset={present:false,withinLimit:'UNKNOWN',parse:'MISSING'};
     try{const bytes=panel?.dataset?.initialRequestTrace;dataset.present=typeof bytes==='string'&&bytes.length>0;
         if(dataset.present){dataset.withinLimit=bytes.length<=65536;if(!dataset.withinLimit)dataset.parse='OVERSIZE';else{try{const parsed=JSON.parse(bytes);dataset.identity=parsed?.identity;dataset.parse='VALID';}catch{dataset.parse='INVALID';}}}
@@ -203,7 +213,7 @@ export function readDiagnosticPage() {
         shadow:status('shadow','LiveFlowReplayControlPlaneShadowDiagnostic'),accounting:status('accounting','LiveFlowReplayAccountingDiagnostic'),
         pipeline:status('pipeline','LiveFlowReplayPipelineDiagnostic'),reanchor:status('reanchor','LiveFlowReplayProductionReanchorDiagnostic'),restart:status('restart','LiveFlowReplayRestartDiagnostic'),
         media:{currentTime:video?.currentTime,duration:video?.duration},
-        readFacts:{panel:{exists:Boolean(panel),ownerDocumentMatch:panel?panel.ownerDocument===document:'UNKNOWN'},dataset,getters}};
+        readFacts:{panel:{matches:panelMatches,exists:Boolean(panel),ownerDocumentMatch:panel?panel.ownerDocument===document:'UNKNOWN'},dataset,getters}};
     if(Object.values(getters).some(x=>x.classification==='THREW'))result.readFault=true;
     return result;
 }
@@ -269,7 +279,7 @@ export function postCaptureExpression({before,expected,timeoutMs}) {
     // Only reviewed source functions and JSON data are serialized, never input code.
     return `(() => {const EXPECTED=${JSON.stringify(expected)};const count=${count};const stageNames=${JSON.stringify(stageNames)};
         const conserved=${conserved};const contiguous=${contiguous};const ringValid=${ringValid};
-        const incompleteEvidence=${incompleteEvidence};const mapDiagnostics=${mapDiagnostics};const readDiagnosticPage=${readDiagnosticPage};
+        const parsePanelIdentity=${parsePanelIdentity};const incompleteEvidence=${incompleteEvidence};const mapDiagnostics=${mapDiagnostics};const readDiagnosticPage=${readDiagnosticPage};
         return (${observePost})({read:readDiagnosticPage,map:raw=>mapDiagnostics(raw,${JSON.stringify({before,expected})}),timeoutMs:${Math.min(10000,timeoutMs)},
         env:{window,origin:location.origin,ownedVideo:()=>document.querySelector('ytd-watch-flexy #movie_player video.html5-main-video'),
         addEventListener:window.addEventListener.bind(window),removeEventListener:window.removeEventListener.bind(window),
@@ -279,7 +289,7 @@ export function postCaptureExpression({before,expected,timeoutMs}) {
 export function opportunityExpression({before,expected,timeoutMs}) {
     return `(() => {const EXPECTED=${JSON.stringify(expected)};const count=${count};const stageNames=${JSON.stringify(stageNames)};
         const conserved=${conserved};const contiguous=${contiguous};const ringValid=${ringValid};
-        const incompleteEvidence=${incompleteEvidence};const mapDiagnostics=${mapDiagnostics};const readDiagnosticPage=${readDiagnosticPage};
+        const parsePanelIdentity=${parsePanelIdentity};const incompleteEvidence=${incompleteEvidence};const mapDiagnostics=${mapDiagnostics};const readDiagnosticPage=${readDiagnosticPage};
         return (${observeOpportunity})({before:${JSON.stringify(before)},read:readDiagnosticPage,map:raw=>mapDiagnostics(raw,${JSON.stringify({before,expected})}),timeoutMs:${Math.min(5000,timeoutMs)},
         env:{window,origin:location.origin,now:()=>performance.now(),addEventListener:window.addEventListener.bind(window),removeEventListener:window.removeEventListener.bind(window),queueMicrotask:window.queueMicrotask.bind(window),setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)}});})()`;
 }
