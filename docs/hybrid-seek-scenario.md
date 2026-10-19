@@ -332,3 +332,20 @@ success. Canonical Accounting remains an independent diagnostic export. Evidence
 projection omits raw video IDs, URLs, comments, owner capabilities and error text;
 missing counters remain UNKNOWN. Historical mismatch5/provisional loss22 remain
 UNKNOWN. Runtime qualification and visual/Seek/B-D acceptance are separate tasks.
+
+### Import-free passive host invocation
+
+`tools/build-passive-host-invocation.mjs` exports
+`buildPassiveHostInvocation({packet, expected, ready, approval, durationMs})`.
+Generate the function text offline and pass it to the existing
+`browser_run_code_unsafe` filename/code interface. Explicit packet-bound
+foreground READY and Recorder approval remain required; generating text is not
+browser authorization. Expected identity comes from the selected package manifest.
+
+The host VM has no dynamic-import callback. The builder bundles the three existing
+tooling modules into isolated scopes and rejects unbundled imports. It uses only
+the supplied existing `page` interface at execution time. After passive PRE passes,
+a read-only Web Crypto call obtains one operation capability; it is never written
+to the final receipt. The existing runner repeats qualification, checks the bridge,
+and owns START/STOP and cleanup. No Product/package change or alternate browser
+connection is required. A mock-host fixture proves packaging, not real Edge behavior.
