@@ -64,6 +64,10 @@ export function incompleteEvidence(raw, expected = EXPECTED) {
 
 // Pure mapper: never fills absent evidence with a successful default.
 export function mapDiagnostics(raw, { expected = EXPECTED, before } = {}) {
+    return mapQualifiedDiagnostics(raw, {expected,before}, false);
+}
+
+function mapQualifiedDiagnostics(raw, { expected, before }, passive) {
     const evidence=incompleteEvidence(raw, expected);
     const fail = boundary => ({ adapterStatus: 'BLOCKED', adapterBoundary: boundary, evidence: {...evidence, firstBadPredicate: boundary} });
     if (!raw || raw.readFault) return fail('MISSING_EXPORT_OR_REJECTED_READ');
@@ -96,7 +100,7 @@ export function mapDiagnostics(raw, { expected = EXPECTED, before } = {}) {
     const latest=tr.rows.filter(r=>r.lifecycle===current.lifecycle && r.epoch===ds.epoch).at(-1);
     if(!latest || latest.phase!==raw.reanchor?.controlPhase) return fail('CURRENT_SCOPE_TRACE_MISSING');
     const r=raw.reanchor;
-    if(!r || r.controlPhase!=='READING' || sh.shadowPhase!=='READING') return fail('PHASE');
+    if(!r || !(passive ? ['READING','BUFFER_PAUSED'] : ['READING']).includes(r.controlPhase) || sh.shadowPhase!==r.controlPhase) return fail('PHASE');
     if(sh.mismatchCount!==0 || tr.firstMismatch!==null) return fail('MISMATCH');
     // These are existing read-only diagnostic facts, not calls to Authority APIs.
     if(r.navigationPending!==false || r.adActive!==false || r.seekActive!==false || r.mainContentOwnershipValid!==true || r.playerTimingValid!==true ||
@@ -279,7 +283,7 @@ export function postCaptureExpression({before,expected,timeoutMs}) {
     // Only reviewed source functions and JSON data are serialized, never input code.
     return `(() => {const EXPECTED=${JSON.stringify(expected)};const count=${count};const stageNames=${JSON.stringify(stageNames)};
         const conserved=${conserved};const contiguous=${contiguous};const ringValid=${ringValid};
-        const parsePanelIdentity=${parsePanelIdentity};const incompleteEvidence=${incompleteEvidence};const mapDiagnostics=${mapDiagnostics};const readDiagnosticPage=${readDiagnosticPage};
+        const parsePanelIdentity=${parsePanelIdentity};const incompleteEvidence=${incompleteEvidence};const mapQualifiedDiagnostics=${mapQualifiedDiagnostics};const mapDiagnostics=${mapDiagnostics};const readDiagnosticPage=${readDiagnosticPage};
         return (${observePost})({read:readDiagnosticPage,map:raw=>mapDiagnostics(raw,${JSON.stringify({before,expected})}),timeoutMs:${Math.min(10000,timeoutMs)},
         env:{window,origin:location.origin,ownedVideo:()=>document.querySelector('ytd-watch-flexy #movie_player video.html5-main-video'),
         addEventListener:window.addEventListener.bind(window),removeEventListener:window.removeEventListener.bind(window),
@@ -289,7 +293,7 @@ export function postCaptureExpression({before,expected,timeoutMs}) {
 export function opportunityExpression({before,expected,timeoutMs}) {
     return `(() => {const EXPECTED=${JSON.stringify(expected)};const count=${count};const stageNames=${JSON.stringify(stageNames)};
         const conserved=${conserved};const contiguous=${contiguous};const ringValid=${ringValid};
-        const parsePanelIdentity=${parsePanelIdentity};const incompleteEvidence=${incompleteEvidence};const mapDiagnostics=${mapDiagnostics};const readDiagnosticPage=${readDiagnosticPage};
+        const parsePanelIdentity=${parsePanelIdentity};const incompleteEvidence=${incompleteEvidence};const mapQualifiedDiagnostics=${mapQualifiedDiagnostics};const mapDiagnostics=${mapDiagnostics};const readDiagnosticPage=${readDiagnosticPage};
         return (${observeOpportunity})({before:${JSON.stringify(before)},read:readDiagnosticPage,map:raw=>mapDiagnostics(raw,${JSON.stringify({before,expected})}),timeoutMs:${Math.min(5000,timeoutMs)},
         env:{window,origin:location.origin,now:()=>performance.now(),addEventListener:window.addEventListener.bind(window),removeEventListener:window.removeEventListener.bind(window),queueMicrotask:window.queueMicrotask.bind(window),setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)}});})()`;
 }
@@ -326,4 +330,92 @@ export function createDiagnosticCapture({expected:requestedExpected}={}) {
     };
     Object.defineProperty(capture,'expectedIdentity',{value:expected});
     return capture;
+}
+
+// Dedicated passive qualification. Seek's public mapper and phase policy stay unchanged.
+export function mapPassiveDiagnostics(raw,{expected,before}={}) {
+    const binding=bindExpectedIdentity(expected);
+    if(!binding)return {adapterStatus:'BLOCKED',adapterBoundary:'EXPECTED_IDENTITY_INVALID'};
+    const result=mapQualifiedDiagnostics(raw,{expected:binding,before},true);
+    const bool=x=>typeof x==='boolean'?x:'UNKNOWN',num=x=>typeof x==='number'&&Number.isFinite(x)?x:'UNKNOWN';
+    const p=raw?.passive;
+    result.evidence={...result.evidence,passive:{media:{connected:bool(p?.connected),paused:bool(p?.paused),ended:bool(p?.ended),seeking:bool(p?.seeking),
+        readyState:Number.isInteger(p?.readyState)&&p.readyState>=0&&p.readyState<=4?p.readyState:'UNKNOWN'},
+        geometry:Object.fromEntries(['viewportWidth','viewportHeight','dpr','playerWidth','playerHeight','surfaceWidth','surfaceHeight'].map(k=>[k,num(p?.geometry?.[k])]))}};
+    if(result.adapterStatus!=='READY')return result;
+    const fail=boundary=>({...result,adapterStatus:'BLOCKED',adapterBoundary:boundary,evidence:{...result.evidence,firstBadPredicate:boundary}});
+    if(before&&(result.epoch!==before.epoch||result.lifecycle!==before.lifecycle||result.diagnosticSequence<before.diagnosticSequence))return fail('SCOPE_CHANGED');
+    if(p?.connected!==true||p.paused!==false||p.ended!==false||p.seeking!==false||!Number.isInteger(p.readyState)||p.readyState<3||p.readyState>4||!Number.isFinite(raw.media?.currentTime)||raw.media.currentTime<0||!Number.isFinite(raw.media?.duration)||raw.media.duration<=raw.media.currentTime||before&&raw.media.currentTime<before.mediaTime)return fail('PASSIVE_MEDIA');
+    if(!['viewportWidth','viewportHeight','dpr','playerWidth','playerHeight','surfaceWidth','surfaceHeight'].every(k=>typeof p.geometry?.[k]==='number'&&Number.isFinite(p.geometry[k])&&p.geometry[k]>0))return fail('PASSIVE_GEOMETRY');
+    const a=raw.reanchor;
+    if(a.inFlight!==false||a.authorityCurrent!==true||a.lifecycleCurrent!==true||a.revisionCurrent!==true||a.targetCurrent!==true||a.generationCurrent!==true||!['OBSERVED_UNUSED','CONSUMED'].includes(a.authorityState))return fail('PASSIVE_AUTHORITY');
+    if(before&&JSON.stringify(p.geometry)!==JSON.stringify(before.passiveGeometry))return fail('PASSIVE_GEOMETRY_CHANGED');
+    return {...result,operation:'PASSIVE_RECORDER_V1',phase:raw.reanchor.controlPhase,passiveGeometry:{...p.geometry}};
+}
+
+export function readPassiveDiagnosticPage() {
+    const raw=readDiagnosticPage();
+    const p=document.querySelector('ytd-watch-flexy #movie_player');
+    const v=p?.querySelector('video.html5-main-video');
+    const rect=p?.getBoundingClientRect(),surface=document.getElementById('liveflow-danmaku-surface')?.getBoundingClientRect();
+    raw.passive={connected:v?.isConnected===true,paused:v?.paused,ended:v?.ended,seeking:v?.seeking,readyState:v?.readyState,
+        geometry:{viewportWidth:innerWidth,viewportHeight:innerHeight,dpr:devicePixelRatio,playerWidth:rect?.width,playerHeight:rect?.height,surfaceWidth:surface?.width,surfaceHeight:surface?.height}};
+    return raw;
+}
+
+export function observePassive({read,map,env,durationMs,deadlineAt=env.now()+10000,cleanupCommand}) {
+    return new Promise(resolve=>{
+        let done=false,queued=false,last,events=0,captures=0,timer;
+        const types=['message','visibilitychange','pause','seeking','ended','pagehide'];
+        const stopOwned=()=>env.post(cleanupCommand);
+        const finish=(reason,invalid=false)=>{
+            if(done)return;done=true;
+            let cleanup=true,stopRequested=false;
+            for(const t of types)try{env.removeEventListener(t,onEvent,true);}catch{cleanup=false;}
+            try{env.clearTimeout(timer);}catch{cleanup=false;}
+            if(invalid)try{stopOwned();stopRequested=true;}catch{ /* Runner still owns cleanup confirmation. */ }
+            resolve({last,reason,events,captures,cleanup,stopRequested});
+        };
+        const capture=()=>{
+            queued=false;if(done)return;
+            if(env.now()>=deadlineAt){finish('DEADLINE',true);return;}
+            if(captures>=16){finish('CAPTURE_CAP',true);return;}
+            try {last=map(read());captures++;if(last.adapterStatus!=='READY')finish('INVALIDATED',true);}
+            catch{finish('READ_FAULT',true);}
+        };
+        function onEvent(e) {
+            if(done)return;
+            if(e.type==='message'){
+                if(e.source!==env.window||e.origin!==env.origin)return;
+                const d=e.data;
+                if(d?.type==='LIVEFLOW_DEV_OWNED_RECORDER_V1'&&d.command==='STOP'&&d.operationId===cleanupCommand.operationId&&d.capability===cleanupCommand.capability&&d.instanceId===cleanupCommand.instanceId){finish('OWNED_STOP_REQUESTED');return;}
+                if(d?.type==='LIVEFLOW_DEV_OWNED_RECORDER_V1_ACK'&&d.operationId===cleanupCommand.operationId&&d.capability===cleanupCommand.capability&&d.instanceId===cleanupCommand.instanceId&&
+                    d.result?.stopConfirmed===true){finish('OWNED_STOP');return;}
+                if(!((d?.source==='liveflow-content-script'&&['LIVEFLOW_REPLAY_PIPELINE_DIAGNOSTIC','LIVEFLOW_PENDING_ONLY_CLEAR_ACK'].includes(d.type))||
+                    (d?.source==='liveflow-page-state'&&d.type==='LIVEFLOW_REPLAY_DIAGNOSTIC_SCOPE_OPEN')))return;
+            }else if(e.type==='pagehide'){finish('DETACHED',true);return;}
+            else if(e.type!=='visibilitychange'&&e.target!==env.ownedVideo())return;
+            if(++events>=32){finish('EVENT_CAP',true);return;}
+            if(!queued){queued=true;env.queueMicrotask(capture);}
+        }
+        try {
+            for(const t of types)env.addEventListener(t,onEvent,true);
+            timer=env.setTimeout(()=>{capture();if(!done)finish('NORMAL');},Math.max(0,Math.min(9000,durationMs,deadlineAt-env.now())));
+            capture(); // After registration, so no publication gap.
+        }catch{finish('READ_FAULT',true);}
+    });
+}
+
+export function passiveObservationExpression({expected,before,operationId,capability,instanceId,durationMs,deadlineAt}) {
+    const command={type:'LIVEFLOW_DEV_OWNED_RECORDER_V1',documentKey:before.documentKey,operationId,capability,instanceId,requestId:'observer_cleanup',command:'STOP',reason:'INVALIDATED'};
+    return `(()=>{const EXPECTED=${JSON.stringify(expected)},count=${count},stageNames=${JSON.stringify(stageNames)};
+        const conserved=${conserved},contiguous=${contiguous},ringValid=${ringValid},bindExpectedIdentity=${bindExpectedIdentity};
+        const parsePanelIdentity=${parsePanelIdentity},incompleteEvidence=${incompleteEvidence},mapQualifiedDiagnostics=${mapQualifiedDiagnostics};
+        const mapPassiveDiagnostics=${mapPassiveDiagnostics},readDiagnosticPage=${readDiagnosticPage},readPassiveDiagnosticPage=${readPassiveDiagnosticPage};
+        return (${observePassive})({read:readPassiveDiagnosticPage,map:raw=>mapPassiveDiagnostics(raw,${JSON.stringify({expected,before})}),
+            durationMs:${Math.min(9000,durationMs)},deadlineAt:${JSON.stringify(deadlineAt)},cleanupCommand:${JSON.stringify(command)},env:{window,origin:location.origin,now:()=>performance.now(),
+                ownedVideo:()=>document.querySelector('ytd-watch-flexy #movie_player video.html5-main-video'),
+                addEventListener:window.addEventListener.bind(window),removeEventListener:window.removeEventListener.bind(window),
+                setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window),queueMicrotask:window.queueMicrotask.bind(window),
+                post:value=>window.postMessage(value,location.origin)}});})()`;
 }

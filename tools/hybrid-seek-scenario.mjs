@@ -39,6 +39,7 @@ const knownBool=x=>typeof x==='boolean'?x:'UNKNOWN';
 const knownNumber=x=>number(x)?x:'UNKNOWN';
 const boundaryNames=new Set(('MISSING_EXPORT_OR_REJECTED_READ IDENTITY_MISSING IDENTITY_MISMATCH DOCUMENT_UNPROVEN STALE_DOCUMENT SCOPE_EXPORT_MISSING SCOPE_EPOCH_INVALID SCOPE_LIST_MISSING SCOPE_CAPACITY SCOPE_DUPLICATE_EPOCH SCOPE_INCOMPLETE_FLAG SCOPE_DISCARDED_OR_UNKNOWN SCOPE_IDENTITY SCOPE_SEQUENCE SCOPE_CHANGED ACK_UNRESOLVED_OR_MISSING TRACE_SEQUENCE_OR_FAULT ARCHIVE_INCOMPLETE CURRENT_SCOPE_TRACE_MISSING PHASE MISMATCH CURRENTNESS_OR_OWNERSHIP_UNPROVEN HIDDEN CANONICAL_ACCOUNTING PENDING_PUBLICATION OLD_SCOPE_INCOMPLETE OLD_SCOPE_MISSING_OR_MULTIPLE_TRANSITIONS OLD_TERMINAL_ATTRIBUTION OLD_REASON_ACCOUNTING POST_BASELINE_MISSING POST_NO_CAPTURE CAPTURE_CONTRACT DETACHED_TAB READ_REJECTED_OR_TIMEOUT').split(' '));
 boundaryNames.add('SCOPE_ENTRY_INVALID');
+for(const name of ['PASSIVE_MEDIA','PASSIVE_GEOMETRY','PASSIVE_AUTHORITY','PASSIVE_GEOMETRY_CHANGED'])boundaryNames.add(name);
 boundaryNames.add('EXPECTED_IDENTITY_INVALID');boundaryNames.add('EXPECTED_CAPTURE_MISMATCH');
 const safeBoundary=x=>boundaryNames.has(x)?x:'UNKNOWN';
 function stageConservation(stages){
@@ -58,6 +59,10 @@ export function retainedObservability(e) {
     const arm=x=>({present:bool(x?.present),expectedMatch:bool(x?.expectedMatch),predicate:en(x?.predicate,['PASS','MISSING','INVALID','MISMATCH','UNKNOWN'])});
     const i=e?.identity,c=e?.control;
     return {firstBadPredicate:boundaryNames.has(e?.firstBadPredicate)?e.firstBadPredicate:'UNKNOWN',
+        ...(e?.passive?{passive:{media:{...Object.fromEntries(['connected','paused','ended','seeking'].map(k=>[k,bool(e.passive.media?.[k])])),
+            readyState:en(e.passive.media?.readyState,[0,1,2,3,4])},
+            geometry:Object.fromEntries(['viewportWidth','viewportHeight','dpr','playerWidth','playerHeight','surfaceWidth','surfaceHeight'].map(k=>{
+                const value=e.passive.geometry?.[k];return[k,typeof value==='number'&&Number.isFinite(value)?value:'UNKNOWN'];}))}}:{}),
         identity:{panel:{candidate:en(i?.panel?.candidate,['B','D']),matches:num(i?.panel?.matches),exists:bool(i?.panel?.exists),ownerDocumentMatch:bool(i?.panel?.ownerDocumentMatch),patternMatch:bool(i?.panel?.patternMatch),expectedMatch:bool(i?.panel?.expectedMatch),predicate:en(i?.panel?.predicate,['PASS','MISSING','INVALID','MISMATCH','UNKNOWN'])},main:{...arm(i?.main),getter:getter(i?.main?.getter)},content:{...arm(i?.content)},datasetIdentity:{...arm(i?.datasetIdentity),datasetPresent:bool(i?.datasetIdentity?.datasetPresent),withinLimit:bool(i?.datasetIdentity?.withinLimit),parse:en(i?.datasetIdentity?.parse,['VALID','INVALID','OVERSIZE','MISSING','UNKNOWN']),provenance:en(i?.datasetIdentity?.provenance,['MATCH_MAIN','MISMATCH_MAIN','MISSING','UNKNOWN'])},validatedContentExport:{...arm(i?.validatedContentExport),provenance:en(i?.validatedContentExport?.provenance,['MATCH_MAIN','MISMATCH_MAIN','MISSING','UNKNOWN']),documentCorrespondence:en(i?.validatedContentExport?.documentCorrespondence,['CURRENT_DOCUMENT_DOM_EXPORT','NOT_OBSERVED','INCONCLUSIVE']),admission:en(i?.validatedContentExport?.admission,['PASS','MISSING','MISMATCH','UNKNOWN'])},documentCorrespondence:en(i?.documentCorrespondence,['CURRENT_DOCUMENT_DOM_EXPORT','NOT_OBSERVED','INCONCLUSIVE'])},
         getterFacts:Object.fromEntries(['shadow','accounting','pipeline','reanchor','restart'].map(k=>[k,getter(e?.getterFacts?.[k])])),
         ownership:Object.fromEntries(['mainContent','playerTiming','navigationPending','adActive','seekActive','generationCurrent','frameRoleCurrent','sameSnapshotCurrent'].map(k=>[k,bool(e?.ownership?.[k])])),

@@ -256,3 +256,79 @@ Legacy invocation helpers in the runner, adapter, A/B and POST fixtures now expl
 The identity migration snapshot includes eight paths: this document, both tooling modules, the expected-identity fixture and the four migrated runner/adapter/A-B/POST test files. Those previously untracked legacy fixtures are included because their invocation setups are mechanically coupled to the now-required expected contract. Test assertions and action/acceptance semantics are unchanged; only explicit historical expected setup is added. They are no longer deferred as an optional baseline checkpoint for this commit.
 
 The import/read closure additionally uses already committed `test/fixtures/hybrid-diagnostic-reading.json` and `src/diagnostic-scope-core.js`, plus Node builtins. It does not require schema-probe dirty work, external browsers, packages or local receipt files. Runtime runner/factory invocations always bind expected explicitly. Pure mapper helpers retain historical unit-test defaults, but the runtime capture factory always supplies its validated binding; the defaults are not a runtime admission fallback. Deliberate missing/partial/malformed expected tests remain invalid-input controls.
+## Dev-only owned Passive Recorder lifecycle
+
+`tools/passive-recorder-scenario.mjs` exposes `createPassiveCapture({expected})`
+and `runPassiveRecorderScenario(page, options)`. This is a separate
+`PASSIVE_RECORDER_V1` operation; it never invokes the Seek runner or changes its
+READING/A/B gates. Explicit frozen expected is required end-to-end. The passive
+mapper allows matching MAIN/Shadow READING or BUFFER_PAUSED, retaining all prior
+identity/currentness, scope/archive/ACK, mismatch/fault and Accounting gates. It
+also requires owned playing ready media, complete positive geometry and explicit
+Authority binding-currentness facts; unknown values block. Queues may be empty.
+
+Approval and fresh foreground-exclusive READY must bind the packet and local
+document key. Approval must name `operation: PASSIVE_RECORDER_V1` and
+`recorder: true`. No browser use is implied by fixture results. Native UI Seek,
+playback, reload, navigation, extension/settings changes and Product actions are
+never part of this operation. No implicit downgrade from Seek or bypass of its
+authorization is provided.
+
+The approved dev-only generator now embeds the closure-owned lifecycle controller
+and `LIVEFLOW_DEV_OWNED_RECORDER_V1` diagnostic bridge. Existing packages remain
+unchanged and lack this bridge: a read-only INFO handshake must verify its
+observed build/instance and availability before any START. A fresh separately
+qualified package is required; old prefix/source fingerprints must not be reused
+as new-package defaults. Generator inputs fingerprint both new lifecycle modules.
+No Production manifest, source, Control Plane, Scheduler or acquisition API changes.
+
+One document/Recorder-instance operation owns sampling and deadline resources.
+Start is bound to explicit build identity, local document/video and presentation
+generation/lifecycle/epoch. Cleanup uses the previously issued diagnostic owner,
+not requalification of an invalid identity. Wrong instance/capability/operation
+cannot stop another Recorder. Stop closes admission, clears interval/deadline and
+fences queued callbacks; STOP_CONFIRMED requires owned resource count0 and active
+callback count0. Ownership remains held until caller receives ACK and explicitly
+releases it. Unknown cleanup is sticky and prevents further capture, with no
+automatic retry, recovery or registry eviction. Later ACK cannot promote invalid
+capture into PASS. The registry is bounded to32 operations per document.
+
+The observer's cleanup command carries the same Recorder instance as the
+transport. Cancellation arriving before START leaves a bounded tombstone, so a
+delayed START cannot allocate new resources afterward. A normal stop ACK does not
+hide an unconfirmed observer: receipt fields `recorderCleanup` and
+`observerCleanup` are separate, and overall CLEANUP_UNKNOWN holds the owner.
+Media/geometry failure facts and UNKNOWN values survive the final receipt.
+
+Observation budget is at most10s from internal start; normal runner duration is8s
+(allowed1–9000ms). Every sample/event and read completion checks deadline and
+currentness. A delayed callback stops before collecting new data. Internal
+deadline request and actual resource release remain different facts. Cleanup
+confirmation, including ownership retirement, has a separate2s runner waiting
+budget. Diagnostic command listeners use1900ms to reserve100ms delivery margin;
+the2s value matches the existing single-read transport budget, not a guarantee of
+native release. Frozen/detached context, lost ACK, clear failure or timeout yields
+CLEANUP_UNKNOWN/FAILED, never fabricated cleanup PASS. No page/extension reload or
+Product cleanupOverlay is used. Manual Record20s UI remains legacy and cannot
+replace/interfere with an owned operation.
+
+The operation's deadline is an ephemeral local monotonic-clock value supplied by
+the Recorder, carried through capture factory and observer. A resumed observer
+checks it before reading diagnostics; timer delivery after expiry cannot create
+a late snapshot. The deadline is not persisted as document identity or a native
+stop guarantee. Cancellation during start or cleanup never promotes capture PASS.
+
+The passive observer listens only to relevant publication/media/lifecycle events,
+coalesces reads after Product handlers, caps32events/16captures and always removes
+its per-operation listeners/timer when execution is responsive. Identity/scope/
+Authority failure ends observation and sends only old-owner diagnostic cleanup.
+Recorder's document-owned bridge listener is not a per-operation resource. A
+frozen context cannot acknowledge cleanup; elapsed wall time is not proof.
+
+Receipt separates capture execution, cleanup confirmation/resources, sampled
+evidence qualification, Density comparison NOT_PROVEN and Human acceptance
+PENDING. Empty activity or missing SPECIAL observations do not imply comparison
+success. Canonical Accounting remains an independent diagnostic export. Evidence
+projection omits raw video IDs, URLs, comments, owner capabilities and error text;
+missing counters remain UNKNOWN. Historical mismatch5/provisional loss22 remain
+UNKNOWN. Runtime qualification and visual/Seek/B-D acceptance are separate tasks.

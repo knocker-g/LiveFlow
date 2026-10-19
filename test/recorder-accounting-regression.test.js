@@ -20,7 +20,7 @@ test('generated recorder respects native Window receiver through start/stop and 
     const packages = build(path.resolve(__dirname, '../build/receiver-test-' + crypto.randomUUID()));
     for (const p of packages) {
         const source = fs.readFileSync(path.join(p.directory, 'src/youtube-chat.js'), 'utf8');
-        const host = source.match(/\}, (\{ setInterval[^]*?now: \(\) => performance\.now\(\) \})\);/)[1];
+        const host = source.match(/\}, (\{ setInterval[^]*?binding: \(\) => \(\{[^]*?\}\) \}), createComparisonRecorder\);/)[1];
         let callback, clears = 0, at = 0;
         const nativeWindow = { setInterval(fn) { if (this !== nativeWindow) throw new TypeError('Illegal invocation'); callback = fn; return 1; },
             clearInterval() { if (this !== nativeWindow) throw new TypeError('Illegal invocation'); clears++; } };

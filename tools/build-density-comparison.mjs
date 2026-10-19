@@ -48,6 +48,7 @@ export function build(output = path.join(root, 'build/density-comparison'), { in
     const files = Object.fromEntries([...resources].sort().map(name => [name, fs.readFileSync(path.join(root, name))]));
     const inputs = Object.fromEntries(Object.entries(files).map(([k, v]) => [k, hash(v)]));
     const devInputs = ['tools/build-density-comparison.mjs', 'tools/density-comparison/recorder.js',
+        'tools/density-comparison/owned-recorder.mjs', 'tools/density-comparison/recorder-bridge.mjs',
         'test/fixtures/final-visual-candidates.js', 'test/fixtures/opportunity-aware-density.js'];
     if (initialAuthorityTrace) devInputs.push('tools/density-comparison/initial-authority-trace.js',
         'tools/density-comparison/instrument-initial-authority.mjs', 'tools/density-comparison/instrument-initial-request.mjs',
@@ -75,7 +76,8 @@ export function build(output = path.join(root, 'build/density-comparison'), { in
         .replace("require('../../src/overlay-core.js')", 'window.LiveFlowOverlayCore')
         .replace('module.exports = { select };', 'return select;');
     if (/require\(|module\.exports/.test(selector)) throw Error('Selector wrapper not browser-safe');
-    const recorder = fs.readFileSync(path.join(root, 'tools/density-comparison/recorder.js'), 'utf8');
+    const recorder = fs.readFileSync(path.join(root, 'tools/density-comparison/recorder.js'), 'utf8') + '\n' +
+        ['owned-recorder.mjs','recorder-bridge.mjs'].map(name => fs.readFileSync(path.join(root, 'tools/density-comparison',name),'utf8').replaceAll('export function ','function ')).join('\n');
     const packages = [];
     for (const candidate of ['B', 'D']) {
         const config = candidate === 'B' ? candidates[2].config : candidateC.config;
@@ -88,14 +90,15 @@ export function build(output = path.join(root, 'build/density-comparison'), { in
             '    const comparisonIdentity = ' + JSON.stringify(identity) + ';\n' +
             '    const comparisonSelect = (() => {\n' + selector + '\n})();\n' + recorder + '\n' +
             '    const comparisonNodes = new WeakMap(); let comparisonNextID = 0;\n' +
-            '    const comparisonRecorder = createComparisonRecorder(comparisonIdentity, () => {\n' +
+            '    const comparisonRecorder = createOwnedRecorder(comparisonIdentity, () => {\n' +
             '        const media = getCurrentMainMedia(); const surface = overlaySurface?.getBoundingClientRect();\n' +
             '        return { at: performance.now(), videoID: new URL(location.href).searchParams.get("v"), mediaTime: media?.video?.currentTime ?? null,\n' +
             '            playbackRate: media?.video?.playbackRate ?? null, paused: media?.video?.paused ?? null, ad: media ? isAdPlaybackActive(media.player) : null,\n' +
             '            viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio }, settings: runtimeSettings, generation: rendererGeneration,\n' +
             '            captions: media ? isCaptionTrackEnabled(media.player) : null, surface: surface ? { left: surface.left, top: surface.top, right: surface.right, bottom: surface.bottom } : null,\n' +
             '            boxes: surface ? snapshotActiveGeometry(surface)?.map((box, index) => { const node = [...activeDanmaku.values()][index].node; if (!comparisonNodes.has(node)) comparisonNodes.set(node, ++comparisonNextID); return { ...box, observationID: comparisonNodes.get(node) }; }) : null, scheduler: phase3Runtime?.status?.() ?? null };\n' +
-            '    }, { setInterval: (callback, delay) => window.setInterval(callback, delay), clearInterval: handle => window.clearInterval(handle), now: () => performance.now() });\n' +
+            '    }, { setInterval: (callback, delay) => window.setInterval(callback, delay), clearInterval: handle => window.clearInterval(handle), setTimeout: (callback,delay) => window.setTimeout(callback,delay), clearTimeout: handle => window.clearTimeout(handle), now: () => performance.now(), binding: () => ({document, video:getCurrentMainMedia()?.video, generation:rendererGeneration, lifecycle:currentPageLifecycleGeneration, epoch:replayDiagnosticEpoch}) }, createComparisonRecorder);\n' +
+            '    installRecorderBridge(comparisonRecorder, comparisonIdentity, {window, origin:location.origin, instanceId:Array.from(window.crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,"0")).join(""), documentKey:String(performance.timeOrigin), post:value => window.postMessage(value, location.origin)});\n' +
             '    document.addEventListener("DOMContentLoaded", installComparisonPanel, { once: true });\n' +
             '    if (document.readyState !== "loading") installComparisonPanel();\n' +
             '    function installComparisonPanel() {\n' +
