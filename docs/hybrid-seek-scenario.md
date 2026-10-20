@@ -349,3 +349,24 @@ a read-only Web Crypto call obtains one operation capability; it is never writte
 to the final receipt. The existing runner repeats qualification, checks the bridge,
 and owns START/STOP and cleanup. No Product/package change or alternate browser
 connection is required. A mock-host fixture proves packaging, not real Edge behavior.
+
+### Read-only invocation dependency gate
+
+`tools/prepare-readonly-invocation.mjs` prepares the D-only read-only runtime
+projection separately from the adapter's lexical scope (`initStageNames` is not
+the accounting `stageNames`). It does not import the Recorder runner or send
+diagnostic bridge commands. `prepareInvocation({filename, expected, packet})`
+compiles both the host function and its page expression before writing a fresh
+file, then verifies nonempty exact bytes and SHA256. Existing files are never
+overwritten. Any failure returns `OFFLINE_PREFLIGHT_FAILED` without a host call.
+
+The immediate caller must pass the successful in-memory receipt to
+`invokePrepared(receipt, {invoke, authorization})` in the same process.
+Authorization must independently name the packet, `readOnly: true`, and fresh
+`foregroundExclusive: true`. The gate rejects forged/serialized/failed receipts,
+missing/empty/changed files, and repeated dispatch. It sends verified `code`
+bytes through the supplied host callback, never an unchecked filename. A host
+error consumes the attempt and is not retried. Do not queue a separate browser
+tool unconditionally after a generation shell command. This is a dependency
+gate for reviewed source, not a sandbox for arbitrary generator callbacks.
+Preparation and mock-host PASS do not authorize or execute browser validation.
