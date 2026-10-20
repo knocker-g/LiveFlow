@@ -41,14 +41,14 @@ async function setup(){
     c.getCurrentMainMedia=()=>({video:current,player});
     Object.assign(c,{replayInitialBootstrapIntent:null,replayBootstrapEligibilityLifecycleId:0,
         replayInitialBootstrapCancelledLifecycleId:-1,replayBootstrapAuthority:null,
-        replayReanchorIntent:null,replayAdExitNeedsReanchor:false,replayAdActive:false,
+        replayReanchorIntent:null,replayAdExitNeedsReanchor:false,replayAdActive:false,replayAdExitReadiness:null,
         replayForegroundRecoveryDiagnostic:{},playbackContextObservedPlayer:null,playbackContextObserver:null,playbackContextWasAd:false,
         MutationObserver:class{constructor(cb){mutation=cb;}observe(){}disconnect(){}},
         replayProductionControlState:control.createReplayState('READING'),
         replayControlShadow:control.createShadowController(control.createReplayState('READING'))});
     // Restore actual Authority eligibility (the inherited unrelated scenario stubs it).
-    vm.runInContext(['invalidateAuthorityHandle','invalidateReplayBootstrapAuthority','replaySeekAuthorityIsCurrent','replayAdIsActive',
-        'enterReplaySuspended','observeSuspendedRecoveryCapabilities','queueReplayReanchor','settleReplayAdExit'].map(n=>fn(main,n)).join('\n')+
+    vm.runInContext(['invalidateAuthorityHandle','invalidateReplayBootstrapAuthority','invalidateReplaySeekAuthority','suspendReplayForMediaPause','replaySeekAuthorityIsCurrent','replayAdIsActive',
+        'enterReplaySuspended','observeSuspendedRecoveryCapabilities','queueReplayReanchor','replayAdExitReadinessIsCurrent','settleReplayAdExit'].map(n=>fn(main,n)).join('\n')+
         '\n'+['isAdPlaybackActive','ensurePlaybackContextObserver'].map(n=>fn(content,n)).join('\n'),c);
     const readyListeners=new Map(),add=c.window.addEventListener;
     c.window.addEventListener=(type,listener,capture)=>{
@@ -88,21 +88,23 @@ test('Case A: AD_EXIT then owned readiness consumes one REANCHOR and hands off o
     assert.equal(h.c.replayBootstrapAuthority,null);
 });
 
-test('Case B: owned readiness before AD_EXIT leaves an unused valid Authority and stranded intent',async()=>{
+test('Case B: owned readiness before AD_EXIT recovers once without another readiness event',async()=>{
     const h=await setup();h.enter();
     // The actual class has cleared; only its asynchronous postMessage delivery is pending.
     h.changeAd(false,false);assert.equal(h.c.replayAdIsActive(),false);assert.equal(h.c.replayAdActive,true);
     h.readiness();await h.drain();
     h.h.flush();await h.drain(); // Deliberately no additional media readiness or read finalizer.
-    assert.equal(h.c.replayAdActive,false);assert.equal(h.c.replayProductionControlState.phase,'REANCHORING');
-    assert.equal(h.c.replayReanchorIntent.reason,'AD_EXIT');assert.equal(h.c.replayReanchorIntent.attempted,false);
-    assert.equal(h.c.replaySeekAuthorityIsCurrent(),true);assert.equal(h.authority().authorityState,'OBSERVED_UNUSED');
-    assert.equal(h.microtasks.length,0);assert.equal(h.requests.length,0);assert.equal(h.authorizations.length,0);
+    assert.equal(h.c.replayAdActive,false);assert.equal(h.c.replayProductionControlState.phase,'READING');
+    assert.equal(h.c.replayReanchorIntent,null);assert.equal(h.authority().authorityState,'CONSUMED');
+    assert.deepEqual(Array.from(h.requests),['REANCHOR','SEQUENTIAL_HANDOFF']);
+    assert.deepEqual(Array.from(h.authorizations,a=>[a.kind,a.ok]),[['REANCHOR',true],['SEQUENTIAL',true]]);
+    assert.equal(h.microtasks.length,0);assert.equal(h.c.replayPipelineDiagnostic.freshChainStarted,true);
     assert.equal(h.c.replayBootstrapAuthority,null);assert.equal(h.c.readRequestInFlight,false);
 });
 
-for(const kind of ['missing','stale','consumed'])test('negative '+kind+' REANCHOR never requests or readmits Bootstrap',async()=>{
+for(const order of ['direct','retained'])for(const kind of ['missing','stale','consumed'])test('negative '+order+' '+kind+' REANCHOR never requests or readmits Bootstrap',async()=>{
     const h=await setup();h.enter();
+    if(order==='retained'){h.changeAd(false,false);h.readiness();assert.ok(h.c.replayAdExitReadiness);}
     if(kind==='missing')h.c.replaySeekAuthority=null;
     if(kind==='stale')h.c.pageRevision++;
     if(kind==='consumed'){
@@ -110,9 +112,64 @@ for(const kind of ['missing','stale','consumed'])test('negative '+kind+' REANCHO
         const r=control.authorizeAuthorityRequest({authority:h.reanchor,expectedKind:'REANCHOR',currentBinding:binding,consumedRegistry:h.c.replayConsumedAuthorityRegistry});
         assert.equal(r.ok,true);assert.equal(control.claimAuthorityRequestGrant(r.grant,'REANCHOR').ok,true);
     }
-    h.changeAd(false);h.readiness();await h.drain();
+    if(order==='retained')h.h.flush();else h.changeAd(false);
+    if(order==='direct')h.readiness();
+    await h.drain();
     assert.equal(h.requests.length,0);assert.equal(h.c.replayProductionControlState.phase,'STOPPED');
     assert.equal(h.c.replayBootstrapAuthority,null);assert.equal(h.c.replayBootstrapEligibilityLifecycleId,0);
+});
+
+function retain(h){
+    h.enter();h.changeAd(false,false);h.readiness();
+    assert.ok(h.c.replayAdExitReadiness);assert.equal(h.requests.length,0);assert.equal(h.authorizations.length,0);
+}
+
+test('duplicates across both notifications use one readiness proof and one Authority',async()=>{
+    const h=await setup();retain(h);h.readiness('canplay');h.readiness('loadeddata');
+    h.h.flush();
+    h.c.transportFixture.deliver({id:900,data:{source:'liveflow-content-script',type:h.c.REPLAY_AD_EXIT_TYPE}});
+    h.readiness();h.readiness();await h.drain();
+    assert.deepEqual(Array.from(h.requests),['REANCHOR','SEQUENTIAL_HANDOFF']);
+    assert.equal(h.authorizations.filter(x=>x.kind==='REANCHOR').length,1);
+    assert.equal(h.c.replayAdExitReadiness,null);assert.equal(h.c.replayProductionControlState.phase,'READING');
+});
+
+for(const change of ['document','video','lifecycle','revision','target','navigation','hidden','disabled','paused','seeking','ended','not-ready'])
+test('retained readiness rejects '+change+' drift before AD_EXIT',async()=>{
+    const h=await setup();retain(h);
+    if(change==='document')h.c.document={...h.c.document};
+    if(change==='video')h.replaceVideo();
+    if(change==='lifecycle')h.c.pageLifecycleGeneration++;
+    if(change==='revision')h.c.pageRevision++;
+    if(change==='target')h.c.pageState.targetIdentity='REPLACED';
+    if(change==='navigation')h.c.navigationPending=true;
+    if(change==='hidden')h.c.document.hidden=true;
+    if(change==='disabled')h.c.runtimeUserEnabled=false;
+    if(change==='paused')h.video.paused=true;
+    if(change==='seeking')h.video.seeking=true;
+    if(change==='ended')h.video.ended=true;
+    if(change==='not-ready')h.video.readyState=1;
+    h.h.flush();await h.drain();
+    assert.equal(h.requests.length,0);assert.equal(h.authorizations.length,0);assert.equal(h.c.replayAdExitReadiness,null);
+    assert.equal(h.c.replayBootstrapAuthority,null);
+});
+
+for(const cancellation of ['stop','pause','authority-invalidation','new-ad','document','phase'])
+test('pending retained dispatch is cancelled by '+cancellation,async()=>{
+    const h=await setup();retain(h);h.h.flush();assert.ok(h.microtasks.length>0);
+    if(cancellation==='stop')h.c.stopReadLoop('explicit');
+    if(cancellation==='pause'){h.video.paused=true;h.c.suspendReplayForMediaPause();h.video.paused=false;}
+    if(cancellation==='authority-invalidation')h.c.invalidateReplaySeekAuthority();
+    if(cancellation==='new-ad')h.changeAd(true);
+    if(cancellation==='document')h.c.document={...h.c.document};
+    if(cancellation==='phase')h.c.observeReplayControlShadow('REANCHOR_FAILED');
+    await h.drain();assert.equal(h.requests.length,0);assert.equal(h.c.replayAdExitReadiness,null);
+});
+
+test('readiness while ad class remains active or from foreign video cannot be retained',async()=>{
+    const h=await setup();h.enter();h.readiness();assert.equal(h.c.replayAdExitReadiness,null);
+    h.changeAd(false,false);h.readiness('playing',{});assert.equal(h.c.replayAdExitReadiness,null);
+    h.h.flush();await h.drain();assert.equal(h.requests.length,0);assert.equal(h.authorizations.length,0);
 });
 
 test('foreign readiness is ignored; original owned-video readiness remains the sole legal trigger',async()=>{

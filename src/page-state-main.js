@@ -163,6 +163,8 @@
     let replayInitialAlignmentAttemptedLifecycleId = -1;
     let replayAdActive = false;
     let replayAdExitNeedsReanchor = false;
+    // One media observation for this ad exit, never an Authority or request grant.
+    let replayAdExitReadiness = null;
     const REPLAY_REANCHOR_FAILURE_REASONS = new Set(['NONE', 'NO_AUTHORITY', 'AUTHORITY_STALE', 'RELATION_ALL_BEFORE', 'RELATION_UNKNOWN', 'REANCHOR_SCHEMA_INVALID', 'NO_FRESH_CHAIN', 'OTHER']);
     let replayProductionReanchorReason = 'NONE';
     let replayPipelineDiagnostic = createReplayPipelineDiagnostic();
@@ -1209,6 +1211,7 @@
     }
 
     function invalidateReplaySeekAuthority() {
+        replayAdExitReadiness = null;
         const binding = currentReplayAuthorityBinding(pageLifecycleGeneration);
         if (binding && replaySeekAuthority?.diagnostic?.(binding)?.authorityState === 'OBSERVED_UNUSED') {
             replayControlPlaneCore?.transitionAuthority?.(replaySeekAuthority, 'INVALIDATE', binding);
@@ -1751,6 +1754,7 @@
     }
 
     function stopReadLoop(reason = 'explicit') {
+        replayAdExitReadiness = null;
         currentLoopGeneration += 1;
         activeLoopGeneration = 0;
         if (activeAbortController) activeAbortController.abort();
@@ -1799,6 +1803,7 @@
     }
 
     function suspendReplayForMediaPause() {
+        replayAdExitReadiness = null;
         if (pageState.mode !== 'replay') return false;
         activeLoopGeneration = 0;
         if (activeAbortController) activeAbortController.abort();
@@ -3094,18 +3099,60 @@
         return false;
     }
 
+    function replayAdExitReadinessIsCurrent(observation) {
+        const video = getCurrentMainVideo();
+        return Boolean(observation && observation.document === document && observation.video === video &&
+            observation.lifecycle === pageLifecycleGeneration && observation.revision === pageRevision &&
+            observation.target === pageState.targetIdentity && observation.generation === currentLoopGeneration &&
+            pageState.mode === 'replay' && runtimeUserEnabled === true && !document.hidden && !navigationPending &&
+            (replayAdActive ? replayProductionControlState?.phase === 'SUSPENDED' && replayProductionControlState.suspendedReason === 'AD'
+                : replayProductionControlState?.phase === 'REANCHORING') &&
+            !replaySeekInProgress && !replayAdIsActive() && isCurrentPageStateTarget() &&
+            Number.isFinite(video?.readyState) && video.readyState >= 2 &&
+            window.LiveFlowChatReadCore?.canRestartReplayAtCurrentPosition?.({
+                mode: pageState.mode, userEnabled: runtimeUserEnabled, hidden: document.hidden,
+                videoPresent: Boolean(video), paused: video?.paused, seeking: video?.seeking,
+                ended: video?.ended, currentTime: video?.currentTime
+            }) === true);
+    }
+
     function settleReplayAdExit(event = null) {
         if (replayInitialBootstrapIntent) return resumeInitialReplayBootstrap(event);
-        if (!replayAdExitNeedsReanchor || replayAdActive || pageState.mode !== 'replay') return false;
         const video = getCurrentMainVideo();
         if (event?.target && event.target !== video) return false;
+        if (replayAdActive) {
+            replayAdExitReadiness = null;
+            // Class removal can precede the guarded AD_EXIT message delivery.
+            if (event?.target === video && ['playing', 'canplay', 'loadeddata'].includes(event.type) &&
+                replayProductionControlState?.phase === 'SUSPENDED' && replayProductionControlState.suspendedReason === 'AD') {
+                const observation = Object.freeze({ document, video, lifecycle: pageLifecycleGeneration,
+                    revision: pageRevision, target: pageState.targetIdentity, generation: currentLoopGeneration });
+                if (replayAdExitReadinessIsCurrent(observation)) replayAdExitReadiness = observation;
+            }
+            return false;
+        }
+        if (!replayAdExitNeedsReanchor || pageState.mode !== 'replay') {
+            replayAdExitReadiness = null;
+            return false;
+        }
         if (replayReanchorIntent?.reason === 'AD_EXIT' && replayReanchorIntent.video !== video) replayReanchorIntent = null;
         if (replayReanchorIntent?.reason === 'AD_EXIT') {
+            replayAdExitReadiness = null;
             const intent = replayReanchorIntent;
             window.queueMicrotask(() => runQueuedReplayReanchor(intent));
             return true;
         }
-        return queueReplayReanchor('AD_EXIT', replaySeekEpoch, video, true);
+        const queued = queueReplayReanchor('AD_EXIT', replaySeekEpoch, video, true);
+        const observation = replayAdExitReadiness;
+        if (queued && replayAdExitReadinessIsCurrent(observation)) {
+            const intent = replayReanchorIntent;
+            window.queueMicrotask(() => {
+                if (replayAdExitReadiness !== observation) return false;
+                replayAdExitReadiness = null;
+                return replayAdExitReadinessIsCurrent(observation) ? runQueuedReplayReanchor(intent) : false;
+            });
+        } else replayAdExitReadiness = null;
+        return queued;
     }
 
     window.addEventListener('message', (event) => {
@@ -3136,6 +3183,7 @@
             return;
         }
         if (event.data.type === REPLAY_AD_ENTER_TYPE) {
+            replayAdExitReadiness = null;
             if (['unknown', 'replay'].includes(pageState.mode) && replayBootstrapEligibilityLifecycleId !== pageLifecycleGeneration &&
                 replayInitialBootstrapCancelledLifecycleId !== pageLifecycleGeneration) {
                 deferReplayInitialBootstrap();
@@ -3160,8 +3208,12 @@
             if (replayAdActive && pageState.mode === 'replay') {
                 replayAdActive = false;
                 observeReplayRuntimeAccounting('ad-exit');
-                if (document.hidden || replayProductionControlState?.suspendedReason === 'HIDDEN') return;
+                if (document.hidden || replayProductionControlState?.suspendedReason === 'HIDDEN') {
+                    replayAdExitReadiness = null;
+                    return;
+                }
                 if (!runtimeUserEnabled) {
+                    replayAdExitReadiness = null;
                     observeReplayControlShadow('AD_EXIT_READY', { hidden: false });
                     observeReplayControlShadow('REANCHOR_FAILED');
                     return;
