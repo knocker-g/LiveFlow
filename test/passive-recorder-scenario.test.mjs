@@ -258,3 +258,59 @@ test('cancellation after normal stop ACK cannot export or promote capture',async
     }});
     assert.equal(exports,0);assert.equal(r.captureExecution,'INVALID');assert.equal(r.evidenceQualification,'NOT_PROVEN');assert.equal(r.cleanup,'PASS');
 });
+
+for(const mode of ['SHORT_NORMAL','EXACT16_NORMAL','PUBLICATION_CAP','TIMER_CAP'])test('cap evidence '+mode,async()=>{
+ const e=environment();e.clock(20);let reads=0;
+ const pending=observePassive({read:()=>{reads++;return raw();},map:v=>mapPassiveDiagnostics(v,{expected}),env:e.env,durationMs:100,cleanupCommand:{command:'STOP'}});
+ const publications=mode==='SHORT_NORMAL'?0:mode==='EXACT16_NORMAL'?14:15;
+ for(let i=0;i<publications;i++){e.clock(21+i);e.emit();e.flush();}
+ e.clock(120);
+ if(mode==='PUBLICATION_CAP'){e.emit();e.flush();}else [...e.timers.values()][0]();
+ const r=await pending,cap=mode.endsWith('_CAP');
+ assert.equal(r.reason,cap?'CAPTURE_CAP':'NORMAL');
+ assert.equal(r.captures,mode==='SHORT_NORMAL'?2:16);assert.equal(reads,r.captures);
+ assert.equal(r.captureAttempts,cap?17:r.captures);
+ assert.equal(r.publicationEvents,publications+(mode==='PUBLICATION_CAP'?1:0));
+ assert.equal(r.callbackCounts.initial,1);assert.equal(r.callbackCounts.publication,r.publicationEvents);
+ assert.equal(r.callbackCounts.timer,mode==='PUBLICATION_CAP'?0:1);
+ assert.equal(r.lastCaptureSource,mode==='PUBLICATION_CAP'?'PUBLICATION':'TIMER');
+ assert.deepEqual(r.timing,{startMs:20,endMs:120,durationMs:100});
+ assert.equal(e.listeners.size,0);assert.equal(e.timers.size,0);assert.equal(e.posts.length,cap?1:0);
+});
+test('runner retains bounded observer evidence, separates cleanup, and never fabricates missing timing',async()=>{
+ for(const measured of [false,true]){
+  const f=transportFixture(),pre=mapPassiveDiagnostics(raw(),{expected}),capture=async()=>pre;capture.expectedIdentity=expected;
+  capture.observe=async()=>{const x=raw();x.media.currentTime=11;return{last:mapPassiveDiagnostics(x,{expected,before:pre}),reason:'NORMAL',cleanup:true,events:2,captures:3,
+   ...(measured?{captureAttempts:3,publicationEvents:2,callbackCounts:{initial:1,publication:2,media:0,visibility:0,timer:0},lastCaptureSource:'PUBLICATION',timing:{startMs:10,endMs:25,durationMs:15}}:{}),token:'PRIVATE'};};
+  const r=await runPassiveRecorderScenario({isClosed:()=>false},{...options(capture),transportFactory:(...args)=>{const t=f.factory(...args),stop=t.stop;t.stop=async reason=>{const ack=await stop(reason);assert.equal(f.timers.size,0);return ack;};return t;}});
+  assert.equal(r.cleanup,'PASS');assert.equal(r.observation.captures,3);assert.equal(r.observation.events,2);
+  assert.equal(r.observation.timing.durationMs,measured?15:'UNKNOWN');assert.equal(r.observation.clock,'PAGE_MONOTONIC');
+  assert.ok(!JSON.stringify(r).includes('PRIVATE'));
+ }
+});
+
+test('CAPTURE_CAP receipt preserves trigger and counters without exporting invalid evidence',async()=>{
+ const f=transportFixture(),e=environment(),pre=mapPassiveDiagnostics(raw(),{expected});
+ const capture=async()=>pre;capture.expectedIdentity=expected;
+ capture.observe=async()=>{
+  const pending=observePassive({read:()=>raw(),map:v=>mapPassiveDiagnostics(v,{expected}),env:e.env,durationMs:100,cleanupCommand:{command:'STOP'}});
+  for(let i=0;i<16;i++){e.clock(i+1);e.emit();e.flush();}
+  return await pending;
+ };
+ let exports=0;const r=await runPassiveRecorderScenario({isClosed:()=>false},{...options(capture),transportFactory:(...args)=>{const t=f.factory(...args),stop=t.stop;t.stop=async reason=>{e.clock(999);const ack=await stop(reason);assert.equal(f.timers.size,0);return ack;};t.evidence=async()=>{exports++;throw Error('must not export');};return t;}});
+ assert.equal(r.captureExecution,'INVALID');assert.equal(r.firstBadBoundary,'CAPTURE_CAP');assert.equal(r.cleanup,'PASS');assert.equal(exports,0);
+ assert.equal(r.observation.captureAttempts,17);assert.equal(r.observation.captures,16);assert.equal(r.observation.publicationEvents,16);
+ assert.equal(r.observation.lastCaptureSource,'PUBLICATION');assert.equal(r.observation.timing.endMs,16);assert.equal(r.observation.timing.durationMs,16);
+});
+test('malformed observer telemetry remains UNKNOWN and fixed-shape',async()=>{
+ const f=transportFixture(),pre=mapPassiveDiagnostics(raw(),{expected}),capture=async()=>pre;capture.expectedIdentity=expected;
+ capture.observe=async()=>({last:pre,reason:'CAPTURE_CAP',cleanup:true,events:33,captures:17,captureAttempts:18,publicationEvents:-1,callbackCounts:{initial:1,publication:'PRIVATE'},lastCaptureSource:'PRIVATE',timing:{startMs:20,endMs:10,durationMs:0},secret:'PRIVATE'});
+ const r=await runPassiveRecorderScenario({isClosed:()=>false},{...options(capture),transportFactory:f.factory});
+ assert.equal(r.observation.timing.durationMs,'UNKNOWN');assert.equal(r.observation.captures,'UNKNOWN');assert.equal(r.observation.events,'UNKNOWN');assert.equal(r.observation.lastCaptureSource,'UNKNOWN');assert.ok(!JSON.stringify(r).includes('PRIVATE'));
+});
+
+test('publication counters distinguish received events from coalesced callbacks',async()=>{
+ const e=environment();const pending=observePassive({read:()=>raw(),map:v=>mapPassiveDiagnostics(v,{expected}),env:e.env,durationMs:10,cleanupCommand:{command:'STOP'}});
+ e.emit();e.emit();e.flush();e.clock(10);[...e.timers.values()][0]();const r=await pending;
+ assert.equal(r.publicationEvents,2);assert.equal(r.callbackCounts.publication,1);assert.equal(r.callbackCounts.timer,1);assert.equal(r.captureAttempts,3);assert.equal(r.captures,3);assert.equal(r.reason,'NORMAL');
+});

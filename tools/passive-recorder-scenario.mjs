@@ -4,6 +4,19 @@ import {mapPassiveDiagnostics, readDiagnosticPage, readPassiveDiagnosticPage, pa
 
 export const PASSIVE_OPERATION = 'PASSIVE_RECORDER_V1';
 export const CLEANUP_CONFIRMATION_MS = 2000;
+// Fixed anonymous projection; observer clock is page-monotonic, not cleanup time.
+function projectPassiveObservation(o) {
+    const count=(x,max)=>Number.isSafeInteger(x)&&x>=0&&x<=max?x:'UNKNOWN';
+    const ms=x=>typeof x==='number'&&Number.isFinite(x)&&x>=0?x:'UNKNOWN';
+    const startMs=ms(o?.timing?.startMs),endMs=ms(o?.timing?.endMs),duration=ms(o?.timing?.durationMs);
+    const durationMs=typeof startMs==='number'&&typeof endMs==='number'&&endMs>=startMs&&
+        typeof duration==='number'&&duration===endMs-startMs?duration:'UNKNOWN';
+    return {clock:'PAGE_MONOTONIC',events:count(o?.events,32),captures:count(o?.captures,16),
+        captureAttempts:count(o?.captureAttempts,17),publicationEvents:count(o?.publicationEvents,32),
+        callbackCounts:Object.fromEntries(['initial','publication','media','visibility','timer'].map(k=>[k,count(o?.callbackCounts?.[k],17)])),
+        lastCaptureSource:['INITIAL','PUBLICATION','MEDIA','VISIBILITY','TIMER'].includes(o?.lastCaptureSource)?o.lastCaptureSource:'UNKNOWN',
+        timing:{startMs,endMs,durationMs},stopRequested:typeof o?.stopRequested==='boolean'?o.stopRequested:'UNKNOWN'};
+}
 // Session-local latch: never discard an unresolved operation or reload to bypass it.
 const unresolved = new WeakSet();
 const attempted = new Set();
@@ -59,7 +72,7 @@ export async function runPassiveRecorderScenario(page,{packet,expected:requested
         status:'BLOCKED',firstBadBoundary:null,captureExecution:'NOT_RUN',cleanup:'NOT_RUN',
         recorderCleanup:'NOT_RUN',observerCleanup:'NOT_RUN',
         evidenceQualification:'NOT_PROVEN',densityComparison:'NOT_PROVEN',humanAcceptance:'PENDING',pre:null,post:null,
-        recorder:null,resourcesConfirmed:false,prohibitedActions:0,browserReleased:false};
+        recorder:null,observation:projectPassiveObservation(null),resourcesConfirmed:false,prohibitedActions:0,browserReleased:false};
     let transport,started=false,cancelled=false,onAbort,stopPromise,releasePromise,cleanupDeadline,recorderConfirmed=false;
     const stop=reason=>{
         if(stopPromise)return stopPromise;
@@ -98,6 +111,7 @@ export async function runPassiveRecorderScenario(page,{packet,expected:requested
         if(cancelled){result.captureExecution='INVALID';result.firstBadBoundary='CANCELLED';return result;}
         result.observerCleanup='UNCONFIRMED';
         const observation=await timed(()=>capture.observe(page,{before:gate,operationId:packet,capability:transport.capability,instanceId:transport.instanceId,durationMs,deadlineAt:start.deadlineAt}),durationMs+500);
+        result.observation=projectPassiveObservation(observation);
         result.observerCleanup=observation.cleanup===true?'PASS':'CLEANUP_UNKNOWN';
         result.post=facts(observation.last);
         const valid=!cancelled&&observation.reason==='NORMAL'&&observation.last?.adapterStatus==='READY'&&observation.last.mediaTime>gate.mediaTime&&observation.cleanup===true;

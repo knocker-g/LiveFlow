@@ -366,18 +366,29 @@ export function readPassiveDiagnosticPage() {
 export function observePassive({read,map,env,durationMs,deadlineAt=env.now()+10000,cleanupCommand}) {
     return new Promise(resolve=>{
         let done=false,queued=false,last,events=0,captures=0,timer;
+        let captureAttempts=0,publicationEvents=0,lastCaptureSource='UNKNOWN';
+        const callbackCounts={initial:0,publication:0,media:0,visibility:0,timer:0};
+        const timestamp=()=>{try{const x=env.now();return typeof x==='number'&&Number.isFinite(x)&&x>=0?x:'UNKNOWN';}catch{return 'UNKNOWN';}};
+        const startMs=timestamp();
         const types=['message','visibilitychange','pause','seeking','ended','pagehide'];
         const stopOwned=()=>env.post(cleanupCommand);
         const finish=(reason,invalid=false)=>{
             if(done)return;done=true;
+            const endMs=timestamp(); // Observation ends before owned STOP and resource cleanup.
             let cleanup=true,stopRequested=false;
             for(const t of types)try{env.removeEventListener(t,onEvent,true);}catch{cleanup=false;}
             try{env.clearTimeout(timer);}catch{cleanup=false;}
             if(invalid)try{stopOwned();stopRequested=true;}catch{ /* Runner still owns cleanup confirmation. */ }
-            resolve({last,reason,events,captures,cleanup,stopRequested});
+            const measured=typeof startMs==='number'&&typeof endMs==='number'&&endMs>=startMs;
+            resolve({last,reason,events,captures,cleanup,stopRequested,captureAttempts,publicationEvents,
+                callbackCounts:{...callbackCounts},lastCaptureSource,
+                timing:{startMs,endMs,durationMs:measured?endMs-startMs:'UNKNOWN'}});
         };
-        const capture=()=>{
+        const capture=source=>{
             queued=false;if(done)return;
+            captureAttempts++;lastCaptureSource=source;
+            const key={INITIAL:'initial',PUBLICATION:'publication',MEDIA:'media',VISIBILITY:'visibility',TIMER:'timer'}[source];
+            if(key)callbackCounts[key]++;
             if(env.now()>=deadlineAt){finish('DEADLINE',true);return;}
             if(captures>=16){finish('CAPTURE_CAP',true);return;}
             try {last=map(read());captures++;if(last.adapterStatus!=='READY')finish('INVALIDATED',true);}
@@ -393,15 +404,16 @@ export function observePassive({read,map,env,durationMs,deadlineAt=env.now()+100
                     d.result?.stopConfirmed===true){finish('OWNED_STOP');return;}
                 if(!((d?.source==='liveflow-content-script'&&['LIVEFLOW_REPLAY_PIPELINE_DIAGNOSTIC','LIVEFLOW_PENDING_ONLY_CLEAR_ACK'].includes(d.type))||
                     (d?.source==='liveflow-page-state'&&d.type==='LIVEFLOW_REPLAY_DIAGNOSTIC_SCOPE_OPEN')))return;
+                publicationEvents++;
             }else if(e.type==='pagehide'){finish('DETACHED',true);return;}
             else if(e.type!=='visibilitychange'&&e.target!==env.ownedVideo())return;
             if(++events>=32){finish('EVENT_CAP',true);return;}
-            if(!queued){queued=true;env.queueMicrotask(capture);}
+            if(!queued){queued=true;const source=e.type==='message'?'PUBLICATION':e.type==='visibilitychange'?'VISIBILITY':'MEDIA';env.queueMicrotask(()=>capture(source));}
         }
         try {
             for(const t of types)env.addEventListener(t,onEvent,true);
-            timer=env.setTimeout(()=>{capture();if(!done)finish('NORMAL');},Math.max(0,Math.min(9000,durationMs,deadlineAt-env.now())));
-            capture(); // After registration, so no publication gap.
+            timer=env.setTimeout(()=>{capture('TIMER');if(!done)finish('NORMAL');},Math.max(0,Math.min(9000,durationMs,deadlineAt-env.now())));
+            capture('INITIAL'); // After registration, so no publication gap.
         }catch{finish('READ_FAULT',true);}
     });
 }
