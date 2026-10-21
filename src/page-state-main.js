@@ -3332,7 +3332,8 @@
         }
         const restartReason = explicitReason || (event?.type === 'seeked' || (event?.type === 'play' && replaySeekNeedsReanchor)
             ? 'SEEK' : event?.type === 'play' ? 'RESUME' : event?.type === 'ratechange' ? 'RATE_CHANGE' : 'OTHER');
-        if (event?.type === 'play' && restartReason === 'RESUME' && replayProductionControlState?.phase !== 'READING') observeReplayControlShadow('MEDIA_PLAY');
+        if (event?.type === 'play' && restartReason === 'RESUME' && replayProductionControlState?.phase === 'SUSPENDED' &&
+            replayProductionControlState.suspendedReason === 'MEDIA_PAUSED') observeReplayControlShadow('MEDIA_PLAY');
         if (event?.type === 'ratechange') observeReplayControlShadow('PLAYBACK_RATE_CHANGED');
         if (replayRestartDiagnostic.restartReason !== 'SEEK' || restartReason !== 'SEEK') beginReplayRestart(restartReason);
         const video = getCurrentMainVideo();

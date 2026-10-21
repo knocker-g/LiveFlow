@@ -85,13 +85,29 @@ test('seekNeedsReanchor uses dedicated route without MEDIA_PLAY', () => {
     h.play(); h.flush(); assert.deepEqual(h.calls, ['SEEK']);
     assert.equal(h.c.replayControlShadow.status().transitionCount, 0);
 });
-for (const state of [core.createReplayState('REANCHORING'), core.createReplayState('SUSPENDED', 'AD'), core.createReplayState('SUSPENDED', 'HIDDEN')]) {
-    test('unsupported generic play remains detected in ' + state.phase + '/' + state.suspendedReason, () => {
+for (const state of [core.createReplayState('REANCHORING'), core.createReplayState('STOPPED'), core.createReplayState('BOOTSTRAPPING'), core.createReplayState('BUFFER_PAUSED'), core.createReplayState('SUSPENDED', 'AD'), core.createReplayState('SUSPENDED', 'HIDDEN')]) {
+    test('native play does not dispatch generic resume in ' + state.phase + '/' + state.suspendedReason, () => {
         const h = harness(state); h.c.document.hidden = state.suspendedReason === 'HIDDEN';
-        h.play(); h.flush(); assert.equal(h.c.replayControlShadow.status().mismatchCount, 1);
+        const authority = Object.freeze({fixture:'UNTOUCHED'}); h.c.replaySeekAuthority = authority;
+        h.play(); h.flush(); h.play(); h.flush();
+        assert.equal(h.c.replayControlShadow.status().mismatchCount, 0);
+        assert.equal(h.c.replayControlShadow.status().transitionCount, 0);
         assert.equal(h.c.replayProductionControlState, state);
+        assert.equal(h.c.replaySeekAuthority, authority);
+        assert.equal(h.c.replayRestartSequence, 2);
+        assert.equal(h.c.currentLoopGeneration, 4);
+        // Preserve post-dispatch listener behavior, including readiness rejection.
+        assert.deepEqual(h.calls, state.suspendedReason === 'HIDDEN'
+            ? ['WAITING_MEDIA','WAITING_MEDIA']
+            : ['WAITING_FRAME_ROLE','SNAPSHOT','WAITING_SNAPSHOT','WAITING_FRAME_ROLE','SNAPSHOT','WAITING_SNAPSHOT']);
     });
 }
+for (const reason of ['AD','HIDDEN']) test('direct forbidden MEDIA_PLAY still detected for '+reason, () => {
+    const h=harness(core.createReplayState('SUSPENDED',reason));
+    h.c.observeReplayControlShadow('MEDIA_PLAY');
+    assert.equal(h.c.replayControlShadow.status().mismatchCount,1);
+});
+
 test('other forbidden events still increment mismatch', () => {
     const h = harness(); h.c.observeReplayControlShadow('BOOTSTRAP_FAILED');
     assert.equal(h.c.replayControlShadow.status().mismatchCount, 1);
