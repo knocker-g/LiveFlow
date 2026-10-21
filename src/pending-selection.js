@@ -104,19 +104,35 @@
                 !Number.isFinite(cohortMaximumSpan) || cohortMaximumSpan < 0 ||
                 typeof isSafe !== 'function' || !policy || typeof policy.select !== 'function' || items.length === 0) return null;
 
-            const traversed = foundations.rotatingModularStride(items.length, scanDepth, successfulLaunchSequence + scanRotationCursor);
+            const traversed = foundations.rotatingModularStride(items.length, Math.min(scanDepth, 5), successfulLaunchSequence + scanRotationCursor);
             const cohortIndexes = new Set(foundations.temporalCohort(items, {
                 maximumItems: cohortMaximumItems,
                 maximumSpan: cohortMaximumSpan
             }).map(({ index }) => index));
             const safeCandidates = [];
             const structurallyDiscarded = [];
-            for (const index of traversed) {
+            const inspected = new Set();
+            function examine(index) {
+                inspected.add(index);
                 const item = items[index];
                 const verdict = isSafe(item);
                 if (verdict === true) safeCandidates.push(Object.freeze({ index, item, inTemporalCohort: cohortIndexes.has(index) }));
                 else if (verdict?.discard === true) structurallyDiscarded.push({ item,
                     reason: verdict.reason === 'UNREPRESENTABLE_SPECIAL' ? verdict.reason : 'UNKNOWN' });
+            }
+            for (const index of traversed) examine(index);
+            if (!safeCandidates.some(({ item, inTemporalCohort }) =>
+                inTemporalCohort && item.semanticClass === SEMANTIC_CLASSES.SPECIAL)) {
+                let supplementaryCount = 0;
+                // Complete only the existing cohort's SPECIAL candidates, in enqueue order.
+                // Queue removals remain deferred until both passes have finished.
+                for (const index of cohortIndexes) {
+                    if (supplementaryCount >= 5 || inspected.size >= 10) break;
+                    if (inspected.has(index) || items[index].semanticClass !== SEMANTIC_CLASSES.SPECIAL) continue;
+                    supplementaryCount += 1;
+                    examine(index);
+                    if (safeCandidates.some((candidate) => candidate.index === index)) break;
+                }
             }
             if (structurallyDiscarded.length > 0) {
                 const reasons = new Map();
@@ -141,7 +157,7 @@
                 token: Object.freeze({ nonce: selectionNonce, sequence: successfulLaunchSequence, item: selected.item }),
                 item: selected.item,
                 index: selected.index,
-                inspectedCount: traversed.length
+                inspectedCount: inspected.size
             });
         }
 

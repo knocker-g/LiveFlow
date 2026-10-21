@@ -28,6 +28,90 @@ function evaluate(queue, overrides = {}) {
     });
 }
 
+function completionQueue(specialIds) {
+    const queue = createPendingQueue();
+    fill(queue, Array.from({ length: 31 }, (_, index) => item(index, 100,
+        specialIds.includes(index) ? 'liveChatPaidMessageRenderer' : 'liveChatTextMessageRenderer')));
+    return queue;
+}
+
+const completionOptions = { scanDepth: 5, cohortMaximumItems: 5, cohortMaximumSpan: 800 };
+
+test('cohort completion is conditional and preserves scanned SPECIAL tie order', () => {
+    const queue = completionQueue([0, 1, 2]);
+    const calls = [];
+    const selected = evaluate(queue, { ...completionOptions, isSafe: candidate => { calls.push(candidate.id); return true; } });
+    assert.deepEqual(calls, [0, 5, 10, 15, 20]);
+    assert.equal(selected.item.id, 0);
+    assert.equal(selected.inspectedCount, 5);
+});
+
+test('omitted SPECIAL candidates use enqueue order and stop at first safe candidate', () => {
+    const queue = completionQueue([1, 2, 3]);
+    const calls = [];
+    const selected = evaluate(queue, { ...completionOptions, isSafe: candidate => {
+        calls.push(candidate.id); return candidate.id !== 1;
+    } });
+    assert.deepEqual(calls, [0, 5, 10, 15, 20, 1, 2]);
+    assert.equal(selected.item.id, 2);
+    assert.equal(new Set(calls).size, calls.length);
+    assert.equal(queue.snapshot().length, 31);
+    assert.equal(queue.confirmSuccessfulLaunch(selected.token), true);
+    assert.equal(queue.confirmSuccessfulLaunch(selected.token), false);
+});
+
+test('five supplementary checks preserve outside-cohort FIFO fallback with ten unique evaluations', () => {
+    const queue = completionQueue([0, 1, 2, 3, 4]);
+    for (let i = 0; i < 6; i++) assert.equal(evaluate(queue, { ...completionOptions, isSafe: () => false }), null);
+    const calls = [];
+    const selected = evaluate(queue, { ...completionOptions, isSafe: candidate => {
+        calls.push(candidate.id); return candidate.semanticClass === SEMANTIC_CLASSES.NORMAL;
+    } });
+    assert.equal(calls.length, 10);
+    assert.equal(new Set(calls).size, 10);
+    assert.deepEqual(calls.slice(5), [0, 1, 2, 3, 4]);
+    assert.equal(selected.item.id, Math.min(...calls.slice(0, 5)));
+    assert.equal(selected.inspectedCount, 10);
+    assert.equal(queue.snapshot().length, 31);
+});
+
+test('supplementary structural removal happens once after evaluation and preserves selection token', () => {
+    const queue = completionQueue([1, 2]);
+    const discarded = [];
+    const selected = evaluate(queue, { ...completionOptions,
+        isSafe: candidate => {
+            assert.equal(queue.snapshot().length, 31);
+            return candidate.id === 1 ? { discard: true, reason: 'UNREPRESENTABLE_SPECIAL' } : true;
+        }, onDiscard: event => { assert.equal(queue.snapshot().length, 30); discarded.push(event); }
+    });
+    assert.equal(selected.item.id, 2);
+    assert.deepEqual(discarded, [{ reason: 'UNREPRESENTABLE_SPECIAL', count: 1, pendingCount: 30 }]);
+    assert.equal(queue.confirmSuccessfulLaunch(selected.token), true);
+    assert.deepEqual(queue.snapshot().map(candidate => candidate.id), [0, ...Array.from({ length: 28 }, (_, i) => i + 3)]);
+    evaluate(queue, { ...completionOptions, onDiscard: event => discarded.push(event) });
+    assert.equal(discarded.length, 1);
+});
+
+test('completion does not expand the temporal cohort by age or item count', () => {
+    for (const outside of ['age', 'count']) {
+        const queue = createPendingQueue();
+        fill(queue, Array.from({ length: 31 }, (_, index) => item(index,
+            outside === 'age' && index >= 1 ? 901 : 100,
+            index === (outside === 'age' ? 1 : 6) ? 'liveChatPaidMessageRenderer' : 'liveChatTextMessageRenderer')));
+        const calls = [];
+        const selected = evaluate(queue, { ...completionOptions, isSafe: candidate => { calls.push(candidate.id); return true; } });
+        assert.deepEqual(calls, [0, 5, 10, 15, 20]);
+        assert.equal(selected.item.id, 0);
+    }
+});
+
+test('oversized scan configuration cannot exceed the approved original five checks', () => {
+    const queue = completionQueue([]);
+    const calls = [];
+    evaluate(queue, { ...completionOptions, scanDepth: 31, isSafe: candidate => { calls.push(candidate.id); return true; } });
+    assert.equal(calls.length, 5);
+});
+
 test('semantic classification is limited to Super Chat and Super Sticker', () => {
     assert.equal(classifySemanticClass({ rendererType: 'liveChatPaidMessageRenderer' }), SEMANTIC_CLASSES.SPECIAL);
     assert.equal(classifySemanticClass({ rendererType: 'liveChatPaidStickerRenderer' }), SEMANTIC_CLASSES.SPECIAL);
@@ -170,7 +254,8 @@ test('bounded bypass cursor escapes an entirely blocked scan without advancing s
     const queue = createPendingQueue();
     fill(queue, Array.from({ length: 11 }, (_, index) => item(index, index,
         index === 1 ? 'liveChatPaidMessageRenderer' : 'liveChatTextMessageRenderer')));
-    const initiallyBlocked = new Set([0, 5, 10]);
+    // Block the cohort SPECIAL too: this remains a no-safe-selection rotation test.
+    const initiallyBlocked = new Set([0, 1, 5, 10]);
     const first = evaluate(queue, {
         scanDepth: 3,
         cohortMaximumItems: 11,
