@@ -3087,6 +3087,7 @@
             replayPipelineDiagnostic.freshChainSource = 'PLAYER_SEEK_RESPONSE_REPLAY_CONTINUATION';
             replayAwaitingFirstFreshSequentialResponse = true;
             if (intent.reason === 'FOREGROUND') {
+                replayForegroundRecoveryDiagnostic.foregroundRecoveryStarted = false;
                 replayForegroundRecoveryDiagnostic.freshSequentialHandoff = true;
                 replayForegroundRecoveryDiagnostic.foregroundRecoveryResult = 'SUCCESS';
             }
