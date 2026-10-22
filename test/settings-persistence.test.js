@@ -202,3 +202,43 @@ test('cross-context last completed write wins and actual storage listeners conve
         assert.equal(c.authoritySentinel.current, true);
     }
 });
+
+test('preferences survive fresh runtime startup while tab Display remains separate from persistent defaults', async () => {
+    const e = environment({ version: 3, futurePreference: { theme: 'x' } });
+    const saved = await e.core.updateSettings(e.area, {}, {
+        displayEnabled: false, showAvatars: false, opacityPercent: 35, emojiImages: false
+    });
+    assert.equal(e.core.getSettingsOperationStatus(saved).persisted, true);
+    const beforeRestart = copy(e.durable()), writesBeforeRestart = e.counts().writes;
+    // Fresh global and Core instance share only the durable storage adapter.
+    const restarted = vm.createContext({ chrome: e.context.chrome });
+    vm.runInContext(settingsSource, restarted);
+    restarted.window = { LiveFlowSettingsCore: restarted.LiveFlowSettingsCore };
+    Object.assign(restarted, { runtimeSettings: restarted.LiveFlowSettingsCore.createSettingsSnapshot(),
+        userEnabled: true, persistentSettingsReady: false, overlaySurface: { style: {} },
+        phase3Runtime: { markGeometryDirty() { throw Error('UNEXPECTED_GEOMETRY_CHANGE'); } },
+        startReadLoop() { throw Error('UNAUTHORIZED_READ'); },
+        invalidateReplaySeekAuthority() { throw Error('UNAUTHORIZED_AUTHORITY'); } });
+    const source = fs.readFileSync(require.resolve('../src/youtube-chat.js'), 'utf8');
+    const extract = name => source.match(new RegExp(`function ${name}\\([^]*?\\n    \\}`))[0];
+    vm.runInContext(extract('applyPersistentSettings') + '\n' + extract('initializePersistentSettings'), restarted);
+    await restarted.initializePersistentSettings();
+    assert.equal(restarted.persistentSettingsReady, true);
+    for (const key of ['displayEnabled', 'showAvatars', 'opacityPercent', 'emojiImages']) {
+        assert.equal(restarted.runtimeSettings[key], beforeRestart[key], key);
+    }
+    assert.equal(Object.isFrozen(restarted.runtimeSettings), true);
+    assert.equal(restarted.overlaySurface.style.opacity, '0.35');
+    assert.equal(restarted.userEnabled, false, 'Persistent default initializes a new tab');
+    assert.equal(e.counts().writes, writesBeforeRestart, 'Startup performs no writeback or Reset');
+    assert.deepEqual(e.durable(), beforeRestart);
+    // A tab-local Display choice does not modify storage and survives later storage events.
+    restarted.userEnabled = true;
+    assert.deepEqual(e.durable(), beforeRestart);
+    await e.core.updateSettings(e.area, saved, { opacityPercent: 20 });
+    assert.equal(restarted.runtimeSettings.opacityPercent, 20);
+    assert.equal(restarted.runtimeSettings.displayEnabled, false);
+    assert.equal(restarted.userEnabled, true);
+    assert.equal(e.durable().displayEnabled, false);
+    assert.deepEqual(e.durable().futurePreference, beforeRestart.futurePreference);
+});
