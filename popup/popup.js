@@ -12,6 +12,7 @@
         ['native-chat-controls', 'autoOpenNativeChatWhenLiveFlowDisabled', 'liveFlowOffOpensChat', 'checkbox']
     ];
     let settings = core.normalizeSettings();
+    let operationRevision = 0;
 
     function message(key, fallback = '') {
         try {
@@ -56,7 +57,9 @@
     }
 
     function showStatus(key) {
-        document.getElementById('save-status').textContent = message(key, key === 'settingsSaved' ? 'Saved' : '');
+        const fallback = { settingsSaved: 'Saved', settingsReset: 'Settings reset',
+            settingsSaveFailed: 'Not saved', settingsLoadFailed: 'Settings unavailable' };
+        document.getElementById('save-status').textContent = message(key, fallback[key] || '');
     }
 
     async function handleChange(event) {
@@ -64,17 +67,26 @@
         if (control.disabled) return;
         const value = control.type === 'checkbox' ? control.checked
             : control.tagName === 'SELECT' ? control.value : Number(control.value);
-        settings = await core.updateSettings(storageArea, settings, { [control.dataset.setting]: value });
+        const revision = ++operationRevision;
+        document.getElementById('save-status').textContent = '';
+        const updated = await core.updateSettings(storageArea, settings, { [control.dataset.setting]: value });
+        if (revision !== operationRevision) return;
+        settings = updated;
         render();
-        showStatus('settingsSaved');
+        showStatus(core.getSettingsOperationStatus(settings).persisted ? 'settingsSaved' : 'settingsSaveFailed');
     }
 
     async function initialize() {
         document.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = message(node.dataset.i18n, node.textContent); });
         const controls = definitions.map(createControl);
-        controls.forEach((control) => control.addEventListener('change', handleChange));
+        controls.forEach(control => { control.disabled = true; });
         settings = await core.getStoredSettings(storageArea);
+        controls.forEach(control => {
+            control.disabled = core.CAPABILITIES[control.dataset.setting] !== true;
+            control.addEventListener('change', handleChange);
+        });
         render();
+        if (core.getSettingsOperationStatus(settings).status !== 'LOADED') showStatus('settingsLoadFailed');
         const resetConfirmation = document.getElementById('reset-confirmation');
         const resetButton = document.getElementById('reset-settings');
         const cancelResetButton = document.getElementById('cancel-reset');
@@ -89,10 +101,15 @@
         resetButton.addEventListener('click', () => setResetConfirmationOpen(true));
         cancelResetButton.addEventListener('click', () => setResetConfirmationOpen(false));
         confirmResetButton.addEventListener('click', async () => {
-            settings = await core.resetSettings(storageArea);
+            const revision = ++operationRevision;
+            document.getElementById('save-status').textContent = '';
+            const updated = await core.resetSettings(storageArea);
+            if (revision !== operationRevision) return;
+            settings = updated;
             render();
-            showStatus('settingsReset');
-            setResetConfirmationOpen(false);
+            const saved = core.getSettingsOperationStatus(settings).persisted;
+            showStatus(saved ? 'settingsReset' : 'settingsSaveFailed');
+            if (saved) setResetConfirmationOpen(false);
         });
     }
 

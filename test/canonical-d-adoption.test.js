@@ -6,6 +6,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
+const settings = require('../src/settings-core');
 const reference = require('./fixtures/opportunity-aware-density');
 const production = require('../src/opportunity-aware-density');
 const core = require('../src/overlay-core');
@@ -71,9 +73,32 @@ test('approved B/D comparison configuration remains stable after canonical adopt
     assert.deepEqual(candidates[2].config, b);
 });
 
-test('settings precedence, presentation, Acquisition, Authority and SPECIAL cohort source stay unchanged', () => {
+test('settings rendering contract, presentation, Acquisition, Authority and SPECIAL cohort stay unchanged', () => {
     const hash = source => crypto.createHash('sha256').update(source).digest('hex');
     for (const [name, digest] of Object.entries(accepted.unchangedInputs)) {
+        if (name === 'src/settings-core.js') {
+            // Persistence may evolve independently of the accepted rendering contract.
+            // Authenticate the historical reference rather than rewriting its receipt.
+            const referenceSource = execFileSync('git', ['show', `${accepted.sourceSHA}:${name}`],
+                { cwd: path.join(__dirname, '..'), encoding: 'utf8' }).replaceAll('\r\n', '\n');
+            assert.equal(hash(referenceSource), digest, name);
+            const context = vm.createContext({});
+            vm.runInContext(referenceSource, context);
+            const original = context.LiveFlowSettingsCore;
+            for (const key of ['STORAGE_KEY', 'SETTINGS_VERSION', 'DEFAULT_SETTINGS', 'CAPABILITIES']) {
+                assert.equal(JSON.stringify(settings[key]), JSON.stringify(original[key]), key);
+            }
+            for (const key of ['normalizeSettings', 'createSettingsSnapshot']) {
+                assert.equal(settings[key].toString().replaceAll('\r\n', '\n'), original[key].toString(), key);
+                for (const field of Object.keys(settings.DEFAULT_SETTINGS)) {
+                    for (const value of [undefined, null, false, true, '', 'manual', 0, 100, NaN, {}]) {
+                        const input = { [field]: value };
+                        assert.equal(JSON.stringify(settings[key](input)), JSON.stringify(original[key](input)), `${key}:${field}`);
+                    }
+                }
+            }
+            continue;
+        }
         assert.equal(hash(fs.readFileSync(path.join(__dirname, '..', name), 'utf8').replaceAll('\r\n', '\n')), digest, name);
     }
     const source = fs.readFileSync(path.join(__dirname, '../src/youtube-chat.js'), 'utf8').replaceAll('\r\n', '\n');

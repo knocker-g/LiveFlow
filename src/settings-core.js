@@ -82,35 +82,84 @@
         });
     }
 
-    function getStoredSettings(storageArea) {
-        if (!storageArea || typeof storageArea.get !== 'function') return Promise.resolve(normalizeSettings());
-        return new Promise((resolve) => {
+    // Keep persistence outcomes out of both storage and the runtime SettingsSnapshot.
+    // Existing consumers still receive safe normalized preferences on storage failure.
+    const operationStatuses = new WeakMap();
+    const writeQueues = new WeakMap();
+    const UNKNOWN_OPERATION = Object.freeze({ status: 'UNKNOWN', persisted: false });
+    function operationResult(settings, status) {
+        operationStatuses.set(settings, Object.freeze({ status, persisted: status === 'SAVED' }));
+        return settings;
+    }
+    function getSettingsOperationStatus(settings) {
+        return operationStatuses.get(settings) || UNKNOWN_OPERATION;
+    }
+    function rawObject(value) {
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
+    function readRawSettings(storageArea) {
+        if (!storageArea || typeof storageArea.get !== 'function') return Promise.resolve({ ok: false, status: 'UNAVAILABLE' });
+        return new Promise(resolve => {
             try {
-                storageArea.get(STORAGE_KEY, (result) => resolve(normalizeSettings(result?.[STORAGE_KEY])));
-            } catch {
-                resolve(normalizeSettings());
-            }
+                storageArea.get(STORAGE_KEY, result => {
+                    try {
+                        if (global.chrome?.runtime?.lastError) return resolve({ ok: false, status: 'READ_FAILED' });
+                        resolve({ ok: true, raw: rawObject(result?.[STORAGE_KEY]), status: 'LOADED' });
+                    } catch { resolve({ ok: false, status: 'READ_FAILED' }); }
+                });
+            } catch { resolve({ ok: false, status: 'READ_FAILED' }); }
         });
     }
-
+    async function getStoredSettings(storageArea) {
+        const result = await readRawSettings(storageArea);
+        return operationResult(normalizeSettings(result.raw), result.status);
+    }
+    function ownedPatch(value) {
+        const source = rawObject(value), patch = {};
+        for (const key of Object.keys(DEFAULT_SETTINGS)) {
+            if (key !== 'version' && Object.hasOwn(source, key)) patch[key] = source[key];
+        }
+        return patch;
+    }
+    function writeSettings(storageArea, current, value, reset = false) {
+        const patch = ownedPatch(value);
+        const safe = normalizeSettings({ ...normalizeSettings(current), ...patch });
+        if (!storageArea || typeof storageArea.set !== 'function') return Promise.resolve(operationResult(safe, 'UNAVAILABLE'));
+        const task = async () => {
+            // Explicit Reset alone may replace unknown/future fields. Ordinary edits
+            // must not overwrite storage when its freshest value could not be read.
+            const latest = reset ? { ok: true, raw: {} } : await readRawSettings(storageArea);
+            if (!latest.ok) return operationResult(safe, latest.status);
+            const normalized = normalizeSettings({ ...latest.raw, ...patch });
+            const version = Number.isSafeInteger(latest.raw.version) && latest.raw.version > SETTINGS_VERSION
+                ? latest.raw.version : SETTINGS_VERSION;
+            const stored = reset ? { ...DEFAULT_SETTINGS } : { ...latest.raw, ...normalized, version };
+            return new Promise(resolve => {
+                try {
+                    storageArea.set({ [STORAGE_KEY]: stored }, () => {
+                        try { resolve(operationResult(normalized, global.chrome?.runtime?.lastError ? 'WRITE_FAILED' : 'SAVED')); }
+                        catch { resolve(operationResult(safe, 'WRITE_FAILED')); }
+                    });
+                } catch { resolve(operationResult(safe, 'WRITE_FAILED')); }
+            });
+        };
+        // Context-local ordering only. Cross-context writers still obey Chrome's
+        // last-completed-write-wins contract, with no distributed lock or retries.
+        const next = (writeQueues.get(storageArea) || Promise.resolve()).then(task)
+            .catch(() => operationResult(safe, 'WRITE_FAILED'));
+        writeQueues.set(storageArea, next.then(() => undefined));
+        return next;
+    }
     function persistSettings(storageArea, value) {
-        const normalized = normalizeSettings(value);
-        if (!storageArea || typeof storageArea.set !== 'function') return Promise.resolve(normalized);
-        return new Promise((resolve) => {
-            try {
-                storageArea.set({ [STORAGE_KEY]: normalized }, () => resolve(normalized));
-            } catch {
-                resolve(normalized);
-            }
-        });
+        return writeSettings(storageArea, undefined, value);
     }
 
     function updateSettings(storageArea, current, patch) {
-        return persistSettings(storageArea, { ...normalizeSettings(current), ...(patch || {}) });
+        return writeSettings(storageArea, current, patch);
     }
 
     function resetSettings(storageArea) {
-        return persistSettings(storageArea, DEFAULT_SETTINGS);
+        return writeSettings(storageArea, DEFAULT_SETTINGS, DEFAULT_SETTINGS, true);
     }
 
     const api = {
@@ -121,6 +170,7 @@
         normalizeSettings,
         createSettingsSnapshot,
         getStoredSettings,
+        getSettingsOperationStatus,
         persistSettings,
         updateSettings,
         resetSettings
