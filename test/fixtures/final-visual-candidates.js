@@ -7,7 +7,14 @@ const foundations = require('../../src/scheduler-foundations.js');
 const { createSchedulerRuntime } = require('../../src/scheduler-runtime.js');
 const core = require('../../src/overlay-core.js');
 const normalOverlap = require('../../src/normal-overlap-policy.js');
-const baseline = tuning.CURRENT;
+// Historical comparison baselines must not silently adopt the new Production D defaults.
+const { normalOverlapPolicy: acceptedOverlap, ...baselineCommon } = tuning.CURRENT;
+const baseline = { ...baselineCommon,
+    interleavedAnchorStride: { ...baselineCommon.interleavedAnchorStride, DENSE: 2 },
+    collisionAllowances: { ...baselineCommon.collisionAllowances,
+        BOUNDED_OVERLAP: { ...baselineCommon.collisionAllowances.BOUNDED_OVERLAP, nominalGap: 10, maxCatchUpRatio: .82, maxOverlapDuration: .85 },
+        MAXIMUM_READABLE_RESCUE: { ...baselineCommon.collisionAllowances.MAXIMUM_READABLE_RESCUE, nominalGap: 6, maxCatchUpRatio: .95, maxOverlapDuration: 1.1 }
+    } };
 function candidate(name, duration, stride) {
     return { name, config: { ...baseline,
         interleavedAnchorStride: { ...baseline.interleavedAnchorStride, DENSE: stride },

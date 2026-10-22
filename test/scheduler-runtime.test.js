@@ -656,6 +656,7 @@ test('actual overlay cleanup publishes lifecycle removal to the Replay scheduler
         core, currentChatMode: 'replay', currentPageLifecycleGeneration: 1,
         replayDiagnosticEpoch: 0, replayDiagnosticLifecycle: 1, replayDiagnosticSequence: 0,
         replayDiagnosticBatch: {}, replayDiagnosticDisplayed: 0, replayDiagnosticIncomplete: false, replayDiagnosticBatchInProgress: false,
+        replayContentClearOperations: new Map(),
         REPLAY_PIPELINE_DIAGNOSTIC_TYPE: 'LIVEFLOW_REPLAY_PIPELINE_DIAGNOSTIC',
         window: { location: { origin: 'https://www.youtube.com' }, postMessage: (message) => messages.push(message) },
         updateReplayLaunchGap() {}, disconnectSubtitleGeometryObservers() {},
@@ -668,7 +669,8 @@ test('actual overlay cleanup publishes lifecycle removal to the Replay scheduler
     const h = harness({ observe: (event) => context.observeReplayScheduler(event) });
     context.phase3Runtime = h.runtime;
     for (const id of ['one', 'two', 'three']) h.enqueue(id);
-    vm.runInContext(functionSource(main, 'applyReplayDiagnosticSnapshot'), context);
+    vm.runInContext(functionSource(main, 'observeReplayPendingClearProof') + '\n' +
+        functionSource(main, 'applyReplayDiagnosticSnapshot'), context);
     vm.runInContext(functionSource(main, 'createReplayPipelineDiagnostic') +
         '\nreplayPipelineDiagnostic = createReplayPipelineDiagnostic();', context);
     Object.assign(context.replayPipelineDiagnostic, { receivedActions: 3, messagesObserved: 3, bridged: 3, enqueued: 3 });

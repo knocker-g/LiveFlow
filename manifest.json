@@ -67,6 +67,7 @@
                 "src/geometry-adapter.js",
                 "src/scheduler-runtime.js",
                 "src/phase5-tuning.js",
+                "src/opportunity-aware-density.js",
                 "src/youtube-chat.js"
             ],
             "world": "ISOLATED",

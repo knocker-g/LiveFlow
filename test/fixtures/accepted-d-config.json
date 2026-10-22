@@ -1,0 +1,99 @@
+{
+  "sourceSHA": "d9921cd4eb38cd2b21089b2f45dee198b04025b7",
+  "buildID": "f0ec22e55f82b1222bbf4f79c40885f97158d91241d4a2463afaabced1f999e8",
+  "commonBuildID": "bbd4de84c068350c42d309363a3132cdade6c24baa41215a6f91fdd0e619e5df",
+  "packageDigest": "1856a51b181464d5179cf76403d71e4e4300055ac55862f3bebbcb8079eb0396",
+  "config": {
+    "fontSize": 28,
+    "lineHeight": 32,
+    "laneGap": 0,
+    "laneBandFractions": {
+      "UPPER": 0.25,
+      "UPPER_TO_MID": 0.55,
+      "BROAD": 0.95,
+      "FULL_SAFE": 1
+    },
+    "interleavedAnchorStride": {
+      "NORMAL": 0,
+      "COMPACT": 0,
+      "DENSE": 1,
+      "MAX_READABLE": 1
+    },
+    "collisionAllowances": {
+      "CONSERVATIVE": {
+        "nominalGap": 24,
+        "hardMinimumSeparation": -24,
+        "maxCatchUpRatio": 0.15,
+        "maxOverlapDuration": 0.15,
+        "maxOverlapDepthRatio": 0.08,
+        "minimumVisibleFraction": 0.92
+      },
+      "LIMITED_CATCH_UP": {
+        "nominalGap": 16,
+        "hardMinimumSeparation": -24,
+        "maxCatchUpRatio": 0.72,
+        "maxOverlapDuration": 0.65,
+        "maxOverlapDepthRatio": 0.25,
+        "minimumVisibleFraction": 0.75
+      },
+      "BOUNDED_OVERLAP": {
+        "nominalGap": 4,
+        "hardMinimumSeparation": -24,
+        "maxCatchUpRatio": 0.95,
+        "maxOverlapDuration": 1.4,
+        "maxOverlapDepthRatio": 0.32,
+        "minimumVisibleFraction": 0.68
+      },
+      "MAXIMUM_READABLE_RESCUE": {
+        "nominalGap": 0,
+        "hardMinimumSeparation": -24,
+        "maxCatchUpRatio": 1,
+        "maxOverlapDuration": 1.4,
+        "maxOverlapDepthRatio": 0.4,
+        "minimumVisibleFraction": 0.6
+      }
+    },
+    "minimumSpeed": 132,
+    "maximumSpeed": 340,
+    "lengthVelocity": {
+      "mediumWidthRatio": 0.25,
+      "longWidthRatio": 0.6,
+      "veryLongWidthRatio": 1,
+      "shortMultiplier": 1.08,
+      "mediumMultiplier": 1.1,
+      "longMultiplier": 1.24,
+      "veryLongMultiplier": 1.45,
+      "extremeMultiplier": 1.62
+    },
+    "specialMaximumWidthFraction": 0.98,
+    "specialMaximumWidthPx": 1400,
+    "specialMinimumBodyFontSize": 10.5,
+    "normalOverlapPolicy": {
+      "maximumVerticalFraction": 0.5,
+      "maximumHorizontalFraction": 0.35,
+      "maximumPairAreaFraction": 0.18,
+      "maximumDuration": 1.4,
+      "maximumCatchUpRatio": 1,
+      "minimumVisibleFraction": 0.65,
+      "minimumClippedVisibleFraction": 0.5,
+      "maximumNeighbours": 2
+    }
+  },
+  "unchangedInputs": {
+    "src/page-state-main.js": "bb3f9670c99d29c7802979ed00607e045ea22b953f2f69f45391b45d7cc7e977",
+    "src/replay-control-plane-core.js": "5dc8d9799dfddbeddbfe0ab8f0e4374d2935a27d8011661b05b5f508fa2fe744",
+    "src/chat-read-core.js": "52a73bddffb0156c2571c2e6fa8941700e1ca262a4571624a98cb63a476ebdc5",
+    "src/settings-core.js": "60cb2b39aa184c83018dd95b8a965d159329377ad3cf104d643fcb08dd13e7c2",
+    "src/pending-selection.js": "b5e2a41e936d428574b56f053b42c8f0a36db7fa6c6767152f331a55692605f7",
+    "src/scheduler-runtime.js": "420dbf7237db7b93c77d4567f137c5cfea09ee899bb72f22d37004e60a18e47a",
+    "src/scheduler-state-machine.js": "32b8b596611b976bc646ca43d062d846db2acdc509c2b47a2b4883241a41d3ee",
+    "src/normal-overlap-policy.js": "9dee3f11cdd93b88062fc2a671a5b41781dabcccd74714c7adda4de0577134f3",
+    "src/geometry-adapter.js": "7db8a51e87f20bf69e576be089a5d128c19311b6f0301d34a136ea5791b57aec",
+    "test/fixtures/opportunity-aware-density.js": "cf81c7e3fd1f10dd123b47407bcb9da79ea274e1f73a32a37876e27439c3b1d2"
+  },
+  "unchangedFunctions": {
+    "applyPersistentSettings": "5145d5239aee4f385d0de2359bb5ad1a1d7b035aa5b502d789040e7a7493d74f",
+    "applySpecialFit": "e1eaa0998f4ab83d426bfe862e02a9bc856d7fdb21c0d77f86d0382e9de6f843",
+    "createDanmakuNode": "b85b924ee5e9833967cde1268fc5dc50c48c0e49e426c0a4d3bfa80b2fd88c24"
+  }
+}

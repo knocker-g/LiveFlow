@@ -1292,10 +1292,12 @@
         const primaryCandidates = decorate(generated.baseCandidates);
         const secondaryCandidates = decorate(generated.interleavedCandidates);
         const expansionCandidates = decorate(generated.expansionCandidates);
-        return { candidates: window.LiveFlowPhase5Tuning.rankDensityRescuePlacements(
+        const ranked = window.LiveFlowPhase5Tuning.rankDensityRescuePlacements(
             primaryCandidates, secondaryCandidates, expansionCandidates, activeComments, entry.id, densityPolicy.density,
-            Boolean(phase5Tuning.normalOverlapPolicy)
-        ), activeComments };
+            false
+        );
+        const selection = window.LiveFlowOpportunityAwareDensity.select({ candidates: ranked, active: activeComments, density: densityPolicy.density, config: phase5Tuning });
+        return { candidates: selection.candidates, activeComments };
     }
 
     function ensurePhase3Runtime() {

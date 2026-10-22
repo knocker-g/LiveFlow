@@ -38,6 +38,7 @@ test('actual structural SPECIAL removal reaches scheduler ledger exactly once, i
     const messages = [], context = vm.createContext({ core, currentChatMode: 'replay', currentPageLifecycleGeneration: 1,
         replayDiagnosticEpoch: 0, replayDiagnosticLifecycle: 1, replayDiagnosticSequence: 0,
         replayDiagnosticBatch: {}, replayDiagnosticDisplayed: 0, replayDiagnosticIncomplete: false, replayDiagnosticBatchInProgress: false,
+        replayContentClearOperations: new Map(),
         REPLAY_PIPELINE_DIAGNOSTIC_TYPE: 'pipeline', window: { location: { origin: 'https://www.youtube.com' }, postMessage: m => messages.push(m) }, updateReplayLaunchGap() {} });
     vm.runInContext(['createReplaySchedulerDiagnostic', 'publishReplayScopeSnapshot', 'publishReplaySchedulerDiagnostic', 'observeReplayScheduler'].map(n => functionSource(content, n)).join('\n') +
         '\nreplaySchedulerDiagnostic = createReplaySchedulerDiagnostic();\n' + functionSource(main, 'createReplayPipelineDiagnostic') + '\nreplayPipelineDiagnostic = createReplayPipelineDiagnostic();', context);
@@ -52,7 +53,8 @@ test('actual structural SPECIAL removal reaches scheduler ledger exactly once, i
             density: { attackThresholds: [.5,.7,.9], releaseThresholds: [.2,.3,.4], minimumAttackResidence: 1, releaseDwell: 3 },
             collisionAllowances: { CONSERVATIVE: {} } } });
     context.phase3Runtime = runtime;
-    vm.runInContext(functionSource(main, 'applyReplayDiagnosticSnapshot'), context);
+    vm.runInContext(functionSource(main, 'observeReplayPendingClearProof') + '\n' +
+        functionSource(main, 'applyReplayDiagnosticSnapshot'), context);
     const ledgerCall = main.match(/core\?\.computeReplayAccountingLedger\?\.\(\{[^]*?\}\)/)[0];
     const ledger = () => {
         context.diagnostic = context.replayPipelineDiagnostic;

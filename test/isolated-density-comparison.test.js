@@ -59,14 +59,16 @@ test('effective B/D settings and browser selector exactly match approved fixture
     const before = JSON.stringify(state); selector(state); assert.equal(JSON.stringify(state), before);
 });
 test('generated actual candidateProof reaches actual Renderer with mandatory commit proof; changed geometry rejects', () => {
-    for (const p of packages) {
-        const s = source(p), config = configOf(s), bounds = { x: 0, y: 0, left: 0, top: 0, right: 960, bottom: 320, width: 960, height: 320 };
+    for (const p of [...packages, { candidate: 'PRODUCTION', directory: root }]) {
+        const canonical = p.candidate === 'PRODUCTION', dBehavior = p.candidate !== 'B';
+        const s = source(p), config = canonical ? tuning.CURRENT : configOf(s), bounds = { x: 0, y: 0, left: 0, top: 0, right: 960, bottom: 320, width: 960, height: 320 };
         const media = { player: { getBoundingClientRect: () => bounds }, video: { getBoundingClientRect: () => bounds, playbackRate: 1 } };
         const active = new Map(), nodes = [], records = [], selections = [];
         let revision = 1;
         const node = () => { const n = { isConnected: true, style: {}, remove() { this.isConnected = false; }, getBoundingClientRect: () => ({ left: 960, top: 0, width: 300, height: 32 }), animate() { return { finished: new Promise(() => {}), cancel() {} }; } }; nodes.push(n); return n; };
-        const browser = { LiveFlowPhase5Tuning: tuning, LiveFlowSchedulerFoundations: foundations, LiveFlowNormalOverlapPolicy: overlap, LiveFlowOverlayCore: core, postMessage() {} };
-        const selectorText = s.slice(s.indexOf('const comparisonSelect ='), s.indexOf('})();', s.indexOf('const comparisonSelect =')) + 5);
+        const browser = { LiveFlowPhase5Tuning: tuning, LiveFlowSchedulerFoundations: foundations, LiveFlowNormalOverlapPolicy: overlap, LiveFlowOverlayCore: core,
+            LiveFlowOpportunityAwareDensity: require('../src/opportunity-aware-density'), postMessage() {} };
+        const selectorText = canonical ? '' : s.slice(s.indexOf('const comparisonSelect ='), s.indexOf('})();', s.indexOf('const comparisonSelect =')) + 5);
         const context = { window: browser, comparisonIdentity: { candidate: p.candidate, selectionPolicy: p.selectionPolicy },
             comparisonRecorder: { selection: x => selections.push(x), launch: x => records.push(x), exit() {} }, comparisonNodes: new WeakMap(), comparisonNextID: 0, phase5Tuning: config,
             overlayCore: { ...core, isMainContentPlaybackEligible: () => true }, geometryCore: geometry,
@@ -78,22 +80,25 @@ test('generated actual candidateProof reaches actual Renderer with mandatory com
             subtitleGeometryAdapter: { refresh: () => ({ revision, geometry: { state: 'KNOWN_PRESENT' } }) } };
         vm.createContext(context);
         vm.runInContext(selectorText + '\n' + extract(s, 'snapshotActiveGeometry', 'readSubtitleGeometry') + '\n' + extract(s, 'getCandidateProof', 'ensurePhase3Runtime') + '\n' + extract(s, 'renderDanmaku', 'scheduleDanmakuBatch'), context);
-        if (p.candidate === 'D') {
+        if (dBehavior) {
             active.set('leader', { node: { isConnected: true, getBoundingClientRect: () => ({ left: 760, top: 64, width: 300, height: 32 }) },
                 trajectory: Object.freeze({ velocity: 400, anchorIndex: 4, semanticClass: 'NORMAL' }), occlusionHistoryKnown: true, occlusionEpisodes: [] });
         }
         const entry = { id: 'test', payload: { message: { message: 'hello', authorRole: 'guest', messageType: 'text' } }, footprint: {} };
         const proof = context.getCandidateProof(entry, { exclusionRegions: [] }, foundations.getDensityVisualPolicy('MAX_READABLE'));
-        assert.ok(proof.candidates.length); assert.equal(selections[0].policy, p.selectionPolicy);
+        assert.ok(proof.candidates.length);
+        if (!canonical) assert.equal(selections[0].policy, p.selectionPolicy);
+        else assert.equal(selections.length, 0);
         if (p.candidate === 'D') assert.equal(selections[0].diagnostic.promoted, true);
+        if (canonical) assert.equal(proof.candidates[0].interleaved, true);
         const launch = { ...proof.candidates[0], density: 'MAX_READABLE', geometryRevision: 1 };
         assert.equal(context.renderDanmaku(entry.payload.message, 1, media.video, launch, {}).status, 'rendered');
-        assert.equal(records.length, 1); assert.equal(active.size, p.candidate === 'D' ? 2 : 1);
+        assert.equal(records.length, canonical ? 0 : 1); assert.equal(active.size, dBehavior ? 2 : 1);
         if (p.candidate === 'D') assert.equal(records[0].interleaved, true);
         assert.ok(Object.isFrozen([...active.values()][0].trajectory));
         revision = 2;
         assert.equal(context.renderDanmaku(entry.payload.message, 1, media.video, launch, {}).status, 'drop');
-        assert.equal(records.length, 1);
+        assert.equal(records.length, canonical ? 0 : 1);
         // Check Scheduler and Renderer final guards were not removed by generator.
         assert.ok(s.includes('refreshedGeometry?.revision !== launchProof.geometryRevision'));
         assert.ok(s.includes('recordEpisodes(commitRectangle, activeGeometry'));

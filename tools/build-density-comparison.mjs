@@ -113,16 +113,11 @@ export function build(output = path.join(root, 'build/density-comparison'), { in
             '        }]]) { const button = document.createElement("button"); button.textContent = label; button.addEventListener("click", action); panel.append(button); }\n' +
             '        document.documentElement.append(panel);\n' +
             '    }');
-        source = replaceOnce(source, '            Boolean(phase5Tuning.normalOverlapPolicy)\n        ), activeComments };',
-            '            false\n        ), activeComments };');
-        // Preserve all candidate facts, Scheduler proof and Renderer commit proof. Only reorder here.
-        source = replaceOnce(source, '        return { candidates: window.LiveFlowPhase5Tuning.rankDensityRescuePlacements(',
-            '        const comparisonRanked = window.LiveFlowPhase5Tuning.rankDensityRescuePlacements(');
-        source = replaceOnce(source, '            false\n        ), activeComments };',
-            '            false\n        );\n' +
-            '        const selection = comparisonIdentity.candidate === "D" ? comparisonSelect({ candidates: comparisonRanked, active: activeComments, density: densityPolicy.density, config: phase5Tuning }) : { candidates: comparisonRanked };\n' +
-            '        comparisonRecorder.selection({ at: now, policy: comparisonIdentity.selectionPolicy, diagnostic: selection.diagnostic ?? null });\n' +
-            '        return { candidates: selection.candidates, activeComments };');
+        // The canonical path owns D. Keep the historical B/D comparison isolated.
+        source = replaceOnce(source,
+            '        const selection = window.LiveFlowOpportunityAwareDensity.select({ candidates: ranked, active: activeComments, density: densityPolicy.density, config: phase5Tuning });',
+            '        const selection = comparisonIdentity.candidate === "D" ? comparisonSelect({ candidates: ranked, active: activeComments, density: densityPolicy.density, config: phase5Tuning }) : { candidates: ranked };\n' +
+            '        comparisonRecorder.selection({ at: now, policy: comparisonIdentity.selectionPolicy, diagnostic: selection.diagnostic ?? null });');
         source = replaceOnce(source, '    function observeReplayScheduler(event) {',
             '    function observeReplayScheduler(event) {\n        if (event) comparisonRecorder.event(event);');
         source = replaceOnce(source, "        return { status: 'rendered' };", "        if (!comparisonNodes.has(node)) comparisonNodes.set(node, ++comparisonNextID);\n        comparisonRecorder.launch({ at: commitAt, observationID: comparisonNodes.get(node), rectangle: commitRectangle, lane: launchProof.lane, interleaved: launchProof.interleaved, density: launchProof.density, geometryRevision: launchProof.geometryRevision, surfaceBounds: launchProof.surfaceBounds, clearanceRectangle: launchProof.clearanceRectangle, hardExclusions: launchProof.hardExclusions });\n        return { status: 'rendered' };");

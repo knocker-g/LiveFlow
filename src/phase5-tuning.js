@@ -1,4 +1,5 @@
 (function (global) {
+    const overlap = typeof module !== 'undefined' && module.exports ? require('./normal-overlap-policy.js') : global.LiveFlowNormalOverlapPolicy;
     const BASELINE = Object.freeze({
         fontSize: 24, lineHeight: 32, laneGap: 4,
         laneBandFractions: Object.freeze({ UPPER: 0.25, UPPER_TO_MID: 0.5, BROAD: 0.75, FULL_SAFE: 1 }),
@@ -16,16 +17,17 @@
     const CURRENT = Object.freeze({
         fontSize: 28, lineHeight: 32, laneGap: 0,
         laneBandFractions: Object.freeze({ UPPER: 0.25, UPPER_TO_MID: 0.55, BROAD: 0.95, FULL_SAFE: 1 }),
-        interleavedAnchorStride: Object.freeze({ NORMAL: 0, COMPACT: 0, DENSE: 2, MAX_READABLE: 1 }),
+        interleavedAnchorStride: Object.freeze({ NORMAL: 0, COMPACT: 0, DENSE: 1, MAX_READABLE: 1 }),
         collisionAllowances: Object.freeze({
             CONSERVATIVE: Object.freeze({ nominalGap: 24, hardMinimumSeparation: -24, maxCatchUpRatio: 0.15, maxOverlapDuration: 0.15, maxOverlapDepthRatio: 0.08, minimumVisibleFraction: 0.92 }),
             LIMITED_CATCH_UP: Object.freeze({ nominalGap: 16, hardMinimumSeparation: -24, maxCatchUpRatio: 0.72, maxOverlapDuration: 0.65, maxOverlapDepthRatio: 0.25, minimumVisibleFraction: 0.75 }),
-            BOUNDED_OVERLAP: Object.freeze({ nominalGap: 10, hardMinimumSeparation: -24, maxCatchUpRatio: 0.82, maxOverlapDuration: 0.85, maxOverlapDepthRatio: 0.32, minimumVisibleFraction: 0.68 }),
-            MAXIMUM_READABLE_RESCUE: Object.freeze({ nominalGap: 6, hardMinimumSeparation: -24, maxCatchUpRatio: 0.95, maxOverlapDuration: 1.1, maxOverlapDepthRatio: 0.4, minimumVisibleFraction: 0.6 })
+            BOUNDED_OVERLAP: Object.freeze({ nominalGap: 4, hardMinimumSeparation: -24, maxCatchUpRatio: 0.95, maxOverlapDuration: 1.4, maxOverlapDepthRatio: 0.32, minimumVisibleFraction: 0.68 }),
+            MAXIMUM_READABLE_RESCUE: Object.freeze({ nominalGap: 0, hardMinimumSeparation: -24, maxCatchUpRatio: 1, maxOverlapDuration: 1.4, maxOverlapDepthRatio: 0.4, minimumVisibleFraction: 0.6 })
         }),
         minimumSpeed: 132, maximumSpeed: 340,
         lengthVelocity: Object.freeze({ mediumWidthRatio: 0.25, longWidthRatio: 0.6, veryLongWidthRatio: 1, shortMultiplier: 1.08, mediumMultiplier: 1.1, longMultiplier: 1.24, veryLongMultiplier: 1.45, extremeMultiplier: 1.62 }),
-        specialMaximumWidthFraction: 0.98, specialMaximumWidthPx: 1400, specialMinimumBodyFontSize: 10.5
+        specialMaximumWidthFraction: 0.98, specialMaximumWidthPx: 1400, specialMinimumBodyFontSize: 10.5,
+        normalOverlapPolicy: overlap.C
     });
 
     function applyLengthAwareVelocity(baseVelocity, measuredWidth, surfaceWidth, policy, maximumSpeed) {
