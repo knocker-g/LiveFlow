@@ -86,6 +86,7 @@ test('full generated order puts reason between START_ENTRY and actual invalidati
     const rows = [], c = vm.createContext({ initialTrace(step, details) { rows.push({ step, ...details }); },
         initialAuthorityTrace: { record(step, details) { rows.push({ step, ...details }); }, fault() {} },
         pageLifecycleGeneration: 0, pageState: { mode: 'replay' }, replayBootstrapEligibilityLifecycleId: 0,
+        replayInitialBootstrapIntent: null, replayInitialBootstrapCancelledLifecycleId: -1,
         currentReplayAuthorityBinding() { return {}; }, getCurrentMainVideo() { return {}; },
         replayBootstrapAuthority: { diagnostic() { return { authorityCurrent: true, authorityKind: 'BOOTSTRAP', authorityState: 'OBSERVED_UNUSED' }; } },
         document: { hidden: false }, replayAdIsActive() { return true; },

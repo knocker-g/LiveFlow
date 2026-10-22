@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const results = require('../docs/density-c-throughput-classification.json');
 const checkpoint = require('../docs/density-c-results.json');
+const { investigate } = require('./fixtures/density-c-throughput-classification.js');
 // Validate captured discriminator, without rerunning already accepted safety fixtures.
 test('discriminator preserves B/C checkpoint and exclusive per-comment attribution', () => {
     for (const r of results) {
@@ -27,4 +28,21 @@ test('one ranking-only intervention improves accounting without claiming retaine
         assert.deepEqual(r.corrected.sourceShape, r.c.sourceShape);
         assert.equal(r.corrected.normalOverlap.crossRowVerticalPx, 0);
     }
+});
+
+test('executable HIGH discriminator conserves current fixture outcomes independently of saved JSON', () => {
+    const actual = investigate('HIGH');
+    assert.equal(actual.shape, 'HIGH');
+    assert.equal(actual.safeBaseSelectionFailure, 0);
+    assert.equal(actual.missedSafeBaseEvaluation, 0);
+    assert.equal(new Set(actual.rows.map(row => row.id)).size, actual.bOnly);
+    assert.equal(Object.values(actual.classified).reduce((sum, count) => sum + count, 0), actual.bOnly);
+    for (const run of [actual.b, actual.c, actual.corrected]) {
+        assert.ok(run.launches > 0);
+        assert.equal(run.lostUnaccounted, 0);
+        assert.equal(run.pending, 0);
+        assert.equal(run.drops.EMERGENCY_PENDING_DROPPED, 0);
+    }
+    // This is a synthetic causal fixture, never evidence of real-service Drop frequency.
+    assert.equal(actual.corrected.specialLaunches, actual.c.specialLaunches);
 });

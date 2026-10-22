@@ -2,6 +2,23 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
+function sourceFunction(source, name) {
+    const found = source.match(new RegExp(`function ${name}\\([^]*?\\n    \\}`))?.[0];
+    assert.ok(found, name); return found;
+}
+function rejectedPresentation({ enabled = true, paused = false, readyState = 4 }, script) {
+    const accounting = [], live = []; let clears = 0;
+    const video = { paused, ended: false, readyState };
+    const c = vm.createContext({ currentChatMode: 'replay', isEffectiveDisplayActive: () => enabled,
+        getCurrentMainMedia: () => ({ player: { classList: { contains: () => false } }, video }), phase3RuntimeVideo: video,
+        overlayCore: { isMainContentPlaybackEligible }, phase3Runtime: { clear() { clears++; } },
+        observeLivePresentationBatch: value => live.push(value), publishReplayBatchAccounting: value => accounting.push(value),
+        ensurePhase3Runtime() { throw Error('UNEXPECTED_ADMISSION'); },
+        fetch() { throw Error('UNAUTHORIZED_NETWORK'); }, setTimeout() { throw Error('UNAUTHORIZED_TIMER'); } });
+    vm.runInContext(script, c); c.scheduleDanmakuBatch([{}, {}]);
+    return { accounting: JSON.parse(JSON.stringify(accounting)), live: JSON.parse(JSON.stringify(live)), clears };
+}
 const {
     DANMAKU_MAX_ACTIVE_COMMENTS,
     DANMAKU_MAX_MESSAGE_LENGTH,
@@ -468,8 +485,14 @@ test('Live and Premiere-live pause gate Presentation while leaving acquisition a
     const liveBranch = mediaHandler.slice(mediaHandler.indexOf("if (currentChatMode === 'live'"), mediaHandler.indexOf("if (currentChatMode !== 'replay')"));
     assert.doesNotMatch(liveBranch, /currentMessages\s*=\s*\[\]/);
     assert.doesNotMatch(mediaHandler, /LiveFlowStopReadLoop|requestInitialContinuation/);
-    assert.match(mediaHandler, /if \(currentChatMode !== 'replay'\) return;[^]*?replaySchedulerDiagnostic/);
-    const schedule = runtimeSource.match(/function scheduleDanmakuBatch\(messages\) \{[^]*?\n    \}/)?.[0] || '';
+    const events = [], video = {};
+    const c = vm.createContext({ currentChatMode: 'replay', currentMessages: ['old'],
+        getCurrentMainMedia: () => ({ video }), cleanupOverlay: () => events.push('cleanup'), closeReplayDiagnosticScope: () => events.push('close') });
+    vm.runInContext(mediaHandler, c); c.handleReplayMediaContextChange({ type: 'seeking', target: {} });
+    assert.deepEqual(events, []);
+    c.handleReplayMediaContextChange({ type: 'seeking', target: video });
+    assert.deepEqual(events, ['cleanup', 'close']); assert.equal(c.currentMessages.length, 0);
+    const schedule = sourceFunction(runtimeSource, 'scheduleDanmakuBatch');
     assert.match(schedule, /currentChatMode === 'live' && livePresentationResumeGateActive[^]*?classifyLiveEdgeProximity[^]*?reduceLivePresentationResumeGate[^]*?if \(!gate\.allowLaunch\)[^]*?return/);
     assert.match(schedule, /suppressedBehindLive[^]*?suppressedUnknown/);
     assert.doesNotMatch(schedule, /\b\d+\s*\*\s*1000|setTimeout|setInterval/);
@@ -528,7 +551,9 @@ test('new geometry can be calculated independently after resize', () => {
 test('renderer drops paused messages without queueing or resume bursts', () => {
     assert.match(runtimeSource, /if \(!media \|\| !overlayCore\?\.isMainContentPlaybackEligible\?\.\(media\.player, media\.video\)\) \{\s*phase3Runtime\?\.clear\(\)/);
     assert.doesNotMatch(runtimeSource, /addEventListener\(['"]play|addEventListener\(['"]playing|pendingMessages|messageQueue/);
-    assert.match(runtimeSource, /scheduleDanmakuBatch\(newMessages\)/);
+    assert.match(runtimeSource, /scheduleDanmakuBatch\(newMessages, pendingOwner\)/);
+    const result = rejectedPresentation({ paused: true }, sourceFunction(runtimeSource, 'scheduleDanmakuBatch'));
+    assert.equal(result.clears, 1); assert.equal(result.accounting[0].lifecycleDiscardedMediaPaused, 2);
 });
 
 test('Replay due handoff can become lifecycleDiscarded when playback pauses before presentation admission', () => {
@@ -543,16 +568,23 @@ test('Replay due handoff can become lifecycleDiscarded when playback pauses befo
     const flush = pageStateSource.match(/function flushReplayPending\([^]*?\n    \}/)?.[0] || '';
     assert.ok(flush.indexOf('replayPending = selection.pending') < flush.indexOf('postReadResult({ ok: true'),
         'due items leave replayPending before the asynchronous bridge handoff');
-    const schedule = runtimeSource.match(/function scheduleDanmakuBatch\(messages\) \{[^]*?\n    \}/)?.[0] || '';
+    const schedule = sourceFunction(runtimeSource, 'scheduleDanmakuBatch');
     assert.match(schedule, /media\.video\?\.paused === true[^]*'lifecycleDiscardedMediaPaused'/);
     assert.match(schedule, /lifecycleDiscarded: inputCount, \[reasonField\]: inputCount/);
     const admission = schedule.slice(0, schedule.indexOf('const runtime = ensurePhase3Runtime()'));
     assert.doesNotMatch(admission, /pageRevision|pageLifecycleGeneration|readGeneration|authority/,
         'this discard is presentation eligibility, not an authority-binding comparison');
+    const verifyPausedReason = script => {
+        const result = rejectedPresentation({ paused: true }, script);
+        assert.equal(result.accounting[0].lifecycleDiscardedMediaPaused, 2);
+        assert.equal(result.accounting[0].lifecycleDiscarded, 2);
+    };
+    verifyPausedReason(schedule);
+    assert.throws(() => verifyPausedReason(schedule.replace("media.video?.paused === true", 'false')), assert.AssertionError);
 });
 
 test('Replay lifecycle discard diagnostics distinguish disabled and not-ready admission without changing returns', () => {
-    const schedule = runtimeSource.match(/function scheduleDanmakuBatch\(messages\) \{[^]*?\n    \}/)?.[0] || '';
+    const schedule = sourceFunction(runtimeSource, 'scheduleDanmakuBatch');
     assert.match(schedule, /!isEffectiveDisplayActive\(\)[^]*lifecycleDiscardedDisplayDisabled: inputCount[^]*return;/);
     assert.equal(isEffectiveDisplayActive({ userEnabled: false, nativeChatVisible: false }), false);
     assert.equal(isMainContentPlaybackEligible(
@@ -562,6 +594,9 @@ test('Replay lifecycle discard diagnostics distinguish disabled and not-ready ad
     assert.match(schedule, /media\.video\.readyState < 2[^]*'lifecycleDiscardedMediaNotReady'/);
     assert.equal((schedule.match(/lifecycleDiscarded: inputCount/g) || []).length, 2,
         'the two existing discard branches and their control flow remain unchanged');
+    assert.equal(rejectedPresentation({ enabled: false }, schedule).accounting[0].lifecycleDiscardedDisplayDisabled, 2);
+    assert.equal(rejectedPresentation({ readyState: 1 }, schedule).accounting[0].lifecycleDiscardedMediaNotReady, 2);
+    assert.throws(() => rejectedPresentation({ enabled: false }, schedule.replace('if (!isEffectiveDisplayActive())', 'if (false)')), /UNEXPECTED_ADMISSION/);
 });
 
 test('renderer generation rejects stale timers across repeated transitions', () => {
@@ -838,7 +873,7 @@ test('display OFF is presentation-only and re-enable does not restart acquisitio
     assert.match(action, /if \(transition\.cleanupRequired\) cleanupOverlay\(\)/);
     assert.match(action, /if \(wasUserEnabled && !userEnabled\) \{\s*currentMessages = \[\]/);
     assert.doesNotMatch(action, /LiveFlowStopReadLoop|acceptingReadResults\s*=\s*false|requestInitialContinuation|readRequestedRevision\s*=\s*-1/);
-    assert.match(runtimeSource, /function scheduleDanmakuBatch\(messages\)[^]*?if \(!isEffectiveDisplayActive\(\)\) \{[^]*?lifecycleDiscardedDisplayDisabled: inputCount[^]*?return;/);
+    assert.equal(rejectedPresentation({ enabled: false }, sourceFunction(runtimeSource, 'scheduleDanmakuBatch')).accounting[0].lifecycleDiscardedDisplayDisabled, 2);
 });
 
 test('persisted display default is applied before startup without cross-tab runtime broadcast', () => {
@@ -852,10 +887,10 @@ test('persisted display default is applied before startup without cross-tab runt
 
 test('inactive transitions clean pending and active danmaku without replay on re-enable', () => {
     assert.match(runtimeSource, /if \(transition\.cleanupRequired\) cleanupOverlay\(\)/);
-    assert.match(runtimeSource, /function scheduleDanmakuBatch\(messages\)[^]*?if \(!isEffectiveDisplayActive\(\)\) \{[^]*?lifecycleDiscarded: inputCount[^]*?return;/);
+    assert.equal(rejectedPresentation({ enabled: false }, sourceFunction(runtimeSource, 'scheduleDanmakuBatch')).accounting[0].lifecycleDiscarded, 2);
     assert.match(runtimeSource, /function cleanupOverlay\(\)[^]*?phase3Runtime\?\.clear\(\)/);
     assert.match(runtimeSource, /if \(media && isEffectiveDisplayActive\(\)\) attachOverlay\(media\.player\)/);
-    assert.doesNotMatch(runtimeSource, /disabledMessages|displayBacklog|replayPending/);
+    assert.doesNotMatch(runtimeSource, /disabledMessages|displayBacklog|\breplayPending\b/);
 });
 
 test('Native Chat observer is single, scoped, mutation-filtered, and cleaned up for SPA and pagehide', () => {

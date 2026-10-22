@@ -21,6 +21,12 @@ export function dependencies(name, source, files) {
             if (files.includes(candidate)) result.add(candidate);
         }
     }
+    // Existing embedded-source tests read from repository cwd or path.join(root,...).
+    // Do not treat arbitrary labels/metadata containing a filename as coverage.
+    for (const match of source.matchAll(/readFileSync\s*\(\s*(?:path\.join\s*\(\s*root\s*,\s*)?['"]((?:src|popup|tools|test)\/[^'"\n]+)['"]/g)) {
+        const candidate = path.posix.normalize(match[1]);
+        if (files.includes(candidate)) result.add(candidate);
+    }
     return [...result];
 }
 

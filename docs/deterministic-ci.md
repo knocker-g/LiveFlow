@@ -13,7 +13,10 @@ substitute for a committed CI checkpoint. Tests selected from tracked files only
 The always-on set covers READ-only/security, Replay Control Plane,
 Authority/currentness, scope handoff, temporal occurrence accounting and actual
 owner-selective pending cleanup. Changed tests and reverse transitive literal
-relative dependencies add affected fixtures. A source/tool change without a
+relative dependencies add affected fixtures. Established repo-root reads using
+`readFileSync('tools/...')` or `readFileSync(path.join(root, 'tools/...'))`
+also create dependency edges; filename labels and unused path construction do not.
+A source/tool change without a
 known test dependency is an error, not a silent skip. Browser-global/dynamic
 dependencies are not completely modeled by the literal graph; inspect the plan
 and explicitly use an integration checkpoint when coverage is uncertain.

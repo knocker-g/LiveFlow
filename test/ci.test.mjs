@@ -21,6 +21,20 @@ test('unmapped executable and removed dependencies fail closed; broad suite is e
     assert.deepEqual(selectTests(files, () => '', [], true), ['test/a.test.js']);
     assert.deepEqual(selectTests(files, () => '', ['docs/a.md']), [...baseline].sort());
 });
+test('root-relative file reads map actual fixture consumers without filename-only coverage', () => {
+    const sources = { 'tools/embedded.js': '', 'tools/unread.js': '',
+        'tools/builder.mjs': "fs.readFileSync(path.join(root, 'tools/embedded.js'), 'utf8')",
+        'test/a.test.mjs': "import '../tools/builder.mjs'",
+        'test/b.test.mjs': "fs.readFileSync('tools/embedded.js', 'utf8')",
+        'test/unrelated.test.mjs': "const label = 'tools/unread.js'; const unused = path.join(root, 'tools/unread.js');" };
+    const files = Object.keys(sources), read = name => sources[name];
+    assert.deepEqual(dependencies('tools/builder.mjs', sources['tools/builder.mjs'], files), ['tools/embedded.js']);
+    const selected = selectTests(files, read, ['tools/embedded.js']);
+    assert.ok(selected.includes('test/a.test.mjs')); assert.ok(selected.includes('test/b.test.mjs'));
+    assert.ok(!selected.includes('test/unrelated.test.mjs'));
+    assert.throws(() => selectTests(files, read, ['tools/unread.js']), /Unmapped executable/);
+    assert.throws(() => selectTests(files, read, ['tools/missing.js']), /Unmapped executable/);
+});
 test('manifest sanity validates actual assets and rejects privileges, scope and missing assets', () => {
     const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url)));
     const refs = manifest.content_scripts.flatMap(s => [...s.js, ...(s.css || [])]);

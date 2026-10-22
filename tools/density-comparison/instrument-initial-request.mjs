@@ -44,6 +44,7 @@ export function instrumentInitialRequestMain(source) {
     return source;
 }
 export function instrumentInitialRequestContent(source, identity) {
+    source = source.replaceAll('\r\n', '\n');
     const collector = fs.readFileSync(new URL('./initial-authority-trace.js', import.meta.url), 'utf8')
         .replace('module.exports = { createInitialAuthorityTrace };', '');
     source = once(source, '    const comparisonNodes = new WeakMap();', collector + `

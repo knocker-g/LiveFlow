@@ -8,7 +8,7 @@ import {recorderCommandPage} from '../tools/passive-recorder-scenario.mjs';
 test('actual generator Recorder transform parses with ownership and bridge dependencies, no build',()=>{
     const generator=fs.readFileSync('tools/build-density-comparison.mjs','utf8');
     const start=generator.indexOf("        source = replaceOnce(source, '    const phase5Tuning");
-    const end=generator.indexOf("        source = replaceOnce(source, '            Boolean",start);
+    const end=generator.indexOf('        // The canonical path owns D.',start);
     assert.ok(start>0&&end>start);
     const recorder=fs.readFileSync('tools/density-comparison/recorder.js','utf8')+'\n'+
         ['owned-recorder.mjs','recorder-bridge.mjs'].map(n=>fs.readFileSync('tools/density-comparison/'+n,'utf8').replaceAll('export function ','function ')).join('\n');

@@ -13,10 +13,10 @@ function fn(source, name) {
     assert.ok(start >= 0, name);
     return source.slice(start, source.indexOf('\n    }\n', start) + 7);
 }
-async function generated() {
+async function generated(contentInput = content) {
     const [a, r] = await modules;
     // In-memory stand-in for the already existing generator panel anchors; never invoke build().
-    const panelCopy = content.replace('    const LOG_PREFIX', '    const comparisonNodes = new WeakMap();\n    const LOG_PREFIX')
+    const panelCopy = contentInput.replace('    const LOG_PREFIX', '    const comparisonNodes = new WeakMap();\n    const LOG_PREFIX')
         .replace('    initializePersistentSettings().then', '    function installComparisonPanel() {\n        document.documentElement.append(panel);\n    }\n    initializePersistentSettings().then');
     return { main: r.instrumentInitialRequestMain(a.instrumentInitialAuthorityTrace(main, core, identity).main),
         content: r.instrumentInitialRequestContent(panelCopy, identity) };
@@ -29,6 +29,8 @@ async function harness(side, instrumented, faulty = false) {
         pageLifecycleGeneration: 0, pageRevision: 0, currentLoopGeneration: 0,
         persistentSettingsReady: true, initialTrace() {},
         window: { location: { origin: 'https://private.invalid' } } });
+    // Bind the real declaration required by the MAIN listener's first typed-ACK guard.
+    vm.runInContext(main.match(/^    const PENDING_ONLY_CLEAR_ACK_TYPE = '[^']+';$/m)[0], c);
     c.window.postMessage = function (...args) { calls.push({ name: 'post', receiver: this === c.window, args: JSON.parse(JSON.stringify(args)) }); };
     if (faulty) { const bad = { record() { throw Error('PRIVATE_STACK'); }, fault() { collector.fault(); }, snapshot: collector.snapshot }; c.initialAuthorityTrace = c.contentInitialRequestTrace = bad; }
     if (instrumented) vm.runInContext((side === 'main' ? ['initialRequestMark', 'initialRequestDispatchStatus'] : ['publishInitialRequestTrace', 'contentInitialRequestMark']).map(n => fn(source, n)).join('\n'), c);
@@ -160,6 +162,9 @@ test('same-document DOM export is read-only, independent and explicitly UNORDERE
 });
 test('Product listeners/scheduling remain unchanged; diagnostic marks contain no sensitive payload', async () => {
     const g = await generated();
+    assert.equal((await generated(content.replaceAll('\n', '\r\n'))).content, g.content,
+        'CRLF input has identical executable instrumentation and request behavior');
+    await assert.rejects(generated(content.replace('            type: REQUEST_TYPE', '            type: CHANGED_REQUEST_TYPE')), /missing\/ambiguous/);
     for (const side of ['main', 'content']) {
         const original = side === 'main' ? main : content, transformed = g[side];
         assert.deepEqual(transformed.match(/window\.addEventListener\([^\n]+/g), original.match(/window\.addEventListener\([^\n]+/g));

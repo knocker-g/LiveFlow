@@ -59,9 +59,19 @@ for (const failure of ['missing terminal', 'missing sequence', 'loss', 'post-ter
         if (failure === 'missing terminal') h.messages.splice(h.messages.indexOf(terminal), 1);
         if (failure === 'missing sequence') h.messages.splice(h.messages.findIndex(m => m.diagnosticScopeEpoch === 0 && !m.diagnosticTerminal), 1);
         h.flush();
+        const closed = JSON.stringify(h.details());
+        const discarded = h.status().diagnosticScope.discardedIncomplete;
         if (failure === 'post-terminal') h.deliver({ ...terminal, diagnosticSequence: terminal.diagnosticSequence + 1 });
         assert.equal(h.status().accountingComplete, false);
-        assert.equal(h.details().state, 'INCOMPLETE'); assert.equal(h.details().sequenceCompleteness, 'INCOMPLETE');
+        if (failure === 'post-terminal') {
+            // A validated CLOSED archive is immutable; a late transport fault is
+            // recorded outside it and must still invalidate aggregate completeness.
+            assert.equal(h.details().state, 'CLOSED'); assert.equal(h.details().sequenceCompleteness, 'COMPLETE');
+            assert.equal(JSON.stringify(h.details()), closed);
+            assert.equal(h.status().diagnosticScope.discardedIncomplete, discarded + 1);
+        } else {
+            assert.equal(h.details().state, 'INCOMPLETE'); assert.equal(h.details().sequenceCompleteness, 'INCOMPLETE');
+        }
         if (failure === 'loss') { assert.equal(h.details().lostUnaccounted, 1); assert.equal(h.details().closure, 'TERMINAL_INVALID'); }
     });
 }

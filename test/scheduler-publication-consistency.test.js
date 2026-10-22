@@ -93,7 +93,7 @@ function conserved(h){const a=h.c.replayAccountingStatus();assert.equal(a.stages
 function actualBatch(h,n){
  if(!h.c.phase3Runtime)h.enqueue(1);
  const c=h.c;c.replayPipelineDiagnostic.receivedActions+=n;c.replayPipelineDiagnostic.messagesObserved+=n;c.replayPipelineDiagnostic.bridged+=n;
- Object.assign(c,{runtime:c.phase3Runtime,visibleMessages:Array.from({length:n},(_,i)=>({id:'batch-'+i,messageType:'text'})),scheduledGeneration:1,scheduledVideo:{},launchSettingsSnapshot:{},performance:{now:()=>0},phase5Tuning:{lineHeight:20},inputCount:n});
+ Object.assign(c,{runtime:c.phase3Runtime,visibleMessages:Array.from({length:n},(_,i)=>({id:'batch-'+i,messageType:'text'})),pendingOwner:null,scheduledGeneration:1,scheduledVideo:{},launchSettingsSnapshot:{},performance:{now:()=>0},phase5Tuning:{lineHeight:20},inputCount:n});
  const start=content.indexOf('        let enqueuedCount = 0;'),end=content.indexOf('        observeLivePresentationBatch(',start);
  vm.runInContext('{'+content.slice(start,end)+'}',c);h.flush();
 }
