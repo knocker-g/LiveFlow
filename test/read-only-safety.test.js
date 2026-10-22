@@ -18,6 +18,12 @@ const readRuntimeSource = [
     'youtube-chat.js'
 ].map((name) => fs.readFileSync(path.join(sourceRoot, name), 'utf8')).join('\n');
 const manifest = JSON.parse(fs.readFileSync(path.join(pocRoot, 'manifest.json'), 'utf8'));
+const vm = require('node:vm');
+function sourceFunction(source, name) {
+    const result = source.match(new RegExp(`function ${name}\\([^]*?\\n    \\}`))?.[0];
+    assert.ok(result, name);
+    return result;
+}
 
 test('formal runtime contains no chat WRITE endpoint or WRITE message path', () => {
     assert.doesNotMatch(runtimeSource, /liveChat\/messages|POST_YOUTUBE_CHAT|SEND_TEST_MESSAGE|textMessageEvent/i);
@@ -25,7 +31,13 @@ test('formal runtime contains no chat WRITE endpoint or WRITE message path', () 
 
 test('formal runtime contains no OAuth or Authorization generation', () => {
     assert.doesNotMatch(runtimeSource, /chrome\.identity|launchWebAuthFlow|getAuthToken|oauth|youtube\.force-ssl/i);
-    assert.doesNotMatch(runtimeSource, /\bAuthorization\b|\bBearer\b/i);
+    const noAuth = source => assert.doesNotMatch(source.replace(/^\s*\/\/.*$/gm, ''), /\bAuthorization\b|\bBearer\b/i);
+    // A full-line explanation of request authorization is not credential generation.
+    noAuth(runtimeSource);
+    noAuth('// authorization remains separate.');
+    for (const forbidden of ['headers.Authorization = secret;', "fetch(url, {headers: {'Authorization': value}});", "const credential = 'Bearer secret';"]) {
+        assert.throws(() => noAuth(forbidden), assert.AssertionError);
+    }
 });
 
 test('formal runtime contains no Cookie API or SAPISID hash access', () => {
@@ -62,7 +74,24 @@ test('navigation and pagehide invalidate or abort stale READ work', () => {
     assert.match(pageStateSource, /addEventListener\('yt-navigate-start', \(\) => invalidatePageLifecycle\('yt-navigate-start'\)\)/);
     assert.match(pageStateSource, /addEventListener\('pagehide', \(\) => \{[^]*?disconnectWatchRootObserver\(\);[^]*?stopReadLoop\('pagehide'\);/);
     assert.match(pageStateSource, /addEventListener\('visibilitychange'/);
-    assert.match(pageStateSource, /if \(document\.hidden\) \{\s*if \(pageState\.mode === 'replay'\) enterReplaySuspended\('HIDDEN'\)/);
+    const listener = pageStateSource.slice(pageStateSource.indexOf("window.addEventListener('visibilitychange'"),
+        pageStateSource.indexOf("window.addEventListener('timeupdate'"));
+    const verifyHidden = script => {
+        const calls = [];
+        const c = vm.createContext({ document: { hidden: true }, pageState: { mode: 'replay' },
+            replayInitialBootstrapIntent: {}, activeLoopGeneration: 1, readRequestInFlight: false, activeWaitTimer: null,
+            window: { addEventListener: (type, callback) => { c.listener = callback; } },
+            invalidateReplayBootstrapAuthority: () => calls.push('invalidate-bootstrap'),
+            enterReplaySuspended: reason => calls.push(reason), stopReadLoop: reason => calls.push(reason),
+            observeReplayRuntimeAccounting() {} });
+        vm.runInContext(script, c);
+        c.listener(); assert.deepEqual(calls, ['HIDDEN']);
+        calls.length = 0; c.document.hidden = false; c.listener(); assert.deepEqual(calls, []);
+        c.document.hidden = true; c.pageState.mode = 'live'; c.listener();
+        assert.deepEqual(calls, ['invalidate-bootstrap', 'visibility-hidden']);
+    };
+    verifyHidden(listener);
+    assert.throws(() => verifyHidden(listener.replace("enterReplaySuspended('HIDDEN')", 'void 0')), assert.AssertionError);
     assert.match(contentSource, /addEventListener\('yt-navigate-finish', detectPage\)/);
 });
 
@@ -416,7 +445,25 @@ test('Replay restart diagnostics expose only fixed enums, booleans, and buckets 
     assert.match(pageStateSource, /restartReason:[^]*restartStage:[^]*runtimeEnabled:[^]*pendingCountBucket:[^]*restartElapsedBucket:[^]*continuationAdvanceBucket:/);
     assert.match(pageStateSource, /'LT_1S'[^]*'1_TO_3S'[^]*'3_TO_10S'[^]*'GT_10S'/);
     assert.match(pageStateSource, /'ZERO'[^]*'ONE'[^]*'TWO_TO_FIVE'[^]*'GT_FIVE'/);
-    assert.match(contentSource, /type: REPLAY_DISPLAYED_TYPE, pageLifecycleGeneration: currentPageLifecycleGeneration/);
+    const publication = sourceFunction(contentSource, 'publishReplayScopeSnapshot');
+    const verifyPublication = script => {
+        const sent = [];
+        const c = vm.createContext({ replayDiagnosticEpoch: 7, replayDiagnosticLifecycle: 3, replayDiagnosticSequence: 0,
+            REPLAY_PIPELINE_DIAGNOSTIC_TYPE: 'PIPELINE', replayDiagnosticIncomplete: false,
+            replayDiagnosticBatch: { enqueuedCount: 2 }, replayDiagnosticDisplayed: 1,
+            replayContentClearOperations: new Map(), replaySchedulerDiagnostic: { launchCommitted: 1 },
+            window: { location: { origin: 'https://www.youtube.com' }, postMessage: (value, origin) => sent.push({ value, origin }) } });
+        vm.runInContext(script, c); c.publishReplayScopeSnapshot();
+        assert.equal(sent.length, 1); const { value, origin } = sent[0];
+        assert.equal(origin, 'https://www.youtube.com'); assert.equal(value.type, 'PIPELINE');
+        assert.equal(value.pageLifecycleGeneration, 3); assert.equal(value.diagnosticScopeEpoch, 7);
+        assert.equal(value.diagnosticSequence, 1); assert.equal(value.displayedCount, 1);
+        assert.equal(value.scheduler.launchCommitted, 1); assert.equal(value.batch.enqueuedCount, 2);
+        c.replayDiagnosticEpoch = null; c.publishReplayScopeSnapshot(); assert.equal(sent.length, 1);
+    };
+    verifyPublication(publication);
+    assert.throws(() => verifyPublication(publication.replace('pageLifecycleGeneration: replayDiagnosticLifecycle', 'pageLifecycleGeneration: -1')), assert.AssertionError);
+    assert.match(contentSource, /replayDiagnosticDisplayed \+= 1;\s*publishReplaySchedulerDiagnostic\(\)/);
     assert.equal((pageStateSource.match(/\bfetch\s*\(/g) || []).length, 1);
 });
 
@@ -474,7 +521,29 @@ test('Replay post-reanchor pipeline diagnostic is shape-only, seek-scoped, and r
     assert.match(contentSource, /cleanupOverlay\(\);\s+if \(event\.type === 'seeking'\) closeReplayDiagnosticScope\(\)/);
     assert.match(contentSource, /observe: observeReplayScheduler/);
     assert.match(contentSource, /function getCandidateProof[^]*applyOverlaySurfaceRect\(surface\)[^]*overlaySurface\.appendChild\(probe\)[^]*probe\.getBoundingClientRect\(\)/);
-    assert.match(pageStateSource, /LiveFlowReplayPipelineDiagnostic = Object\.freeze\([^]*return Object\.freeze\(\{ \.\.\.replayPipelineDiagnostic \}\)/);
+    const apiStart = pageStateSource.indexOf('window.LiveFlowReplayPipelineDiagnostic =');
+    const api = pageStateSource.slice(apiStart, pageStateSource.indexOf('window.LiveFlowReplayForegroundRecoveryDiagnostic', apiStart));
+    const verifyStatus = script => {
+        const c = vm.createContext({ window: {} });
+        vm.runInContext(sourceFunction(pageStateSource, 'createReplayPipelineDiagnostic') +
+            '\nreplayPipelineDiagnostic = createReplayPipelineDiagnostic();\n' + script, c);
+        const before = JSON.stringify(c.replayPipelineDiagnostic), status = c.window.LiveFlowReplayPipelineDiagnostic.status();
+        assert.equal(Object.isFrozen(c.window.LiveFlowReplayPipelineDiagnostic), true);
+        assert.equal(Object.isFrozen(status), true); assert.equal(Object.isFrozen(status.temporalRemovalReasons), true);
+        assert.notEqual(status.temporalRemovalReasons, c.replayPipelineDiagnostic.temporalRemovalReasons);
+        assert.equal(status.messagesObserved, 0); assert.equal(status.temporalRemovalReasons.HIDDEN, 0);
+        const inspect = object => {
+            for (const [key, value] of Object.entries(object)) {
+                assert.doesNotMatch(key, /^(?:token|opaqueToken|continuation|videoId|playerOffsetMs|requestBody|responseBody|message|url)$/i);
+                if (value && typeof value === 'object') inspect(value);
+                else assert.ok(['number', 'boolean', 'string'].includes(typeof value));
+            }
+        };
+        inspect(status); assert.equal(JSON.stringify(c.replayPipelineDiagnostic), before);
+    };
+    verifyStatus(api);
+    assert.throws(() => verifyStatus(api.replace('...replayPipelineDiagnostic,', "...replayPipelineDiagnostic, token: 'private',")), assert.AssertionError);
+    assert.throws(() => verifyStatus(api.replace('temporalRemovalReasons: Object.freeze({ ...replayPipelineDiagnostic.temporalRemovalReasons })', 'temporalRemovalReasons: replayPipelineDiagnostic.temporalRemovalReasons')), assert.AssertionError);
     assert.doesNotMatch(pageStateSource, /LiveFlowReplayPipelineDiagnostic[^]*?(?:continuation|videoId|playerOffsetMs|requestBody|responseBody)\s*:/);
     assert.equal((pageStateSource.match(/\bfetch\s*\(/g) || []).length, 1);
 });

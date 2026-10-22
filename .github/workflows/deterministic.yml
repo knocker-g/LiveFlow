@@ -1,0 +1,27 @@
+{
+  "name": "Deterministic guards",
+  "on": {
+    "pull_request": {},
+    "push": {},
+    "workflow_dispatch": {"inputs": {"integration": {"description": "Coherent integration/release checkpoint (all deterministic tests)", "type": "boolean", "default": false}}}
+  },
+  "permissions": {"contents": "read"},
+  "jobs": {
+    "deterministic": {
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 10,
+      "steps": [
+        {"uses": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683", "with": {"fetch-depth": 0, "persist-credentials": false}},
+        {"uses": "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020", "with": {"node-version": "24.12.0"}},
+        {
+          "name": "Static, package, safety and affected deterministic tests",
+          "env": {
+            "BASE_SHA": "${{ github.event.pull_request.base.sha || github.event.before }}",
+            "INTEGRATION": "${{ inputs.integration || false }}"
+          },
+          "run": "if [ \"$INTEGRATION\" = true ]; then\n  node tools/ci.mjs --integration\nelif [ -n \"$BASE_SHA\" ] && [ \"$BASE_SHA\" != 0000000000000000000000000000000000000000 ]; then\n  node tools/ci.mjs --base \"$BASE_SHA\"\nelse\n  echo 'No comparison base: explicitly dispatch an integration checkpoint.' >&2\n  exit 1\nfi\n"
+        }
+      ]
+    }
+  }
+}

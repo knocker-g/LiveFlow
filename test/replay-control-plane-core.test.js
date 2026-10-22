@@ -3,6 +3,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const core = require('../src/replay-control-plane-core.js');
+const vm = require('node:vm');
+function sourceFunction(source, name) {
+    const result = source.match(new RegExp(`function ${name}\\([^]*?\\n    \\}`))?.[0];
+    assert.ok(result, name);
+    return result;
+}
 
 const bindingValue = { lifecycleId: 1, revision: 2, targetId: 'target', generation: 3 };
 const binding = core.createAuthorityBinding(bindingValue).binding;
@@ -632,9 +638,51 @@ test('Production HIDDEN retains only an eligible REANCHOR and foreground recover
     const source = fs.readFileSync(path.join(__dirname, '../src/page-state-main.js'), 'utf8');
     const enter = source.match(/function enterReplaySuspended\([^]*?\n    \}/)?.[0] || '';
     assert.match(enter, /effectiveReason = document\.hidden[^]*\? 'HIDDEN' : reason/);
-    assert.match(enter, /invalidateAuthorityHandle\(replayBootstrapAuthority\)/);
+    assert.match(enter, /invalidateReplayBootstrapAuthority\(\)/);
+    const verifyInvalidation = invalidator => {
+        const bootstrap = core.createReplayAuthority({ kind: 'BOOTSTRAP', opaqueToken: 'test-only', binding, provenance: 'ADAPTER_BOOTSTRAP' }).authority;
+        const c = vm.createContext({ replayBootstrapAuthority: bootstrap, replayInitialBootstrapIntent: { lifecycle: 1 },
+            replayInitialBootstrapWait: {}, replayInitialBootstrapCancelledLifecycleId: -1, replayControlPlaneCore: core });
+        vm.runInContext(sourceFunction(source, 'invalidateAuthorityHandle') + '\n' + invalidator, c);
+        c.invalidateReplayBootstrapAuthority();
+        assert.equal(bootstrap.diagnostic(binding).authorityState, 'INVALID');
+        assert.equal(c.replayBootstrapAuthority, null); assert.equal(c.replayInitialBootstrapWait, null);
+        assert.equal(c.replayInitialBootstrapIntent, null); assert.equal(c.replayInitialBootstrapCancelledLifecycleId, 1);
+    };
+    const invalidator = sourceFunction(source, 'invalidateReplayBootstrapAuthority');
+    verifyInvalidation(invalidator);
+    assert.throws(() => verifyInvalidation(invalidator.replace('invalidateAuthorityHandle(replayBootstrapAuthority);', '')), assert.AssertionError);
     assert.match(enter, /invalidateAuthorityHandle\(replayPausedSequentialAuthority\)/);
     assert.match(enter, /retainReanchor = effectiveReason === 'HIDDEN'[^]*replaySeekAuthorityEligibleForHidden\(hiddenOwnedVideo\)/);
+    const verifyRetention = eligibility => {
+        const setup = () => {
+            const video = { currentTime: 10 };
+            const authority = core.createReplayAuthority({ kind: 'REANCHOR', opaqueToken: 'test-only', binding, provenance: 'ADAPTER_PLAYER_SEEK' }).authority;
+            assert.ok(authority);
+            const c = vm.createContext({ pageLifecycleGeneration: 1, replayControlPlaneCore: core,
+                currentReplayAuthorityBinding: () => binding, replaySeekAuthority: authority,
+                replayConsumedAuthorityRegistry: core.createConsumedAuthorityRegistry(),
+                replayProductionControlState: { phase: 'READING' }, getCurrentMainVideo: () => video,
+                isCurrentPageStateTarget: () => true, replayAdActive: false, replaySeekInProgress: false,
+                navigationPending: false, replayReanchorLock: false, replayPlayerSeekDiagnosticLock: false });
+            vm.runInContext(eligibility, c); return { c, video };
+        };
+        const valid = setup(); assert.equal(valid.c.replaySeekAuthorityEligibleForHidden(valid.video), true);
+        for (const invalidate of [c => { c.replaySeekAuthority = null; },
+            c => { c.currentReplayAuthorityBinding = () => core.createAuthorityBinding({ ...bindingValue, revision: 99 }).binding; },
+            c => { core.invalidateAuthority(c.replaySeekAuthority); },
+            c => { assert.equal(core.authorizeAuthorityRequest({ authority: c.replaySeekAuthority, expectedKind: 'REANCHOR',
+                currentBinding: binding, consumedRegistry: c.replayConsumedAuthorityRegistry }).ok, true); },
+            c => { c.replayProductionControlState.phase = 'STOPPED'; }, c => { c.replayAdActive = true; },
+            c => { c.navigationPending = true; }, c => { c.isCurrentPageStateTarget = () => false; }]) {
+            const { c, video } = setup(); invalidate(c);
+            assert.equal(c.replaySeekAuthorityEligibleForHidden(video), false);
+        }
+        assert.equal(valid.c.replaySeekAuthorityEligibleForHidden({ ...valid.video }), false);
+    };
+    const eligibility = sourceFunction(source, 'replaySeekAuthorityEligibleForHidden');
+    verifyRetention(eligibility);
+    assert.throws(() => verifyRetention(eligibility.replace('eligibility?.ok === true', 'true')), assert.AssertionError);
     assert.match(enter, /if \(!retainReanchor\) \{[^]*invalidateAuthorityHandle\(replaySeekAuthority\)[^]*replaySeekAuthority = null/);
     assert.match(enter, /stopReadLoop\(effectiveReason === 'HIDDEN' \? 'visibility-hidden' : 'ad-enter'\)/);
     assert.match(enter, /observeReplayControlShadow\(effectiveReason === 'HIDDEN' \? 'HIDDEN_ENTER' : 'AD_ENTER'\)/);
@@ -725,7 +773,42 @@ test('same-target Live to Replay transition invalidates the old acquisition befo
     assert.match(stop, /replayPausedSequentialAuthority = null/);
     assert.ok(respond.indexOf('applyLiveToReplayModeTransition(targetIdentity, eventSource)') < respond.indexOf('const shadowLifecycleStart'),
         'old Live generation is invalidated before Replay page state and authority commit');
-    assert.match(respond, /const shadowLifecycleStart = pageState\.mode !== 'replay'[^]*acceptReplayBootstrapCandidate\(continuation\)/);
+    assert.match(respond, /if \(pageState\.mode === 'replay'\) admitReadyReplayBootstrap\(continuation, currentVideo\)/);
+    assert.ok(respond.indexOf('applyLiveToReplayModeTransition(targetIdentity, eventSource)') < respond.indexOf('admitReadyReplayBootstrap(continuation, currentVideo)'));
+    const verifyAdmission = admission => {
+        const setup = () => {
+            const video = { readyState: 4, currentTime: 10, ended: false, seeking: false };
+            const c = vm.createContext({ document: { hidden: false }, navigationPending: false,
+                replayBootstrapEligibilityLifecycleId: -1, replayInitialBootstrapCancelledLifecycleId: -1,
+                pageLifecycleGeneration: 1, pageRevision: 2, replayInitialBootstrapIntent: null, pageState: { context: {} },
+                runtimeUserEnabled: true, readRequestInFlight: false, activeLoopGeneration: 0,
+                replayReanchorLock: false, replayPlayerSeekDiagnosticLock: false,
+                replayProductionControlState: { phase: 'STOPPED' }, replayControlPlaneCore: core,
+                currentReplayAuthorityBinding: () => binding, isCurrentPageStateTarget: () => true,
+                getCurrentMainVideo: () => video, lastEstablishedVideo: video,
+                replayAdIsActive: () => false, deferReplayInitialBootstrap: () => { c.deferred = true; },
+                initialReplayBootstrapIntentIsCurrent: () => false });
+            vm.runInContext(sourceFunction(source, 'acceptReplayBootstrapCandidate') + '\n' + admission, c);
+            return { c, video };
+        };
+        const { c, video } = setup();
+        assert.equal(c.admitReadyReplayBootstrap('test-only', video), true);
+        assert.equal(c.replayBootstrapAuthority.diagnostic(binding).authorityState, 'OBSERVED_UNUSED');
+        assert.equal(c.admitReadyReplayBootstrap('second', video), false);
+        for (const change of [c => { c.document.hidden = true; }, c => { c.navigationPending = true; },
+            c => { c.isCurrentPageStateTarget = () => false; }, c => { c.replayAdIsActive = () => true; },
+            c => { c.readRequestInFlight = true; }, c => { c.replayInitialBootstrapIntent = {}; }]) {
+            const { c, video } = setup(); change(c);
+            assert.equal(c.admitReadyReplayBootstrap('test-only', video), false);
+            assert.equal(c.replayBootstrapAuthority, undefined);
+        }
+        const foreign = setup();
+        assert.equal(foreign.c.admitReadyReplayBootstrap('test-only', { ...foreign.video }), false);
+        assert.equal(foreign.c.replayBootstrapAuthority, undefined);
+    };
+    const admission = sourceFunction(source, 'admitReadyReplayBootstrap');
+    verifyAdmission(admission);
+    assert.throws(() => verifyAdmission(admission.replace('document.hidden || navigationPending ||', '')), assert.AssertionError);
     assert.match(source, /responseBindingCurrent = generation === currentLoopGeneration[^]*revision === pageRevision[^]*lifecycleGeneration === pageLifecycleGeneration/);
 });
 
