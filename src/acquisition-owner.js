@@ -458,7 +458,14 @@ function createLiveAcquisitionOwner({ document, route, readFacts, clock, timers,
     function openBootstrap(channel) {
         if (phase === 'TERMINAL' || bootstrap !== 'CREATED' || !channel || typeof channel !== 'object') return null;
         const f = facts();
-        if (!eligible(f)) { diagnostic?.record('O_PREPERMIT_WAIT'); return null; } // Pre-permit WAIT; no election/clock consumed.
+        if (!eligible(f)) {
+            // Only existing local results: no repeated facts/media/clock evaluation.
+            const detail = f === null && phase === 'TERMINAL' ? 'O_PREPERMIT_V1_FACTS_TERMINAL' :
+                f !== null && phase !== 'TERMINAL' ? 'O_PREPERMIT_V1_MEDIA_INELIGIBLE' : 'O_PREPERMIT_V1_UNCLASSIFIED';
+            diagnostic?.record('O_PREPERMIT_WAIT');
+            try { diagnostic?.record(detail); } catch (_) { /* Diagnostic failure grants no Product work. */ }
+            return null;
+        } // Pre-permit WAIT; no election/clock consumed.
         if (replay && !replay.check('BOOTSTRAP')) return null;
         if (phase === 'TERMINAL' || bootstrap !== 'CREATED') return null;
         bootstrapChannel = channel; bootstrap = 'RESERVED';
