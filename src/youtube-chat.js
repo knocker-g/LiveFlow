@@ -1,4 +1,1187 @@
 (function () {
+    // Import-only private seam. The browser path below composes this same renderer
+    // over its original lexical state, without a lifecycle observer.
+    function createRenderer(dependencies) {
+        const { state, document, window, performance, overlayCore, schedulerFoundations,
+            geometryCore, phase5Tuning, PHASE3_UNTUNED_RUNTIME, isEffectiveDisplayActive,
+            getCurrentMainMedia, ensureSubtitleGeometryObservers, disconnectSubtitleGeometryObservers,
+            logInfo, publishReplaySchedulerDiagnostic, observer, recognizeAttempt, runtimeObserver,
+            isProductCurrent, resolveProductLease, withPresentationCleanup } = dependencies;
+        const observed = observer !== undefined;
+        const records = observed ? new Map() : null;
+        const leases = observed ? new WeakMap() : null;
+        const registeredAttempts = observed ? new WeakSet() : null;
+        const instance = Object.freeze({});
+        const productRecordOwner = Symbol('original-renderer-product-record');
+        const faults = new Set();
+        const nativeThen = Promise.prototype.then;
+        let currentAttempt = null;
+        const lifecycleProofs = observed ? new WeakMap() : null;
+        const resultProofs = observed ? new WeakMap() : null;
+        let proofDelivering = false;
+        let proofCount = 0;
+        const runtimeProofs = runtimeObserver ? new WeakMap() : null;
+        let runtimeDelivering = false, runtimeFault = false;
+        function originalProductAttempt(token, record) {
+            const original = record?.[productRecordOwner];
+            return original?.instance === instance && original.record === record && original.token === token &&
+                original.attempt === record.productAttempt && original.attempt.record === record
+                ? original.attempt : null;
+        }
+        function prepareDanmaku(message, generation, video, proof, settings, diagnosticLease, productLease) {
+            if (typeof isProductCurrent !== 'function' || typeof resolveProductLease !== 'function') return null;
+            const association = resolveProductLease(productLease);
+            if (!association || !association.scope || !association.pendingOwner || !association.document ||
+                isProductCurrent(productLease) !== true || resolveProductLease(productLease) !== association) return null;
+            const attempt = {
+                scope: association.scope, productLease, runtime: state.phase3Runtime, association,
+                token: Symbol('danmaku'), node: null, record: null, observation: null,
+                started: false, nativeReturned: false, nativeAttempted: false, native: 'NOT_ATTEMPTED',
+                queueConfirmed: false, aborted: false, visibleActive: false, cleanup: 'CLEANED',
+                cleanupAttempted: false, cleanupError: null, cleanupThrew: false, cancelIssued: false,
+                current() { return !attempt.aborted && isProductCurrent(productLease) === true &&
+                    resolveProductLease(productLease) === association; },
+                retain() { if (attempt.record && (attempt.native === 'UNKNOWN' || attempt.native === 'UNSETTLED' ||
+                    attempt.cleanup !== 'CLEANED')) state.activeDanmaku.set(attempt.token, attempt.record); },
+                clean() {
+                if (attempt.cleanupAttempted) {
+                    // A later native return/throw can create an obligation after
+                    // an earlier reentrant visual cleanup already ran.
+                    attempt.retain();
+                        if (attempt.cleanupThrew) throw attempt.cleanupError;
+                        return;
+                    }
+                    attempt.cleanupAttempted = true;
+                    try {
+                        state.activeDanmaku.delete(attempt.token);
+                        overlayCore.releaseLaneReservation(state.laneStates, attempt.token);
+                        attempt.node?.remove();
+                        attempt.cleanup = attempt.node && (attempt.node.isConnected !== false ||
+                            state.laneStates.some(lane => lane?.token === attempt.token)) ? 'INCOMPLETE' : 'CLEANED';
+                    } catch (error) {
+                        attempt.cleanup = 'INCOMPLETE'; attempt.cleanupThrew = true; attempt.cleanupError = error;
+                        throw error;
+                    } finally {
+                        attempt.visibleActive = false; attempt.retain();
+                        if (attempt.cleanup === 'CLEANED' && ['FINISHED', 'REJECTED'].includes(attempt.native) && attempt.observation)
+                            confirmCleanup(attempt.observation);
+                    }
+                },
+                settled(outcome) {
+                    attempt.native = outcome;
+                    if (attempt.cleanup === 'CLEANED') {
+                        state.activeDanmaku.delete(attempt.token);
+                        if (attempt.observation) confirmCleanup(attempt.observation);
+                    }
+                },
+                abort() {
+                    attempt.aborted = true;
+                    let primary, threw = false;
+                    try {
+                        if (attempt.record?.animation && !attempt.cancelIssued) {
+                            attempt.cancelIssued = true;
+                            attempt.record.animation.cancel();
+                        }
+                    } catch (error) { primary = error; threw = true; }
+                    try { attempt.clean(); } catch (error) { if (!threw) { primary = error; threw = true; } }
+                    if (threw) throw primary;
+                    return status();
+                }
+            };
+            let used = false;
+            function status() { return Object.freeze({ prepared: true, started: attempt.started,
+                nativeReturned: attempt.nativeReturned, queueConfirmed: attempt.queueConfirmed,
+                native: attempt.native, cleanup: attempt.cleanup, aborted: attempt.aborted,
+                settledAndCleaned: ['FINISHED', 'REJECTED'].includes(attempt.native) && attempt.cleanup === 'CLEANED' }); }
+            return Object.freeze({
+                start() {
+                    if (used || attempt.aborted) return false;
+                    used = true;
+                    if (!attempt.current()) { attempt.abort(); return false; }
+                    try {
+                        const result = renderDanmaku(message, generation, video, proof, settings, diagnosticLease, productLease, attempt);
+                        if (result?.status !== 'rendered' || !attempt.current()) { attempt.abort(); return false; }
+                        return true;
+                    } catch (error) {
+                        if (attempt.nativeAttempted && !attempt.nativeReturned) attempt.native = 'UNKNOWN';
+                        else if (attempt.nativeReturned && !['FINISHED', 'REJECTED'].includes(attempt.native)) attempt.native = 'UNKNOWN';
+                        try { attempt.abort(); } catch (_) { /* Original operation exception wins. */ }
+                        throw error;
+                    }
+                },
+                isCurrent: attempt.current, abort: attempt.abort,
+                markQueueConfirmed() { attempt.queueConfirmed = true; }, status
+            });
+        }
+        function issuedProof() {
+            if (proofCount < Number.MAX_SAFE_INTEGER) proofCount++; else faults.add('PROOF_COUNTER_OVERFLOW');
+        }
+        function fault(identity, reason) {
+            if (!observed) return;
+            const first = !faults.has(reason);
+            faults.add(reason);
+            if (first && typeof observer?.onFault === 'function') {
+                try { observer.onFault(identity, reason); } catch (_) { faults.add('FAULT_RECEIVER_FAILED'); }
+            }
+        }
+        if (observed && (!observer || ['onCommit', 'onTerminal', 'onFault'].some(key => typeof observer[key] !== 'function'))) {
+            fault(null, 'OBSERVER_INVALID');
+        }
+        function registerAttempt(scope, pendingOwner, attempt) {
+            if (!observed || ![scope, pendingOwner, attempt].every(value => value !== null && typeof value === 'object') ||
+                typeof recognizeAttempt !== 'function') { fault(null, 'IDENTITY_INVALID'); return null; }
+            if (registeredAttempts.has(attempt)) { fault(null, 'IDENTITY_INVALID'); return null; }
+            try {
+                if (recognizeAttempt(scope, pendingOwner, attempt) !== true) { fault(null, 'IDENTITY_INVALID'); return null; }
+            } catch (_) { fault(null, 'IDENTITY_INVALID'); return null; }
+            const lease = Object.freeze({});
+            registeredAttempts.add(attempt);
+            leases.set(lease, { scope, pendingOwner, attempt, used: false });
+            return lease;
+        }
+        function observeToken(token, node) {
+            if (!observed || !currentAttempt?.binding) return null;
+            const identity = Object.freeze({ ...currentAttempt.binding, instance, token });
+            if (records.size >= 40) { fault(identity, 'REGISTRY_EXHAUSTED'); return null; }
+            const record = { identity, node, committed: false, notifying: false, delivered: false,
+                settlement: null, cleaned: false, cancel: 'NONE' };
+            records.set(token, record);
+            currentAttempt.record = record;
+            return record;
+        }
+        function terminal(record) {
+            if (!record.committed || record.notifying || record.delivered || !record.settlement || !record.cleaned) return;
+            // Earlier teardown is not permanent proof: check the actual resources
+            // again at delivery, keeping old callbacks bound to their own token.
+            try {
+                if (!cleanupProven(record)) { record.cleaned = false; fault(record.identity, 'CLEANUP_UNPROVEN'); return; }
+            } catch (_) { fault(record.identity, 'CLEANUP_UNPROVEN'); return; }
+            record.delivered = true;
+            records.delete(record.identity.token);
+            if (typeof observer?.onTerminal !== 'function') { fault(record.identity, 'OBSERVER_INVALID'); return; }
+            const proof = Object.freeze({}), receipt = { kind: 'RENDER_TERMINAL', state: 'PENDING',
+                identity: record.identity, settlement: record.settlement, cleanup: record.cleaned, commitProof: record.commitProof };
+            issuedProof(); lifecycleProofs.set(proof, receipt);
+            const previousDelivery = proofDelivering; proofDelivering = true;
+            if (previousDelivery) faults.add('PROOF_REENTRANT');
+            try {
+                const returned = observer.onTerminal(record.identity, record.settlement, record.cancel, proof);
+                if (returned !== null && ['object', 'function'].includes(typeof returned)) { receipt.state = 'UNKNOWN'; fault(record.identity, 'PROOF_RECEIVER_ASYNC'); }
+            }
+            catch (_) { receipt.state = 'FAILED'; fault(record.identity, 'TERMINAL_RECEIVER_FAILED'); }
+            finally {
+                proofDelivering = previousDelivery;
+                if (receipt.state === 'PENDING') receipt.state = !faults.size && record.cleaned && record.delivered
+                    ? 'FINAL_DELIVERED' : 'UNKNOWN';
+            }
+        }
+        function commitObservation(record) {
+            record.committed = true;
+            record.notifying = true;
+            const proof = Object.freeze({}), receipt = { kind: 'RENDER_COMMIT', state: 'PENDING', identity: record.identity };
+            record.commitProof = proof; issuedProof(); lifecycleProofs.set(proof, receipt);
+            const previousDelivery = proofDelivering; proofDelivering = true;
+            if (previousDelivery) faults.add('PROOF_REENTRANT');
+            try {
+                if (typeof observer?.onCommit !== 'function') fault(record.identity, 'OBSERVER_INVALID');
+                else {
+                    const returned = observer.onCommit(record.identity, proof);
+                    if (returned !== null && ['object', 'function'].includes(typeof returned)) { receipt.state = 'UNKNOWN'; fault(record.identity, 'PROOF_RECEIVER_ASYNC'); }
+                }
+            } catch (_) { receipt.state = 'FAILED'; fault(record.identity, 'COMMIT_RECEIVER_FAILED'); }
+            finally {
+                record.notifying = false; proofDelivering = previousDelivery;
+                if (receipt.state === 'PENDING') receipt.state = !faults.size && record.committed ? 'FINAL_DELIVERED' : 'UNKNOWN';
+            }
+            terminal(record);
+        }
+        function cleanupProven(record) {
+            return !state.activeDanmaku.has(record.identity.token) &&
+                !state.laneStates.some(lane => lane?.token === record.identity.token) && record.node.isConnected === false;
+        }
+        function confirmCleanup(record) {
+            try {
+                record.cleaned = cleanupProven(record);
+                if (record.cleaned) terminal(record);
+                else fault(record.identity, 'CLEANUP_UNPROVEN');
+            } catch (_) { fault(record.identity, 'CLEANUP_UNPROVEN'); }
+        }
+        function cleanupToken(token, node, record) {
+            try {
+                state.activeDanmaku.delete(token);
+                overlayCore.releaseLaneReservation(state.laneStates, token);
+                node.remove();
+            } catch (error) { if (record) fault(record.identity, 'CLEANUP_FAILED'); throw error; }
+            if (record) confirmCleanup(record);
+        }
+        function observeFinished(record, finished) {
+            try {
+                nativeThen.call(finished,
+                    () => { record.settlement = 'FINISHED'; terminal(record); },
+                    () => { record.settlement = 'REJECTED'; terminal(record); });
+            } catch (_) { fault(record.identity, 'SETTLEMENT_UNOBSERVABLE'); }
+        }
+        function renderDanmaku(...args) {
+            if (!observed) return renderDanmakuImpl(...args);
+            if (proofDelivering) faults.add('PROOF_REENTRANT');
+            const previous = currentAttempt;
+            const lease = args[5];
+            const registered = lease && leases.get(lease);
+            let binding = null;
+            if (!registered || registered.used) fault(null, 'IDENTITY_INVALID');
+            else {
+                registered.used = true;
+                binding = Object.freeze({ scope: registered.scope, pendingOwner: registered.pendingOwner,
+                    attempt: registered.attempt, instance, token: null });
+            }
+            const attempt = { binding, record: null };
+            currentAttempt = attempt;
+            try {
+                const result = renderDanmakuImpl(...args);
+                if (binding) {
+                    const proof = Object.freeze({}), committed = attempt.record?.committed === true;
+                    issuedProof();
+                    lifecycleProofs.set(proof, { kind: 'RENDER_RESULT', state: !faults.size &&
+                        ((!attempt.record && ['drop', 'defer'].includes(result?.status)) || committed) ? 'FINAL_DELIVERED' : 'UNKNOWN',
+                        identity: binding, created: Boolean(attempt.record), status: result?.status });
+                    resultProofs.set(binding.attempt, proof);
+                }
+                if (attempt.record && !attempt.record.committed) records.delete(attempt.record.identity.token);
+                return result;
+            } catch (error) {
+                fault(attempt.record?.identity || binding, 'RENDER_FAILED');
+                throw error;
+            } finally { currentAttempt = previous; }
+        }
+
+        function cleanupOverlay() {
+            const originalRuntime = runtimeObserver ? state.phase3Runtime : null;
+            if (runtimeDelivering) runtimeFault = true;
+            if (proofDelivering) faults.add('PROOF_REENTRANT');
+            try {
+                state.rendererGeneration += 1;
+                state.activeDanmaku.forEach(({ animation, node }, token) => {
+                    const value = state.activeDanmaku.get(token);
+                    const product = originalProductAttempt(token, value);
+                    if (product) { product.abort(); return; }
+                    if (value.productAttempt || value[productRecordOwner]) {
+                        fault(null, 'PRODUCT_OWNERSHIP_UNKNOWN'); return;
+                    }
+                    const record = records?.get(token);
+                    try {
+                        if (record) record.cancel = 'THREW';
+                        animation?.cancel();
+                        if (record) record.cancel = animation ? 'ISSUED_RETURNED' : 'NONE';
+                        node?.remove();
+                    } catch (error) {
+                        fault(record?.identity || null, 'CLEANUP_FAILED');
+                        throw error;
+                    }
+                });
+                // Only proven legacy-only remainder may take the original full
+                // clear. An unresolved original or unproven Product candidate
+                // must survive; cancel/visual cleanup cannot settle its native work.
+                const productRetained = [...state.activeDanmaku.values()].some(value =>
+                    value.productAttempt || value[productRecordOwner]);
+                if (!productRetained) state.activeDanmaku.clear();
+                else for (const [token, value] of state.activeDanmaku)
+                    if (!value.productAttempt && !value[productRecordOwner]) state.activeDanmaku.delete(token);
+                state.phase3Runtime?.clear();
+                state.phase3Runtime = null;
+                state.phase3RuntimeVideo = null;
+                disconnectSubtitleGeometryObservers();
+                state.laneStates = [];
+                state.overlayRoot?.remove();
+                state.overlayRoot = null;
+                state.overlaySurface = null;
+                if (records) for (const record of records.values()) confirmCleanup(record);
+                if (originalRuntime && runtimeObserver) {
+                    const proof = Object.freeze({}), receipt = { kind: 'RUNTIME_DETACHED', state: 'PENDING',
+                        runtime: originalRuntime, instance };
+                    runtimeProofs.set(proof, receipt);
+                    runtimeDelivering = true;
+                    try {
+                        const returned = runtimeObserver(proof);
+                        receipt.state = runtimeFault || (returned !== null && ['object', 'function'].includes(typeof returned))
+                            ? 'UNKNOWN' : 'FINAL_DELIVERED';
+                    } catch (_) { receipt.state = 'FAILED'; fault(null, 'RUNTIME_RECEIVER_FAILED'); }
+                    finally { runtimeDelivering = false; }
+                }
+            } catch (error) {
+                fault(null, 'CLEANUP_FAILED');
+                throw error;
+            }
+        }
+
+        function cleanupPresentation(productLease) {
+            if (typeof withPresentationCleanup !== 'function') return Object.freeze({ status: 'NOT_APPLIED_UNKNOWN' });
+            return withPresentationCleanup(productLease, () => {
+                state.rendererGeneration += 1;
+                state.subtitleGeometryAdapter?.markDirty(geometryCore.DIRTY_SIGNALS.VIDEO_GEOMETRY);
+                state.activeDanmaku.forEach(({ animation, node }, token) => {
+                    const value = state.activeDanmaku.get(token), product = originalProductAttempt(token, value);
+                    if (product) { product.abort(); return; }
+                    if (value.productAttempt || value[productRecordOwner]) { fault(null, 'PRODUCT_OWNERSHIP_UNKNOWN'); return; }
+                    const record = records?.get(token);
+                    if (record) record.cancel = 'THREW';
+                    animation?.cancel();
+                    if (record) record.cancel = animation ? 'ISSUED_RETURNED' : 'NONE';
+                    node?.remove();
+                });
+                const retained = [...state.activeDanmaku.values()].some(value => value.productAttempt || value[productRecordOwner]);
+                if (!retained) state.activeDanmaku.clear();
+                else for (const [token, value] of state.activeDanmaku)
+                    if (!value.productAttempt && !value[productRecordOwner]) state.activeDanmaku.delete(token);
+                disconnectSubtitleGeometryObservers();
+                state.laneStates = [];
+                state.overlayRoot?.remove(); state.overlayRoot = null; state.overlaySurface = null;
+                if (records) for (const record of records.values()) confirmCleanup(record);
+                // Physical Pending removal belongs to the original Scope exit.
+                // Keep the actual Runtime/adapter/issuer; this is not detach.
+            });
+        }
+
+        function attachOverlay(player, productLease) {
+            if (!player) return false;
+
+            if (state.overlayRoot?.isConnected && state.overlayRoot.parentElement === player) return true;
+            if (state.overlayRoot) {
+                if (typeof withPresentationCleanup === 'function' && productLease) cleanupPresentation(productLease);
+                else cleanupOverlay();
+                return false;
+            }
+            state.overlayRoot = document.createElement('div');
+            state.overlayRoot.id = 'liveflow-overlay-root';
+            state.overlayRoot.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:20;overflow:hidden;contain:layout paint;';
+            state.overlaySurface = document.createElement('div');
+            state.overlaySurface.id = 'liveflow-danmaku-surface';
+            state.overlaySurface.style.cssText = 'position:absolute;pointer-events:none;overflow:hidden;contain:layout paint;';
+            state.overlaySurface.style.opacity = String((state.runtimeSettings.opacityPercent ?? 80) / 100);
+            state.overlayRoot.appendChild(state.overlaySurface);
+            player.appendChild(state.overlayRoot);
+            ensureSubtitleGeometryObservers(player);
+            state.subtitleGeometryAdapter?.markDirty(geometryCore.DIRTY_SIGNALS.VIDEO_GEOMETRY);
+            logInfo('Overlay attached');
+            return true;
+        }
+
+        function applyOverlaySurfaceRect(surfaceRect) {
+            if (!state.overlayRoot?.isConnected || !state.overlaySurface?.isConnected || !surfaceRect ||
+                ![surfaceRect.left, surfaceRect.top, surfaceRect.width, surfaceRect.height].every(Number.isFinite) ||
+                surfaceRect.width <= 0 || surfaceRect.height <= 0) return false;
+            if (state.activeDanmaku.size > 0 && ['left', 'top', 'width', 'height'].some(key =>
+                state.overlaySurface.style[key] !== `${surfaceRect[key]}px`)) return false;
+            state.overlaySurface.style.left = `${surfaceRect.left}px`;
+            state.overlaySurface.style.top = `${surfaceRect.top}px`;
+            state.overlaySurface.style.width = `${surfaceRect.width}px`;
+            state.overlaySurface.style.height = `${surfaceRect.height}px`;
+            return true;
+        }
+
+        function snapshotActiveGeometry(surfaceBounds) {
+            const result = [];
+            for (const record of state.activeDanmaku.values()) {
+                if (record.productAttempt && !record.productAttempt.visibleActive) continue;
+                const { node, trajectory, occlusionEpisodes, occlusionHistoryKnown } = record;
+                if (!node?.isConnected || !trajectory) return null;
+                const rect = node.getBoundingClientRect();
+                if (![rect.left, rect.top, rect.width, rect.height, trajectory.velocity].every(Number.isFinite) ||
+                    rect.width <= 0 || rect.height <= 0 || trajectory.velocity <= 0) return null;
+                result.push({ x: rect.left, y: rect.top, width: rect.width, height: rect.height,
+                    velocity: trajectory.velocity, anchorIndex: trajectory.anchorIndex,
+                    exitX: surfaceBounds.left, surfaceRight: surfaceBounds.right,
+                    semanticClass: trajectory.semanticClass,
+                    occlusionEpisodes, occlusionHistoryKnown: occlusionHistoryKnown === true });
+            }
+            return result;
+        }
+
+        function readSubtitleGeometry() {
+            const media = getCurrentMainMedia();
+            if (!media || !geometryCore) {
+                return Object.freeze({ state: 'UNKNOWN', exclusionRegions: Object.freeze([]), capabilityAvailable: false });
+            }
+            const videoRect = media.video.getBoundingClientRect();
+            const selectors = '.ytp-caption-segment, .ytp-caption-window-container .captions-text';
+            const candidates = Array.from(media.player.querySelectorAll(selectors)).map((element) => {
+                const style = window.getComputedStyle(element);
+                return {
+                    visible: element.isConnected && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || 1) > 0,
+                    rect: element.getBoundingClientRect()
+                };
+            });
+            return geometryCore.computeSubtitleGeometry({
+                candidates,
+                videoRect: { x: videoRect.left, y: videoRect.top, width: videoRect.width, height: videoRect.height },
+                safetyMargin: PHASE3_UNTUNED_RUNTIME.subtitleMargin
+            });
+        }
+
+        function isCaptionTrackEnabled(player) {
+            return player?.querySelector?.('.ytp-subtitles-button[aria-pressed="true"]') !== null;
+        }
+
+        function createDanmakuNode(normalized, settingsSnapshot = state.runtimeSettings) {
+            const node = document.createElement('div');
+            node.className = 'liveflow-danmaku';
+            node.dataset.authorRole = normalized.authorRole;
+            const fontScale = settingsSnapshot.fontSizeMode === 'manual' ? settingsSnapshot.fontScalePercent / 100 : 1;
+            const fontSize = phase5Tuning.fontSize * fontScale;
+            const lineHeight = phase5Tuning.lineHeight * fontScale;
+            node.style.cssText = `position:absolute;left:0;top:0;visibility:hidden;white-space:nowrap;font:${fontSize}px/${lineHeight}px sans-serif;font-weight:600;will-change:transform;pointer-events:none;`;
+            const special = normalized.messageType === 'superChat' || normalized.messageType === 'superSticker';
+            if (special) {
+                node.classList.add('liveflow-danmaku-special');
+                node.dataset.messageType = normalized.messageType;
+                const backgroundColor = normalized.colors.bodyBackgroundColor || normalized.colors.backgroundColor || normalized.colors.headerBackgroundColor;
+                node.style.backgroundColor = overlayCore.withCssColorAlpha(backgroundColor, 0.8) || 'rgba(24, 24, 24, 0.8)';
+                node.style.color = '#FFFFFF';
+            }
+            const specialHeader = special ? document.createElement('div') : null;
+            const specialBody = special ? document.createElement('div') : null;
+            if (specialHeader && specialBody) {
+                specialHeader.className = 'liveflow-danmaku-special-header';
+                specialBody.className = 'liveflow-danmaku-special-body';
+                node.append(specialHeader, specialBody);
+            }
+            const headerTarget = specialHeader || node;
+            const bodyTarget = specialBody || node;
+            if (overlayCore.shouldRenderAvatar(normalized, settingsSnapshot)) {
+                const avatar = document.createElement('img');
+                avatar.className = 'liveflow-danmaku-avatar';
+                avatar.alt = '';
+                avatar.src = normalized.authorPhoto;
+                avatar.width = 22;
+                avatar.height = 22;
+                headerTarget.appendChild(avatar);
+            }
+            if (special && normalized.authorName) {
+                const author = document.createElement('span');
+                author.className = 'liveflow-danmaku-author';
+                author.textContent = normalized.authorName;
+                headerTarget.appendChild(author);
+            }
+            if (special && normalized.purchaseAmountText) {
+                const amount = document.createElement('span');
+                amount.className = 'liveflow-danmaku-amount';
+                amount.textContent = normalized.purchaseAmountText;
+                if (normalized.colors.moneyChipBackgroundColor) amount.style.backgroundColor = normalized.colors.moneyChipBackgroundColor;
+                headerTarget.appendChild(amount);
+            }
+            if (normalized.messageType === 'superSticker' && normalized.sticker?.url) {
+                const sticker = document.createElement('img');
+                sticker.className = 'liveflow-danmaku-sticker';
+                sticker.src = normalized.sticker.url;
+                sticker.alt = normalized.sticker.alt;
+                sticker.width = 32;
+                sticker.height = 32;
+                bodyTarget.appendChild(sticker);
+            }
+            const content = document.createElement('span');
+            content.className = 'liveflow-danmaku-message';
+            for (const run of overlayCore.getRenderableMessageRuns(normalized, settingsSnapshot)) {
+                if (run.type === 'text') content.appendChild(document.createTextNode(run.text));
+                if (run.type === 'image') {
+                    const image = document.createElement('img');
+                    image.className = 'liveflow-danmaku-emoji';
+                    image.src = run.url;
+                    image.alt = run.alt;
+                    image.width = 29;
+                    image.height = 29;
+                    content.appendChild(image);
+                }
+            }
+            if (content.childNodes.length > 0) bodyTarget.appendChild(content);
+            return node;
+        }
+
+        function applySpecialFit(node, surfaceWidth) {
+            if (!node?.classList?.contains('liveflow-danmaku-special')) return { result: 'FIT' };
+            const header = node.querySelector('.liveflow-danmaku-special-header');
+            const body = node.querySelector('.liveflow-danmaku-special-body');
+            const message = node.querySelector('.liveflow-danmaku-message');
+            if (!header || !body || !message || !Number.isFinite(surfaceWidth) || surfaceWidth <= 0) return null;
+            const maximumWidth = Math.min(surfaceWidth * phase5Tuning.specialMaximumWidthFraction, phase5Tuning.specialMaximumWidthPx);
+            node.style.maxWidth = 'none';
+            message.style.fontSize = '';
+            const baseBodyFontSize = Number.parseFloat(window.getComputedStyle(message).fontSize);
+            const fit = schedulerFoundations.computeSpecialSingleLineFit({
+                headerNaturalWidth: header.scrollWidth,
+                bodyNaturalWidth: body.scrollWidth,
+                maximumWidth,
+                baseBodyFontSize,
+                minimumBodyFontSize: phase5Tuning.specialMinimumBodyFontSize
+            });
+            if (!fit || fit.result === 'UNREPRESENTABLE_SPECIAL') return fit;
+            node.style.maxWidth = `${maximumWidth}px`;
+            if (fit.result === 'SCALED') message.style.fontSize = `${fit.bodyFontSize}px`;
+            return fit;
+        }
+
+        function getCandidateProof(entry, geometryState, densityPolicy) {
+            const media = getCurrentMainMedia();
+            if (!media || !overlayCore.isMainContentPlaybackEligible(media.player, media.video)) return { blockedReason: 'OTHER' };
+            const normalized = overlayCore.normalizeDanmakuMessage(entry.payload.message);
+            if (!normalized) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
+            entry.payload.settingsSnapshot = state.runtimeSettings;
+            const playerRect = media.player.getBoundingClientRect();
+            const videoRect = media.video.getBoundingClientRect();
+            const surface = overlayCore.calculateVideoSurfaceRect(playerRect, videoRect);
+            if (!surface) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
+            if (!attachOverlay(media.player) || !state.overlaySurface) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
+            if (!applyOverlaySurfaceRect(surface)) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
+            const surfaceBounds = state.overlaySurface.getBoundingClientRect();
+            const probe = createDanmakuNode(normalized, entry.payload.settingsSnapshot);
+            state.overlaySurface.appendChild(probe);
+            const specialFit = applySpecialFit(probe, surface.width);
+            if (specialFit?.result === 'UNREPRESENTABLE_SPECIAL') {
+                probe.remove();
+                return { unrepresentableSpecial: true };
+            }
+            if (!specialFit) {
+                probe.remove();
+                return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
+            }
+            const measured = probe.getBoundingClientRect();
+            probe.remove();
+            const metrics = overlayCore.createRenderedTextMetrics(normalized.text, measured.width);
+            const width = metrics?.renderedWidth;
+            const height = measured.height;
+            if (![width, height].every(Number.isFinite) || width <= 0 || height <= 0) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
+            const laneCount = overlayCore.calculateLaneCount(surface.height, phase5Tuning.lineHeight, phase5Tuning.laneGap);
+            const playbackRate = state.currentChatMode === 'replay' ? media.video.playbackRate : 1;
+            const baseDuration = overlayCore.calculateCompensatedDanmakuDuration(surface.width, width);
+            const factor = state.currentChatMode === 'replay' ? overlayCore.calculateReplayPlaybackRateFactor(playbackRate) : 1;
+            const baseVelocity = overlayCore.calculateDanmakuSpeed({
+                overlayWidth: surface.width,
+                commentWidth: width,
+                targetDurationMs: baseDuration && factor ? baseDuration * factor : null,
+                minSpeed: phase5Tuning.minimumSpeed * playbackRate,
+                maxSpeed: phase5Tuning.maximumSpeed * playbackRate
+            });
+            const velocity = window.LiveFlowPhase5Tuning.applyLengthAwareVelocity(baseVelocity, width, surface.width,
+                phase5Tuning.lengthVelocity, phase5Tuning.maximumSpeed * playbackRate);
+            if (!Number.isFinite(velocity)) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
+            const now = performance.now();
+            const activeComments = snapshotActiveGeometry(surfaceBounds);
+            if (!activeComments) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
+            const captionsEnabled = isCaptionTrackEnabled(media.player);
+            const reservedBottomLaneStart = captionsEnabled ? Math.max(0, laneCount - 2) : laneCount;
+            const lanePitch = phase5Tuning.lineHeight + phase5Tuning.laneGap;
+            const hardExclusions = geometryState.exclusionRegions.slice();
+            if (reservedBottomLaneStart < laneCount) hardExclusions.push({
+                x: surfaceBounds.left,
+                y: surfaceBounds.top + reservedBottomLaneStart * lanePitch,
+                width: surfaceBounds.width,
+                height: surfaceBounds.bottom - (surfaceBounds.top + reservedBottomLaneStart * lanePitch)
+            });
+            const special = normalized.messageType === 'superChat' || normalized.messageType === 'superSticker';
+            const generated = geometryCore.generateDensityLaneCandidates({
+                videoRect: { x: surfaceBounds.left, y: surfaceBounds.top, width: surfaceBounds.width, height: surfaceBounds.height },
+                renderedWidth: width,
+                renderedHeight: height,
+                actualVelocity: velocity,
+                footprint: entry.footprint,
+                lineHeight: phase5Tuning.lineHeight,
+                laneGap: phase5Tuning.laneGap,
+                densityPolicy,
+                laneBandFractions: phase5Tuning.laneBandFractions,
+                interleavedAnchorStride: phase5Tuning.interleavedAnchorStride,
+                exclusionRegions: hardExclusions,
+                special
+            });
+            if (!generated) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
+            if (generated.candidates.length === 0) return { blockedReason: hardExclusions.length ? 'SUBTITLE_EXCLUSION' : 'NO_USABLE_LANE' };
+            const decorate = (candidates) => candidates.map((candidate) => Object.freeze({ ...candidate, specialFit,
+                rectangle: Object.freeze({ ...candidate.rectangle, snapshotAt: now / 1000, occlusionHistoryKnown: true }),
+                snapshotAtMs: now, captionsEnabled, surfaceBounds: Object.freeze({ left: surfaceBounds.left, top: surfaceBounds.top,
+                    width: surfaceBounds.width, height: surfaceBounds.height }),
+                hardExclusions: Object.freeze(hardExclusions) }));
+            const primaryCandidates = decorate(generated.baseCandidates);
+            const secondaryCandidates = decorate(generated.interleavedCandidates);
+            const expansionCandidates = decorate(generated.expansionCandidates);
+            const ranked = window.LiveFlowPhase5Tuning.rankDensityRescuePlacements(
+                primaryCandidates, secondaryCandidates, expansionCandidates, activeComments, entry.id, densityPolicy.density,
+                false
+            );
+            const selection = window.LiveFlowOpportunityAwareDensity.select({ candidates: ranked, active: activeComments, density: densityPolicy.density, config: phase5Tuning });
+            return { candidates: selection.candidates, activeComments };
+        }
+
+        function renderDanmakuImpl(message, scheduledGeneration = state.rendererGeneration, scheduledVideo = null, launchProof = null,
+            settingsSnapshot = state.runtimeSettings, diagnosticLease = null, productLease = null, productAttempt = null) {
+            if (!isEffectiveDisplayActive()) return { status: 'drop' };
+            const media = getCurrentMainMedia();
+            if (!media || !overlayCore?.isRendererTargetCurrent?.({
+                scheduledGeneration,
+                currentGeneration: state.rendererGeneration,
+                scheduledVideo: scheduledVideo || media.video,
+                currentVideo: media.video,
+                currentPlayerOwnsVideo: true
+            })) return { status: 'drop' };
+            const { player, video } = media;
+            if (!overlayCore.isMainContentPlaybackEligible(player, video)) return { status: 'drop' };
+            if (!attachOverlay(player, productLease) || !state.overlayRoot || !state.overlaySurface) return { status: 'drop' };
+            const normalized = overlayCore.normalizeDanmakuMessage(message);
+            if (!normalized) return { status: 'drop' };
+
+            const surfaceRect = overlayCore.calculateVideoSurfaceRect(player.getBoundingClientRect(), video.getBoundingClientRect());
+            if (!surfaceRect) return { status: 'drop' };
+            if (!applyOverlaySurfaceRect(surfaceRect)) return { status: 'drop' };
+
+            const laneCount = overlayCore.calculateLaneCount(surfaceRect.height, phase5Tuning.lineHeight, phase5Tuning.laneGap);
+            if (laneCount <= 0) return { status: 'drop' };
+            const anchorCount = Math.max(1, laneCount * 2 - 1);
+            if (state.laneStates.length !== anchorCount) {
+                state.laneStates = Array.from({ length: anchorCount }, (_, index) => state.laneStates[index] || null);
+            }
+
+            const now = performance.now();
+            if ([...state.activeDanmaku.values()].filter(record => !record.productAttempt || record.productAttempt.started).length >= overlayCore.DANMAKU_MAX_ACTIVE_COMMENTS) {
+                const resumeAtMs = state.laneStates.reduce((earliest, lane) => {
+                    if (!Number.isFinite(lane?.endTimeMs) || lane.endTimeMs <= now) return earliest;
+                    return earliest === null || lane.endTimeMs < earliest ? lane.endTimeMs : earliest;
+                }, null);
+                return { status: resumeAtMs === null ? 'drop' : 'wait', resumeAtMs };
+            }
+
+            const node = createDanmakuNode(normalized, settingsSnapshot);
+            if (productAttempt) {
+                productAttempt.node = node; productAttempt.cleanup = 'INCOMPLETE';
+                productAttempt.record = { productAttempt, animation: null, node, trajectory: null };
+                Object.defineProperty(productAttempt.record, productRecordOwner, { value: Object.freeze({
+                    instance, token: productAttempt.token, record: productAttempt.record, attempt: productAttempt
+                }) });
+                state.activeDanmaku.set(productAttempt.token, productAttempt.record);
+            }
+            const special = normalized.messageType === 'superChat' || normalized.messageType === 'superSticker';
+            state.overlaySurface.appendChild(node);
+            const specialFit = applySpecialFit(node, surfaceRect.width);
+            if (!specialFit || specialFit.result === 'UNREPRESENTABLE_SPECIAL') {
+                node.remove();
+                return { status: 'drop' };
+            }
+            const renderedRect = node.getBoundingClientRect();
+            const metrics = overlayCore.createRenderedTextMetrics(normalized.text, renderedRect.width);
+            const commentWidth = metrics?.renderedWidth;
+            const baseDurationMs = overlayCore.calculateCompensatedDanmakuDuration(surfaceRect.width, commentWidth);
+            const playbackRate = state.currentChatMode === 'replay' ? video.playbackRate : 1;
+            const replayFactor = state.currentChatMode === 'replay' ? overlayCore.calculateReplayPlaybackRateFactor(playbackRate) : 1;
+            const targetDurationMs = baseDurationMs && replayFactor ? baseDurationMs * replayFactor : null;
+            const baseSpeed = overlayCore.calculateDanmakuSpeed({
+                overlayWidth: surfaceRect.width,
+                commentWidth,
+                targetDurationMs,
+                minSpeed: phase5Tuning.minimumSpeed * playbackRate,
+                maxSpeed: phase5Tuning.maximumSpeed * playbackRate
+            });
+            const speed = window.LiveFlowPhase5Tuning.applyLengthAwareVelocity(baseSpeed, commentWidth, surfaceRect.width,
+                phase5Tuning.lengthVelocity, phase5Tuning.maximumSpeed * playbackRate);
+            const commitAt = performance.now();
+            const currentBounds = state.overlaySurface.getBoundingClientRect();
+            const commitRectangle = { ...launchProof?.rectangle, snapshotAt: commitAt / 1000, occlusionHistoryKnown: true };
+            const refreshedGeometry = state.subtitleGeometryAdapter?.refresh();
+            const activeGeometry = snapshotActiveGeometry(currentBounds);
+            const allowanceClass = window.LiveFlowSchedulerFoundations.getDensityVisualPolicy(launchProof?.density)?.collisionAllowanceClass;
+            const allowance = phase5Tuning.collisionAllowances[allowanceClass];
+            if (!launchProof?.rectangle || !launchProof.surfaceBounds || !allowance || !activeGeometry ||
+                !Number.isFinite(launchProof.snapshotAtMs) || now < launchProof.snapshotAtMs ||
+                isCaptionTrackEnabled(player) !== launchProof.captionsEnabled || refreshedGeometry?.geometry?.state === 'UNKNOWN' ||
+                refreshedGeometry?.revision !== launchProof.geometryRevision ||
+                ['left', 'top', 'width', 'height'].some(key => currentBounds[key] !== launchProof.surfaceBounds[key]) ||
+                commentWidth !== launchProof.rectangle.width || renderedRect.height !== launchProof.rectangle.height ||
+                speed !== launchProof.rectangle.velocity ||
+                !window.LiveFlowSchedulerFoundations.isOutsideHardExclusions(
+                    { ...launchProof.rectangle, ...launchProof.clearanceRectangle }, launchProof.hardExclusions) ||
+                !(phase5Tuning.normalOverlapPolicy
+                    ? window.LiveFlowNormalOverlapPolicy.prove(commitRectangle, activeGeometry, allowance, phase5Tuning.normalOverlapPolicy, ['DENSE', 'MAX_READABLE'].includes(launchProof.density))
+                    : window.LiveFlowSchedulerFoundations.proveBoundedCollisionSafe(launchProof.rectangle, activeGeometry, allowance)).safe) {
+                node.remove();
+                return { status: 'drop' };
+            }
+            const laneSpan = 1;
+            const anchorIndex = Number.isInteger(launchProof?.anchorIndex) && launchProof.anchorIndex >= 0 && launchProof.anchorIndex < anchorCount ? launchProof.anchorIndex : -1;
+            if (anchorIndex < 0 || !Number.isFinite(launchProof?.lane)) {
+                node.remove();
+                return { status: 'drop' };
+            }
+            const motion = overlayCore.calculateDanmakuMotion({
+                overlayWidth: surfaceRect.width,
+                commentWidth,
+                commentHeight: renderedRect.height,
+                speed,
+                startTimeMs: now
+            });
+            if (!motion || typeof node.animate !== 'function') {
+                node.remove();
+                return { status: 'drop' };
+            }
+
+            const token = productAttempt ? productAttempt.token : Symbol('danmaku');
+            const observation = observeToken(token, node);
+            if (productAttempt) productAttempt.observation = observation;
+            const reservation = {
+                token,
+                startTimeMs: now,
+                startX: motion.startX,
+                commentWidth,
+                commentHeight: renderedRect.height,
+                speed,
+                endTimeMs: now + motion.durationMs
+            };
+            if (!overlayCore.reserveLaneSpan(state.laneStates, anchorIndex, laneSpan, reservation)) {
+                node.remove();
+                return { status: 'drop' };
+            }
+            node.style.top = `${launchProof.lane * (phase5Tuning.lineHeight + phase5Tuning.laneGap)}px`;
+            if (productAttempt) {
+                if (!productAttempt.current()) return { status: 'drop' };
+                productAttempt.started = true;
+            }
+            node.style.visibility = 'visible';
+            if (productAttempt && !productAttempt.current()) return { status: 'drop' };
+            if (productAttempt) productAttempt.nativeAttempted = true;
+            const animation = node.animate([
+                { transform: `translateX(${motion.startX}px)` },
+                { transform: `translateX(${motion.endX}px)` }
+            ], {
+                duration: motion.durationMs,
+                easing: 'linear',
+                fill: 'forwards'
+            });
+            if (productAttempt) {
+                productAttempt.record.animation = animation;
+                productAttempt.nativeReturned = animation !== null && typeof animation === 'object';
+                productAttempt.native = productAttempt.nativeReturned ? 'UNSETTLED' : 'UNKNOWN';
+                productAttempt.retain();
+            }
+            const episodes = phase5Tuning.normalOverlapPolicy
+                ? window.LiveFlowNormalOverlapPolicy.recordEpisodes(commitRectangle, activeGeometry, commitAt / 1000) : null;
+            if (episodes) {
+                let index = 1;
+                for (const record of state.activeDanmaku.values()) {
+                    if (record.productAttempt && !record.productAttempt.visibleActive) continue;
+                    const subject = activeGeometry[index - 1];
+                    record.occlusionHistoryKnown = window.LiveFlowNormalOverlapPolicy.historyKnown(subject,
+                        activeGeometry.filter(r => r !== subject));
+                    record.occlusionEpisodes = episodes[index++];
+                }
+            }
+            const activeRecord = {
+                occlusionEpisodes: episodes?.[0], occlusionHistoryKnown: Boolean(episodes),
+                animation,
+                node,
+                visualFootprint: Object.freeze({ width: commentWidth, height: renderedRect.height, anchorLane: launchProof.lane, logicalLaneSpan: 1 }),
+                trajectory: Object.freeze({ startTimeMs: now, startX: currentBounds.right,
+                    y: currentBounds.top + launchProof.lane * (phase5Tuning.lineHeight + phase5Tuning.laneGap),
+                    width: commentWidth, height: renderedRect.height, velocity: speed, anchorIndex,
+                    semanticClass: special ? 'SPECIAL' : 'NORMAL' })
+            };
+            if (productAttempt) {
+                Object.assign(productAttempt.record, activeRecord); productAttempt.visibleActive = true;
+            } else state.activeDanmaku.set(token, activeRecord);
+            if (state.currentChatMode === 'replay') {
+                state.replayDiagnosticDisplayed += 1;
+                publishReplaySchedulerDiagnostic();
+            }
+            if (observation) commitObservation(observation);
+            const finished = animation.finished;
+            if (productAttempt) {
+                const then = finished.then;
+                const originalNative = then === nativeThen;
+                const clean = () => productAttempt.clean();
+                const next = originalNative ? Reflect.apply(then, finished, [
+                    () => { productAttempt.settled('FINISHED'); clean(); },
+                    () => { productAttempt.settled('REJECTED'); clean(); }
+                ]) : Reflect.apply(then, finished, [clean]);
+                if (!originalNative) productAttempt.native = 'UNKNOWN';
+                next.catch(() => { if (!productAttempt.cleanupAttempted) clean(); });
+            } else finished.then(() => {
+                cleanupToken(token, node, observation);
+            }).catch(() => {
+                cleanupToken(token, node, observation);
+            });
+            if (observation) observeFinished(observation, finished);
+            return { status: 'rendered' };
+        }
+
+        return Object.freeze({ cleanupOverlay, cleanupPresentation, attachOverlay, applyOverlaySurfaceRect,
+            snapshotActiveGeometry, readSubtitleGeometry, isCaptionTrackEnabled,
+            createDanmakuNode, applySpecialFit, getCandidateProof, renderDanmaku, registerAttempt,
+            prepareDanmaku,
+            recognizeProof(proof) { const receipt = lifecycleProofs?.get(proof); return receipt ? Object.freeze({ ...receipt }) : null; },
+            recognizeRuntimeProof(proof) { const receipt = runtimeProofs?.get(proof); return receipt ? Object.freeze({ ...receipt }) : null; },
+            proofForAttempt: attempt => resultProofs?.get(attempt) || null,
+            isProofDelivering: () => proofDelivering,
+            proofCoverage: () => proofCount,
+            observationStatus: () => Object.freeze({ state: !observed ? 'NOT_INSTALLED' : faults.size ? 'UNKNOWN' : 'OBSERVING',
+                unresolved: records?.size || 0, faults: Object.freeze([...faults]) }) });
+    }
+    // Import-only, single-source Content processing; no startup occurs here.
+    function createContentHandoff(dependencies) {
+        const { state, overlayCore, phase5Tuning, performance, PHASE3_UNTUNED_RUNTIME,
+            isEffectiveDisplayActive, getCurrentMainMedia, cleanupOverlay, ensurePhase3Runtime,
+            ensureSubtitleGeometryObservers, ensurePlaybackContextObserver,
+            observeLivePresentationBatch, publishReplaySchedulerDiagnostic,
+            rememberReplayPendingOwner, pending, getPending, privateEntry } = dependencies;
+        const MAX_MESSAGES = 500;
+        // Dormant CommonJS composition only; the browser path never loads this module.
+        const admissionFactory = privateEntry ? require('./bridge-admission.js').createBridgeAdmissionObserver : null;
+        const registrations = privateEntry ? new WeakMap() : null;
+        const faults = privateEntry ? new Set() : null;
+        const dispositionProofs = privateEntry ? new WeakMap() : null;
+        let dispositionProofCount = 0;
+        let active = null, delivering = false, processing = false;
+        function productInvalidated(lease) {
+            return (typeof privateEntry?.isProductInvalidated === 'function' &&
+                privateEntry.isProductInvalidated(lease) === true) ||
+                (typeof privateEntry?.isProductCurrent === 'function' && privateEntry.isProductCurrent(lease) !== true);
+        }
+        function fault(reason) {
+            if (faults) {
+                faults.add(reason);
+                try { privateEntry.onFault?.(reason); } catch (_) { faults.add('FAULT_RECEIVER_THROWN'); }
+            }
+        }
+        function record(index, disposition, item = null) {
+            if (active.outcomes[index]) { fault('DUPLICATE_DISPOSITION'); return; }
+            active.outcomes[index] = { disposition, item };
+            if (disposition === 'UNKNOWN') fault('INCOMPLETE_DISPOSITION');
+        }
+        function markScheduled(disposition) { active.scheduled.forEach(index => record(index, disposition)); }
+        function observeAdmission(runtime, index, payload, options, productLease) {
+            const occurrence = active.occurrences[index];
+            let before, admission, returned;
+            try {
+                const guardedRuntime = runtime && typeof privateEntry?.isProductInvalidated === 'function'
+                    ? Object.freeze({ get queue() { return runtime.queue; }, get status() { return runtime.status; },
+                        enqueue(value, settings) { return productInvalidated(productLease) ? false : runtime.enqueue(value, settings); } })
+                    : runtime;
+                admission = admissionFactory({ runtime: guardedRuntime, pendingOwner: active.identity.pendingOwner });
+                before = runtime ? runtime.queue.snapshot() : null;
+            } catch (_) { fault('ADMISSION_OBSERVER_UNAVAILABLE'); }
+            // A missing observer never changes an actual enqueue decision.
+            try {
+                if (productInvalidated(productLease)) return false;
+                returned = admission ? admission.enqueue(occurrence, payload, options)
+                    : runtime ? runtime.enqueue(payload, options) : false;
+            } catch (error) { record(index, 'UNKNOWN'); throw error; }
+            try {
+                const receipt = admission?.receipt(occurrence);
+                if (receipt?.status === 'VERIFIED_NO_ADMISSION') record(index, 'ADMISSION_REJECTED');
+                else if (receipt?.status === 'ADMITTED' && before) {
+                    const after = runtime.queue.snapshot();
+                    const added = after.filter(item => !before.includes(item));
+                    if (added.length === 1 && added[0].payload === payload &&
+                        pending.samePendingOwner(added[0].pendingOwner, active.identity.pendingOwner) &&
+                        after.length === before.length + 1 && before.every((item, i) => item === after[i])) {
+                        record(index, 'ADMITTED', added[0]);
+                    } else record(index, 'UNKNOWN');
+                } else record(index, 'UNKNOWN');
+            } catch (_) { if (!active.outcomes[index]) record(index, 'UNKNOWN'); fault('ADMISSION_METADATA_UNKNOWN'); }
+            return returned;
+        }
+        function enqueue(runtime, payload, options, index, productLease) {
+            if (productInvalidated(productLease)) return false;
+            return active ? observeAdmission(runtime, active.visible[index], payload, options, productLease)
+                : runtime.enqueue(payload, options);
+        }
+        function guard() {
+            if (processing || delivering) { fault('REENTRANT_PROCESSING'); throw new Error('REENTRANT_PROCESSING'); }
+        }
+        function registerBatch(handle) {
+            guard();
+            if (!registrations) return false;
+            if (!handle || typeof handle !== 'object' || registrations.has(handle)) { fault('INVALID_REGISTRATION'); return false; }
+            let identity;
+            try { identity = privateEntry?.recognizeBatch(handle); }
+            catch (_) { fault('REGISTRATION_UNKNOWN'); return false; }
+            if (!identity || !Object.isFrozen(identity) || typeof identity.document !== 'object' || !identity.document ||
+                typeof identity.scope !== 'object' || !identity.scope ||
+                typeof identity.targetId !== 'string' || !identity.targetId ||
+                ![identity.lifecycle, identity.revision].every(value => Number.isSafeInteger(value) && value >= 0) ||
+                !pending.clonePendingOwner(identity.pendingOwner) ||
+                identity.pendingOwner.target !== identity.targetId || identity.pendingOwner.lifecycle !== identity.lifecycle ||
+                identity.pendingOwner.revision !== identity.revision || !Array.isArray(identity.messages) ||
+                !Object.isFrozen(identity.messages) || !Array.isArray(identity.occurrences) ||
+                !Object.isFrozen(identity.occurrences) || identity.occurrences.length !== identity.messages.length ||
+                new Set(identity.occurrences).size !== identity.occurrences.length) { fault('INVALID_REGISTRATION'); return false; }
+            try {
+                for (let i = 0; i < identity.occurrences.length; i++) {
+                    const original = privateEntry.recognizeOccurrence(identity.occurrences[i]);
+                    if (!original || original.message !== identity.messages[i] || original.origin.document !== identity.document ||
+                        original.association.scope !== identity.scope || original.association.pendingOwner !== identity.pendingOwner) {
+                        fault('INVALID_ORIGIN'); return false;
+                    }
+                }
+            } catch (_) { fault('INVALID_ORIGIN'); return false; }
+            registrations.set(handle, { identity, used: false });
+            return true;
+        }
+        function processRegisteredBatch(handle, productLease) {
+            if (typeof privateEntry?.withProductReceiver === 'function')
+                return privateEntry.withProductReceiver(productLease, () => processRegisteredOriginal(handle, productLease));
+            return processRegisteredOriginal(handle, productLease);
+        }
+        function processRegisteredOriginal(handle, productLease) {
+            guard();
+            const registration = handle && typeof handle === 'object' ? registrations?.get(handle) : null;
+            if (!registration || registration.used) { fault('INVALID_OR_REUSED_BATCH'); return; }
+            registration.used = true;
+            try {
+                if (privateEntry.claimBatch(registration.identity) !== true) { fault('INVALID_OR_REUSED_BATCH'); return; }
+            } catch (_) { fault('REGISTRATION_UNKNOWN'); return; }
+            let current = false;
+            try { current = privateEntry.isCurrent(registration.identity) === true; } catch (_) { /* UNKNOWN */ }
+            if (!current) { fault('STALE_BATCH'); return; }
+            const identity = registration.identity, messages = identity.messages;
+            const call = { identity, occurrences: identity.occurrences, proofs: [], completed: false,
+                visited: [], outcomes: [], scheduled: [], visible: [] };
+            processing = true; active = call;
+            try { const result = processSuccess(messages, identity.pendingOwner, null, productLease); call.completed = true; return result; }
+            catch (error) { fault('PROCESSING_THROWN'); throw error; }
+            finally {
+                active = null; processing = false; delivering = true;
+                try {
+                    messages.forEach((_, index) => {
+                        const outcome = call.outcomes[index];
+                        if (!outcome) fault('INTERRUPTED_BATCH');
+                        // Unknown unvisited tail is coverage, never a fabricated occurrence event.
+                        if (!call.visited[index]) return;
+                        const event = Object.freeze({ occurrence: call.occurrences[index],
+                            disposition: outcome?.disposition || 'UNKNOWN', item: outcome?.item || null });
+                        const proof = Object.freeze({}), receipt = { kind: 'CONTENT', state: 'PENDING', identity, event };
+                        if (dispositionProofCount < Number.MAX_SAFE_INTEGER) dispositionProofCount++; else fault('COUNTER_OVERFLOW');
+                        dispositionProofs.set(proof, receipt); call.proofs.push(receipt);
+                        try {
+                            if (typeof privateEntry.onDisposition !== 'function') fault('MISSING_RECEIVER');
+                            else {
+                                const returned = privateEntry.onDisposition(identity, event, proof);
+                                if (returned !== null && ['object', 'function'].includes(typeof returned)) { receipt.state = 'UNKNOWN'; fault('INCOMPLETE_DISPOSITION'); }
+                            }
+                        } catch (_) { receipt.state = 'FAILED'; fault('RECEIVER_THROWN'); }
+                    });
+                } finally {
+                    delivering = false;
+                    for (const receipt of call.proofs) if (receipt.state === 'PENDING') receipt.state =
+                        call.completed && !faults.size ? 'FINAL_DELIVERED' : 'UNKNOWN';
+                }
+            }
+        }
+    function processSuccess(messages, sourceOwner, sourceScope, productLease) {
+        if (productInvalidated(productLease)) return;
+        const messageIds = new Set(state.currentMessages.map((message) => message.id).filter(Boolean));
+        const newMessages = [];
+        let exactIdDedupedCount = 0;
+        messages.forEach((message, index) => {
+            if (productInvalidated(productLease)) return;
+            if (active) active.visited[index] = true;
+            if (message.id && messageIds.has(message.id)) {
+                if (active) record(index, 'EXACT_ID_DUPLICATE');
+                exactIdDedupedCount += 1; return;
+            }
+            if (message.id) messageIds.add(message.id);
+            if (productInvalidated(productLease)) return;
+            state.currentMessages.push(message);
+            newMessages.push(message);
+            if (active) active.scheduled.push(index);
+        });
+        if (productInvalidated(productLease)) return;
+        if (state.currentMessages.length > MAX_MESSAGES) {
+            state.currentMessages.splice(0, state.currentMessages.length - MAX_MESSAGES);
+        }
+        const pendingOwner = active ? active.identity.pendingOwner : (getPending ? getPending() : pending).clonePendingOwner(sourceOwner);
+        rememberReplayPendingOwner(pendingOwner, sourceScope);
+        if (productInvalidated(productLease)) return;
+        scheduleDanmakuBatch(newMessages, pendingOwner, productLease);
+        if (productInvalidated(productLease)) return;
+        if (state.currentChatMode === 'replay' && exactIdDedupedCount > 0) publishReplayBatchAccounting({ exactIdDedupedCount });
+    }
+
+    function currentSourceActivityBinding() {
+        if (!state.currentPageKey || !['live', 'replay'].includes(state.currentChatMode) ||
+            !Number.isSafeInteger(state.currentPageLifecycleGeneration) || state.currentPageLifecycleGeneration < 0) return null;
+        return Object.freeze({
+            target: state.currentPageKey,
+            timeline: `${state.currentChatMode}:${state.currentPageRevision}`,
+            generation: state.currentPageLifecycleGeneration
+        });
+    }
+
+    function observeCurrentWindowSourceActivity(runtime, messages, media, productLease) {
+        const binding = currentSourceActivityBinding();
+        const playerTimeMsec = Number.isFinite(media?.video?.currentTime) ? media.video.currentTime * 1000 : null;
+        if (!runtime || !binding || !Number.isFinite(playerTimeMsec) || !Array.isArray(messages)) return null;
+        const windowEndMs = playerTimeMsec + 250;
+        const windowStartMs = Math.max(0, windowEndMs - PHASE3_UNTUNED_RUNTIME.sourceActivityWindowMsec);
+        const facts = messages.map((message) => Object.freeze({
+            mediaTimeMs: state.currentChatMode === 'replay' && Number.isFinite(message?.replayOffsetMsec)
+                ? message.replayOffsetMsec : playerTimeMsec,
+            displayable: true,
+            temporalClass: 'CURRENT_WINDOW'
+        }));
+        if (productInvalidated(productLease)) return null;
+        return runtime.observeSourceActivity?.({ eventBinding: binding, mediaTimeMs: playerTimeMsec,
+            windowStartMs, windowEndMs, facts }) || null;
+    }
+
+    function scheduleDanmakuBatch(messages, pendingOwner = null, productLease) {
+        if (productInvalidated(productLease)) return;
+        const inputCount = Array.isArray(messages) ? messages.length : 0;
+        if (!isEffectiveDisplayActive()) {
+            if (active) markScheduled('DISPLAY_SUPPRESSED');
+            observeLivePresentationBatch({ input: inputCount, lifecycleSuppressed: inputCount, suppressedOther: inputCount });
+            if (state.currentChatMode === 'replay') publishReplayBatchAccounting({
+                inputCount, lifecycleDiscarded: inputCount, lifecycleDiscardedDisplayDisabled: inputCount
+            });
+            return;
+        }
+        const media = getCurrentMainMedia();
+        if (productInvalidated(productLease)) return;
+        if (!media || !overlayCore?.isMainContentPlaybackEligible?.(media.player, media.video)) {
+            if (active) markScheduled('MEDIA_SUPPRESSED');
+            state.phase3Runtime?.clear();
+            observeLivePresentationBatch({ input: inputCount, lifecycleSuppressed: inputCount,
+                suppressedPaused: media?.video?.paused === true ? inputCount : 0,
+                suppressedOther: media?.video?.paused === true ? 0 : inputCount });
+            if (state.currentChatMode === 'replay') {
+                const reasonField = !media ? 'lifecycleDiscardedMediaMissing'
+                    : media.player?.classList?.contains?.('ad-showing') === true ? 'lifecycleDiscardedAdShowing'
+                        : media.player?.classList?.contains?.('ad-interrupting') === true ? 'lifecycleDiscardedAdInterrupting'
+                            : media.video?.ended === true ? 'lifecycleDiscardedMediaEnded'
+                                : !Number.isFinite(media.video?.readyState) || media.video.readyState < 2
+                                    ? 'lifecycleDiscardedMediaNotReady' : media.video?.paused === true
+                                        ? 'lifecycleDiscardedMediaPaused' : 'lifecycleDiscardedMediaMissing';
+                publishReplayBatchAccounting({ inputCount, lifecycleDiscarded: inputCount, [reasonField]: inputCount });
+            }
+            return;
+        }
+        if (state.currentChatMode === 'live' && state.livePresentationResumeGateActive) {
+            const proximity = overlayCore?.classifyLiveEdgeProximity?.({
+                currentTime: media.video.currentTime,
+                seekable: snapshotTimeRanges(media.video.seekable),
+                buffered: snapshotTimeRanges(media.video.buffered)
+            }) || 'UNKNOWN';
+            const gate = overlayCore?.reduceLivePresentationResumeGate?.(true, 'BATCH', proximity) ||
+                Object.freeze({ active: true, allowLaunch: false, reason: 'UNKNOWN' });
+            state.livePresentationResumeGateActive = gate.active;
+            if (!gate.allowLaunch) {
+                if (active) markScheduled('LIVE_RESUME_SUPPRESSED');
+                state.phase3Runtime?.clear();
+                observeLivePresentationBatch({ input: inputCount, lifecycleSuppressed: inputCount,
+                    suppressedBehindLive: gate.reason === 'BEHIND_LIVE' ? inputCount : 0,
+                    suppressedUnknown: gate.reason === 'UNKNOWN' ? inputCount : 0 });
+                return;
+            }
+        }
+        if (productInvalidated(productLease)) return;
+        if (state.phase3Runtime && state.phase3RuntimeVideo !== media.video) cleanupOverlay();
+        if (productInvalidated(productLease)) return;
+        const runtime = ensurePhase3Runtime();
+        if (productInvalidated(productLease)) return;
+        if (!runtime) {
+            if (active) active.scheduled.forEach((index) => observeAdmission(null, index, null, null, productLease));
+            observeLivePresentationBatch({ input: inputCount, enqueueRejected: inputCount });
+            if (state.currentChatMode === 'replay') publishReplayBatchAccounting({ inputCount, enqueueRejected: inputCount });
+            return;
+        }
+        ensureSubtitleGeometryObservers(media.player);
+        if (productInvalidated(productLease)) return;
+        ensurePlaybackContextObserver(media.player);
+        if (productInvalidated(productLease)) return;
+        const scheduledGeneration = state.rendererGeneration;
+        const scheduledVideo = media.video;
+        const launchSettingsSnapshot = state.runtimeSettings;
+        const visibleMessages = Array.isArray(messages)
+            ? messages.filter((message, index) => {
+                const visible = overlayCore.isMessageVisibleForSettings(message, launchSettingsSnapshot);
+                if (active) {
+                    const original = active.scheduled[index];
+                    if (visible) active.visible.push(original); else record(original, 'VISIBILITY_FILTERED');
+                }
+                return visible;
+            })
+            : [];
+        if (productInvalidated(productLease)) return;
+        observeCurrentWindowSourceActivity(runtime, visibleMessages, media, productLease);
+        if (productInvalidated(productLease)) return;
+        let enqueuedCount = 0;
+        state.replayDiagnosticBatchInProgress = true;
+        try { visibleMessages.forEach((message, index) => {
+            if (productInvalidated(productLease)) return;
+            if (enqueue(runtime, {
+            message,
+            ...(typeof privateEntry?.isProductCurrent === 'function' ? { productLease } : {}),
+            pendingOwner,
+            generation: scheduledGeneration,
+            pageLifecycleGeneration: state.currentPageLifecycleGeneration,
+            video: scheduledVideo,
+            settingsSnapshot: launchSettingsSnapshot
+        }, {
+            id: message.id || `${scheduledGeneration}:${performance.now()}:${index}`,
+            enqueuedAt: performance.now(),
+            rendererType: message.messageType === 'superChat'
+                ? 'liveChatPaidMessageRenderer'
+                : message.messageType === 'superSticker' ? 'liveChatPaidStickerRenderer' : 'liveChatTextMessageRenderer',
+            footprint: message.messageType === 'superChat' || message.messageType === 'superSticker'
+                ? { width: 520, height: 68, kind: 'SPECIAL' }
+                : { width: 720, height: phase5Tuning.lineHeight, kind: 'NORMAL' }
+            }, index, productLease)) enqueuedCount += 1;
+        }); } finally { state.replayDiagnosticBatchInProgress = false; }
+        if (productInvalidated(productLease)) return;
+        if (state.currentChatMode === 'replay') {
+            publishReplayBatchAccounting({ inputCount, visibleCount: visibleMessages.length, enqueuedCount,
+                visibilityFiltered: inputCount - visibleMessages.length, enqueueRejected: visibleMessages.length - enqueuedCount });
+        }
+        observeLivePresentationBatch({ input: inputCount, enqueued: enqueuedCount,
+            visibilityFiltered: inputCount - visibleMessages.length,
+            enqueueRejected: visibleMessages.length - enqueuedCount });
+    }
+
+    function snapshotTimeRanges(ranges) {
+        if (!ranges || !Number.isInteger(ranges.length) || ranges.length < 0) return null;
+        const snapshot = [];
+        try {
+            for (let index = 0; index < ranges.length; index += 1) {
+                snapshot.push({ start: ranges.start(index), end: ranges.end(index) });
+            }
+        } catch {
+            return null;
+        }
+        return snapshot;
+    }
+
+    function publishReplayBatchAccounting(fields) {
+        for (const [key, value] of Object.entries(fields)) {
+            if (Number.isInteger(value) && value >= 0) state.replayDiagnosticBatch[key] = (state.replayDiagnosticBatch[key] || 0) + value;
+        }
+        publishReplaySchedulerDiagnostic();
+    }
+
+        return Object.freeze({
+            processLegacySuccess(messages, owner, scope, productLease) {
+                guard();
+                return typeof privateEntry?.withProductReceiver === 'function'
+                    ? privateEntry.withProductReceiver(productLease, () => processSuccess(messages, owner, scope, productLease))
+                    : processSuccess(messages, owner, scope, productLease);
+            },
+            recognizeProof(proof) { const receipt = dispositionProofs?.get(proof); return receipt ? Object.freeze({ ...receipt }) : null; },
+            isProofDelivering: () => delivering || processing,
+            proofCoverage: () => dispositionProofCount,
+            scheduleDanmakuBatch(messages, owner, productLease) { guard(); return scheduleDanmakuBatch(messages, owner, productLease); },
+            currentSourceActivityBinding, registerBatch, processRegisteredBatch,
+            observationStatus: () => Object.freeze({ state: !faults ? 'DORMANT' : faults.size ? 'UNKNOWN' : 'OBSERVING',
+                faults: Object.freeze(faults ? [...faults] : []), scopeClosure: 'NOT_IMPLEMENTED' })
+        });
+    }
+
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = Object.freeze({ createRenderer, createContentHandoff, startContent });
+        return;
+    }
+
+    function startContent(cutover = null) {
+    const privateBridge = cutover ? cutover.createBridge() : null;
     const LOG_PREFIX = '[LiveFlow PoC]';
     const REQUEST_TYPE = 'LIVEFLOW_REQUEST_INITIAL_CHAT_CONTINUATION';
     const RESPONSE_TYPE = 'LIVEFLOW_INITIAL_CHAT_CONTINUATION';
@@ -167,6 +1350,7 @@
     }
 
     function publishReplayScopeSnapshot(terminal = false) {
+        if (cutover) return;
         if (replayDiagnosticEpoch === null) return;
         window.postMessage({ source: 'liveflow-content-script', type: REPLAY_PIPELINE_DIAGNOSTIC_TYPE,
             pageLifecycleGeneration: replayDiagnosticLifecycle, diagnosticScopeEpoch: replayDiagnosticEpoch,
@@ -298,7 +1482,7 @@
         return Object.freeze({ ...livePresentationAccounting, ...ledger });
     }
 
-    window.LiveFlowLivePresentationDiagnostic = Object.freeze({ status: livePresentationAccountingStatus });
+    if (!cutover) window.LiveFlowLivePresentationDiagnostic = Object.freeze({ status: livePresentationAccountingStatus });
 
     let replayLastLaunchAt = null;
     let replayGapCollisionBlocked = false;
@@ -339,6 +1523,7 @@
     }
 
     function publishReplaySchedulerDiagnostic(stableEvaluationBoundary = false) {
+        if (cutover) return;
         if (currentChatMode !== 'replay' || replayDiagnosticBatchInProgress) return;
         const status = phase3Runtime?.status?.();
         // Counters still update at every original event. Publish only a coherent event/batch boundary.
@@ -444,13 +1629,14 @@
     }
 
     function requestInitialContinuation() {
+        if (privateBridge) return privateBridge.start();
         window.postMessage({
             source: 'liveflow-content-script',
             type: REQUEST_TYPE
         }, window.location.origin);
     }
 
-    window.LiveFlowStopReadLoop = function () {
+    if (!cutover) window.LiveFlowStopReadLoop = function () {
         window.postMessage({
             source: 'liveflow-content-script',
             type: STOP_READ_LOOP_TYPE
@@ -479,22 +1665,7 @@
         return video ? { player, video } : null;
     }
 
-    function cleanupOverlay() {
-        rendererGeneration += 1;
-        activeDanmaku.forEach(({ animation, node }) => {
-            animation?.cancel();
-            node?.remove();
-        });
-        activeDanmaku.clear();
-        phase3Runtime?.clear();
-        phase3Runtime = null;
-        phase3RuntimeVideo = null;
-        disconnectSubtitleGeometryObservers();
-        laneStates = [];
-        overlayRoot?.remove();
-        overlayRoot = null;
-        overlaySurface = null;
-    }
+    function cleanupOverlay(...args) { return privateBridge ? privateBridge.cleanupPresentation(renderer) : renderer.cleanupOverlay(...args); }
 
     function isEffectiveDisplayActive() {
         return overlayCore?.isEffectiveDisplayActive?.({ userEnabled, nativeChatVisible }) === true;
@@ -526,10 +1697,11 @@
             logInfo(`Native Chat open linkage: triggered=true, visible=${nativeChatVisible}`);
             tryOpenNativeChat();
         }
+        privateBridge?.synchronize();
         return transition;
     }
 
-    window.LiveFlowDisplayState = Object.freeze({
+    if (!cutover) window.LiveFlowDisplayState = Object.freeze({
         setUserEnabled(value) {
             if (typeof value !== 'boolean') return false;
             applyDisplayAction({ type: 'set-user-enabled', value });
@@ -986,82 +2158,15 @@
         });
     }
 
-    function attachOverlay(player) {
-        if (!player) return false;
+    function attachOverlay(...args) { return renderer.attachOverlay(...args); }
 
-        if (overlayRoot?.isConnected && overlayRoot.parentElement === player) return true;
-        if (overlayRoot) {
-            cleanupOverlay();
-            return false;
-        }
-        overlayRoot = document.createElement('div');
-        overlayRoot.id = 'liveflow-overlay-root';
-        overlayRoot.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:20;overflow:hidden;contain:layout paint;';
-        overlaySurface = document.createElement('div');
-        overlaySurface.id = 'liveflow-danmaku-surface';
-        overlaySurface.style.cssText = 'position:absolute;pointer-events:none;overflow:hidden;contain:layout paint;';
-        overlaySurface.style.opacity = String((runtimeSettings.opacityPercent ?? 80) / 100);
-        overlayRoot.appendChild(overlaySurface);
-        player.appendChild(overlayRoot);
-        ensureSubtitleGeometryObservers(player);
-        subtitleGeometryAdapter?.markDirty(geometryCore.DIRTY_SIGNALS.VIDEO_GEOMETRY);
-        logInfo('Overlay attached');
-        return true;
-    }
+    function applyOverlaySurfaceRect(...args) { return renderer.applyOverlaySurfaceRect(...args); }
 
-    function applyOverlaySurfaceRect(surfaceRect) {
-        if (!overlayRoot?.isConnected || !overlaySurface?.isConnected || !surfaceRect ||
-            ![surfaceRect.left, surfaceRect.top, surfaceRect.width, surfaceRect.height].every(Number.isFinite) ||
-            surfaceRect.width <= 0 || surfaceRect.height <= 0) return false;
-        if (activeDanmaku.size > 0 && ['left', 'top', 'width', 'height'].some(key =>
-            overlaySurface.style[key] !== `${surfaceRect[key]}px`)) return false;
-        overlaySurface.style.left = `${surfaceRect.left}px`;
-        overlaySurface.style.top = `${surfaceRect.top}px`;
-        overlaySurface.style.width = `${surfaceRect.width}px`;
-        overlaySurface.style.height = `${surfaceRect.height}px`;
-        return true;
-    }
+    function snapshotActiveGeometry(...args) { return renderer.snapshotActiveGeometry(...args); }
 
-    function snapshotActiveGeometry(surfaceBounds) {
-        const result = [];
-        for (const { node, trajectory, occlusionEpisodes, occlusionHistoryKnown } of activeDanmaku.values()) {
-            if (!node?.isConnected || !trajectory) return null;
-            const rect = node.getBoundingClientRect();
-            if (![rect.left, rect.top, rect.width, rect.height, trajectory.velocity].every(Number.isFinite) ||
-                rect.width <= 0 || rect.height <= 0 || trajectory.velocity <= 0) return null;
-            result.push({ x: rect.left, y: rect.top, width: rect.width, height: rect.height,
-                velocity: trajectory.velocity, anchorIndex: trajectory.anchorIndex,
-                exitX: surfaceBounds.left, surfaceRight: surfaceBounds.right,
-                semanticClass: trajectory.semanticClass,
-                occlusionEpisodes, occlusionHistoryKnown: occlusionHistoryKnown === true });
-        }
-        return result;
-    }
+    function readSubtitleGeometry(...args) { return renderer.readSubtitleGeometry(...args); }
 
-    function readSubtitleGeometry() {
-        const media = getCurrentMainMedia();
-        if (!media || !geometryCore) {
-            return Object.freeze({ state: 'UNKNOWN', exclusionRegions: Object.freeze([]), capabilityAvailable: false });
-        }
-        const videoRect = media.video.getBoundingClientRect();
-        const selectors = '.ytp-caption-segment, .ytp-caption-window-container .captions-text';
-        const candidates = Array.from(media.player.querySelectorAll(selectors)).map((element) => {
-            const style = window.getComputedStyle(element);
-            return {
-                visible: element.isConnected && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || 1) > 0,
-                rect: element.getBoundingClientRect()
-            };
-        });
-        return geometryCore.computeSubtitleGeometry({
-            candidates,
-            videoRect: { x: videoRect.left, y: videoRect.top, width: videoRect.width, height: videoRect.height },
-            safetyMargin: PHASE3_UNTUNED_RUNTIME.subtitleMargin
-        });
-    }
-
-    function isCaptionTrackEnabled(player) {
-        return player?.querySelector?.('.ytp-subtitles-button[aria-pressed="true"]') !== null;
-    }
+    function isCaptionTrackEnabled(...args) { return renderer.isCaptionTrackEnabled(...args); }
 
     function disconnectSubtitleGeometryObservers() {
         subtitleMutationObserver?.disconnect();
@@ -1096,7 +2201,7 @@
         playbackContextObserver?.disconnect();
         playbackContextObservedPlayer = player;
         playbackContextWasAd = isAdPlaybackActive(player);
-        if (playbackContextWasAd) {
+        if (playbackContextWasAd && !cutover) {
             window.postMessage({ source: 'liveflow-content-script', type: REPLAY_AD_ENTER_TYPE }, window.location.origin);
         }
         if (typeof MutationObserver !== 'function') return;
@@ -1104,6 +2209,7 @@
             const adActive = isAdPlaybackActive(player);
             if (adActive === playbackContextWasAd) return;
             playbackContextWasAd = adActive;
+            if (cutover) { privateBridge.synchronize(); cleanupOverlay(); return; }
             cleanupOverlay();
             window.postMessage({
                 source: 'liveflow-content-script',
@@ -1113,192 +2219,11 @@
         playbackContextObserver.observe(player, { attributes: true, attributeFilter: ['class'] });
     }
 
-    function createDanmakuNode(normalized, settingsSnapshot = runtimeSettings) {
-        const node = document.createElement('div');
-        node.className = 'liveflow-danmaku';
-        node.dataset.authorRole = normalized.authorRole;
-        const fontScale = settingsSnapshot.fontSizeMode === 'manual' ? settingsSnapshot.fontScalePercent / 100 : 1;
-        const fontSize = phase5Tuning.fontSize * fontScale;
-        const lineHeight = phase5Tuning.lineHeight * fontScale;
-        node.style.cssText = `position:absolute;left:0;top:0;visibility:hidden;white-space:nowrap;font:${fontSize}px/${lineHeight}px sans-serif;font-weight:600;will-change:transform;pointer-events:none;`;
-        const special = normalized.messageType === 'superChat' || normalized.messageType === 'superSticker';
-        if (special) {
-            node.classList.add('liveflow-danmaku-special');
-            node.dataset.messageType = normalized.messageType;
-            const backgroundColor = normalized.colors.bodyBackgroundColor || normalized.colors.backgroundColor || normalized.colors.headerBackgroundColor;
-            node.style.backgroundColor = overlayCore.withCssColorAlpha(backgroundColor, 0.8) || 'rgba(24, 24, 24, 0.8)';
-            node.style.color = '#FFFFFF';
-        }
-        const specialHeader = special ? document.createElement('div') : null;
-        const specialBody = special ? document.createElement('div') : null;
-        if (specialHeader && specialBody) {
-            specialHeader.className = 'liveflow-danmaku-special-header';
-            specialBody.className = 'liveflow-danmaku-special-body';
-            node.append(specialHeader, specialBody);
-        }
-        const headerTarget = specialHeader || node;
-        const bodyTarget = specialBody || node;
-        if (overlayCore.shouldRenderAvatar(normalized, settingsSnapshot)) {
-            const avatar = document.createElement('img');
-            avatar.className = 'liveflow-danmaku-avatar';
-            avatar.alt = '';
-            avatar.src = normalized.authorPhoto;
-            avatar.width = 22;
-            avatar.height = 22;
-            headerTarget.appendChild(avatar);
-        }
-        if (special && normalized.authorName) {
-            const author = document.createElement('span');
-            author.className = 'liveflow-danmaku-author';
-            author.textContent = normalized.authorName;
-            headerTarget.appendChild(author);
-        }
-        if (special && normalized.purchaseAmountText) {
-            const amount = document.createElement('span');
-            amount.className = 'liveflow-danmaku-amount';
-            amount.textContent = normalized.purchaseAmountText;
-            if (normalized.colors.moneyChipBackgroundColor) amount.style.backgroundColor = normalized.colors.moneyChipBackgroundColor;
-            headerTarget.appendChild(amount);
-        }
-        if (normalized.messageType === 'superSticker' && normalized.sticker?.url) {
-            const sticker = document.createElement('img');
-            sticker.className = 'liveflow-danmaku-sticker';
-            sticker.src = normalized.sticker.url;
-            sticker.alt = normalized.sticker.alt;
-            sticker.width = 32;
-            sticker.height = 32;
-            bodyTarget.appendChild(sticker);
-        }
-        const content = document.createElement('span');
-        content.className = 'liveflow-danmaku-message';
-        for (const run of overlayCore.getRenderableMessageRuns(normalized, settingsSnapshot)) {
-            if (run.type === 'text') content.appendChild(document.createTextNode(run.text));
-            if (run.type === 'image') {
-                const image = document.createElement('img');
-                image.className = 'liveflow-danmaku-emoji';
-                image.src = run.url;
-                image.alt = run.alt;
-                image.width = 29;
-                image.height = 29;
-                content.appendChild(image);
-            }
-        }
-        if (content.childNodes.length > 0) bodyTarget.appendChild(content);
-        return node;
-    }
+    function createDanmakuNode(...args) { return renderer.createDanmakuNode(...args); }
 
-    function applySpecialFit(node, surfaceWidth) {
-        if (!node?.classList?.contains('liveflow-danmaku-special')) return { result: 'FIT' };
-        const header = node.querySelector('.liveflow-danmaku-special-header');
-        const body = node.querySelector('.liveflow-danmaku-special-body');
-        const message = node.querySelector('.liveflow-danmaku-message');
-        if (!header || !body || !message || !Number.isFinite(surfaceWidth) || surfaceWidth <= 0) return null;
-        const maximumWidth = Math.min(surfaceWidth * phase5Tuning.specialMaximumWidthFraction, phase5Tuning.specialMaximumWidthPx);
-        node.style.maxWidth = 'none';
-        message.style.fontSize = '';
-        const baseBodyFontSize = Number.parseFloat(window.getComputedStyle(message).fontSize);
-        const fit = schedulerFoundations.computeSpecialSingleLineFit({
-            headerNaturalWidth: header.scrollWidth,
-            bodyNaturalWidth: body.scrollWidth,
-            maximumWidth,
-            baseBodyFontSize,
-            minimumBodyFontSize: phase5Tuning.specialMinimumBodyFontSize
-        });
-        if (!fit || fit.result === 'UNREPRESENTABLE_SPECIAL') return fit;
-        node.style.maxWidth = `${maximumWidth}px`;
-        if (fit.result === 'SCALED') message.style.fontSize = `${fit.bodyFontSize}px`;
-        return fit;
-    }
+    function applySpecialFit(...args) { return renderer.applySpecialFit(...args); }
 
-    function getCandidateProof(entry, geometryState, densityPolicy) {
-        const media = getCurrentMainMedia();
-        if (!media || !overlayCore.isMainContentPlaybackEligible(media.player, media.video)) return { blockedReason: 'OTHER' };
-        const normalized = overlayCore.normalizeDanmakuMessage(entry.payload.message);
-        if (!normalized) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
-        entry.payload.settingsSnapshot = runtimeSettings;
-        const playerRect = media.player.getBoundingClientRect();
-        const videoRect = media.video.getBoundingClientRect();
-        const surface = overlayCore.calculateVideoSurfaceRect(playerRect, videoRect);
-        if (!surface) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
-        if (!attachOverlay(media.player) || !overlaySurface) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
-        if (!applyOverlaySurfaceRect(surface)) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
-        const surfaceBounds = overlaySurface.getBoundingClientRect();
-        const probe = createDanmakuNode(normalized, entry.payload.settingsSnapshot);
-        overlaySurface.appendChild(probe);
-        const specialFit = applySpecialFit(probe, surface.width);
-        if (specialFit?.result === 'UNREPRESENTABLE_SPECIAL') {
-            probe.remove();
-            return { unrepresentableSpecial: true };
-        }
-        if (!specialFit) {
-            probe.remove();
-            return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
-        }
-        const measured = probe.getBoundingClientRect();
-        probe.remove();
-        const metrics = overlayCore.createRenderedTextMetrics(normalized.text, measured.width);
-        const width = metrics?.renderedWidth;
-        const height = measured.height;
-        if (![width, height].every(Number.isFinite) || width <= 0 || height <= 0) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
-        const laneCount = overlayCore.calculateLaneCount(surface.height, phase5Tuning.lineHeight, phase5Tuning.laneGap);
-        const playbackRate = currentChatMode === 'replay' ? media.video.playbackRate : 1;
-        const baseDuration = overlayCore.calculateCompensatedDanmakuDuration(surface.width, width);
-        const factor = currentChatMode === 'replay' ? overlayCore.calculateReplayPlaybackRateFactor(playbackRate) : 1;
-        const baseVelocity = overlayCore.calculateDanmakuSpeed({
-            overlayWidth: surface.width,
-            commentWidth: width,
-            targetDurationMs: baseDuration && factor ? baseDuration * factor : null,
-            minSpeed: phase5Tuning.minimumSpeed * playbackRate,
-            maxSpeed: phase5Tuning.maximumSpeed * playbackRate
-        });
-        const velocity = window.LiveFlowPhase5Tuning.applyLengthAwareVelocity(baseVelocity, width, surface.width,
-            phase5Tuning.lengthVelocity, phase5Tuning.maximumSpeed * playbackRate);
-        if (!Number.isFinite(velocity)) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
-        const now = performance.now();
-        const activeComments = snapshotActiveGeometry(surfaceBounds);
-        if (!activeComments) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
-        const captionsEnabled = isCaptionTrackEnabled(media.player);
-        const reservedBottomLaneStart = captionsEnabled ? Math.max(0, laneCount - 2) : laneCount;
-        const lanePitch = phase5Tuning.lineHeight + phase5Tuning.laneGap;
-        const hardExclusions = geometryState.exclusionRegions.slice();
-        if (reservedBottomLaneStart < laneCount) hardExclusions.push({
-            x: surfaceBounds.left,
-            y: surfaceBounds.top + reservedBottomLaneStart * lanePitch,
-            width: surfaceBounds.width,
-            height: surfaceBounds.bottom - (surfaceBounds.top + reservedBottomLaneStart * lanePitch)
-        });
-        const special = normalized.messageType === 'superChat' || normalized.messageType === 'superSticker';
-        const generated = geometryCore.generateDensityLaneCandidates({
-            videoRect: { x: surfaceBounds.left, y: surfaceBounds.top, width: surfaceBounds.width, height: surfaceBounds.height },
-            renderedWidth: width,
-            renderedHeight: height,
-            actualVelocity: velocity,
-            footprint: entry.footprint,
-            lineHeight: phase5Tuning.lineHeight,
-            laneGap: phase5Tuning.laneGap,
-            densityPolicy,
-            laneBandFractions: phase5Tuning.laneBandFractions,
-            interleavedAnchorStride: phase5Tuning.interleavedAnchorStride,
-            exclusionRegions: hardExclusions,
-            special
-        });
-        if (!generated) return { blockedReason: 'CANDIDATE_GEOMETRY_INVALID' };
-        if (generated.candidates.length === 0) return { blockedReason: hardExclusions.length ? 'SUBTITLE_EXCLUSION' : 'NO_USABLE_LANE' };
-        const decorate = (candidates) => candidates.map((candidate) => Object.freeze({ ...candidate, specialFit,
-            rectangle: Object.freeze({ ...candidate.rectangle, snapshotAt: now / 1000, occlusionHistoryKnown: true }),
-            snapshotAtMs: now, captionsEnabled, surfaceBounds: Object.freeze({ left: surfaceBounds.left, top: surfaceBounds.top,
-                width: surfaceBounds.width, height: surfaceBounds.height }),
-            hardExclusions: Object.freeze(hardExclusions) }));
-        const primaryCandidates = decorate(generated.baseCandidates);
-        const secondaryCandidates = decorate(generated.interleavedCandidates);
-        const expansionCandidates = decorate(generated.expansionCandidates);
-        const ranked = window.LiveFlowPhase5Tuning.rankDensityRescuePlacements(
-            primaryCandidates, secondaryCandidates, expansionCandidates, activeComments, entry.id, densityPolicy.density,
-            false
-        );
-        const selection = window.LiveFlowOpportunityAwareDensity.select({ candidates: ranked, active: activeComments, density: densityPolicy.density, config: phase5Tuning });
-        return { candidates: selection.candidates, activeComments };
-    }
+    function getCandidateProof(...args) { return renderer.getCandidateProof(...args); }
 
     function ensurePhase3Runtime() {
         if (phase3Runtime) return phase3Runtime;
@@ -1309,7 +2234,7 @@
             readGeometry: readSubtitleGeometry
         });
         subtitleGeometryAdapter.refresh();
-        phase3Runtime = schedulerRuntimeCore.createSchedulerRuntime({
+        const runtimeOptions = {
             clock: () => performance.now(),
             scheduleOneShot: (callback, delay) => window.setTimeout(callback, Math.max(0, Math.ceil(delay))),
             cancelOneShot: (timer) => window.clearTimeout(timer),
@@ -1321,7 +2246,9 @@
             },
             geometryAdapter: subtitleGeometryAdapter,
             candidateProof: getCandidateProof,
-            launch: (entry, proof) => renderDanmaku(entry.message, entry.generation, entry.video, proof, entry.settingsSnapshot).status === 'rendered',
+            launch: (entry, proof) => privateBridge
+                ? privateBridge.launch(entry, proof, renderDanmaku)
+                : renderDanmaku(entry.message, entry.generation, entry.video, proof, entry.settingsSnapshot).status === 'rendered',
             observe: observeReplayScheduler,
             config: {
                 maxPendingAge: overlayCore.DANMAKU_TARGET_DURATION_MS,
@@ -1349,308 +2276,24 @@
                 collisionAllowances: phase5Tuning.collisionAllowances,
                 normalOverlapPolicy: phase5Tuning.normalOverlapPolicy
             }
-        });
+        };
+        phase3Runtime = privateBridge ? privateBridge.createRuntime(runtimeOptions)
+            : schedulerRuntimeCore.createSchedulerRuntime(runtimeOptions);
         phase3RuntimeVideo = getCurrentMainMedia()?.video || null;
         return phase3Runtime;
     }
 
-    function currentSourceActivityBinding() {
-        if (!currentPageKey || !['live', 'replay'].includes(currentChatMode) ||
-            !Number.isSafeInteger(currentPageLifecycleGeneration) || currentPageLifecycleGeneration < 0) return null;
-        return Object.freeze({
-            target: currentPageKey,
-            timeline: `${currentChatMode}:${currentPageRevision}`,
-            generation: currentPageLifecycleGeneration
-        });
-    }
+    function currentSourceActivityBinding() { return contentHandoff.currentSourceActivityBinding(); }
 
-    function observeCurrentWindowSourceActivity(runtime, messages, media) {
-        const binding = currentSourceActivityBinding();
-        const playerTimeMsec = Number.isFinite(media?.video?.currentTime) ? media.video.currentTime * 1000 : null;
-        if (!runtime || !binding || !Number.isFinite(playerTimeMsec) || !Array.isArray(messages)) return null;
-        const windowEndMs = playerTimeMsec + 250;
-        const windowStartMs = Math.max(0, windowEndMs - PHASE3_UNTUNED_RUNTIME.sourceActivityWindowMsec);
-        const facts = messages.map((message) => Object.freeze({
-            mediaTimeMs: currentChatMode === 'replay' && Number.isFinite(message?.replayOffsetMsec)
-                ? message.replayOffsetMsec : playerTimeMsec,
-            displayable: true,
-            temporalClass: 'CURRENT_WINDOW'
-        }));
-        return runtime.observeSourceActivity?.({ eventBinding: binding, mediaTimeMs: playerTimeMsec,
-            windowStartMs, windowEndMs, facts }) || null;
-    }
 
-    function renderDanmaku(message, scheduledGeneration = rendererGeneration, scheduledVideo = null, launchProof = null,
-        settingsSnapshot = runtimeSettings) {
-        if (!isEffectiveDisplayActive()) return { status: 'drop' };
-        const media = getCurrentMainMedia();
-        if (!media || !overlayCore?.isRendererTargetCurrent?.({
-            scheduledGeneration,
-            currentGeneration: rendererGeneration,
-            scheduledVideo: scheduledVideo || media.video,
-            currentVideo: media.video,
-            currentPlayerOwnsVideo: true
-        })) return { status: 'drop' };
-        const { player, video } = media;
-        if (!overlayCore.isMainContentPlaybackEligible(player, video)) return { status: 'drop' };
-        if (!attachOverlay(player) || !overlayRoot || !overlaySurface) return { status: 'drop' };
-        const normalized = overlayCore.normalizeDanmakuMessage(message);
-        if (!normalized) return { status: 'drop' };
 
-        const surfaceRect = overlayCore.calculateVideoSurfaceRect(player.getBoundingClientRect(), video.getBoundingClientRect());
-        if (!surfaceRect) return { status: 'drop' };
-        if (!applyOverlaySurfaceRect(surfaceRect)) return { status: 'drop' };
+    function renderDanmaku(...args) { return renderer.renderDanmaku(...args); }
 
-        const laneCount = overlayCore.calculateLaneCount(surfaceRect.height, phase5Tuning.lineHeight, phase5Tuning.laneGap);
-        if (laneCount <= 0) return { status: 'drop' };
-        const anchorCount = Math.max(1, laneCount * 2 - 1);
-        if (laneStates.length !== anchorCount) {
-            laneStates = Array.from({ length: anchorCount }, (_, index) => laneStates[index] || null);
-        }
+    function scheduleDanmakuBatch(...args) { return contentHandoff.scheduleDanmakuBatch(...args); }
 
-        const now = performance.now();
-        if (activeDanmaku.size >= overlayCore.DANMAKU_MAX_ACTIVE_COMMENTS) {
-            const resumeAtMs = laneStates.reduce((earliest, lane) => {
-                if (!Number.isFinite(lane?.endTimeMs) || lane.endTimeMs <= now) return earliest;
-                return earliest === null || lane.endTimeMs < earliest ? lane.endTimeMs : earliest;
-            }, null);
-            return { status: resumeAtMs === null ? 'drop' : 'wait', resumeAtMs };
-        }
 
-        const node = createDanmakuNode(normalized, settingsSnapshot);
-        const special = normalized.messageType === 'superChat' || normalized.messageType === 'superSticker';
-        overlaySurface.appendChild(node);
-        const specialFit = applySpecialFit(node, surfaceRect.width);
-        if (!specialFit || specialFit.result === 'UNREPRESENTABLE_SPECIAL') {
-            node.remove();
-            return { status: 'drop' };
-        }
-        const renderedRect = node.getBoundingClientRect();
-        const metrics = overlayCore.createRenderedTextMetrics(normalized.text, renderedRect.width);
-        const commentWidth = metrics?.renderedWidth;
-        const baseDurationMs = overlayCore.calculateCompensatedDanmakuDuration(surfaceRect.width, commentWidth);
-        const playbackRate = currentChatMode === 'replay' ? video.playbackRate : 1;
-        const replayFactor = currentChatMode === 'replay' ? overlayCore.calculateReplayPlaybackRateFactor(playbackRate) : 1;
-        const targetDurationMs = baseDurationMs && replayFactor ? baseDurationMs * replayFactor : null;
-        const baseSpeed = overlayCore.calculateDanmakuSpeed({
-            overlayWidth: surfaceRect.width,
-            commentWidth,
-            targetDurationMs,
-            minSpeed: phase5Tuning.minimumSpeed * playbackRate,
-            maxSpeed: phase5Tuning.maximumSpeed * playbackRate
-        });
-        const speed = window.LiveFlowPhase5Tuning.applyLengthAwareVelocity(baseSpeed, commentWidth, surfaceRect.width,
-            phase5Tuning.lengthVelocity, phase5Tuning.maximumSpeed * playbackRate);
-        const commitAt = performance.now();
-        const currentBounds = overlaySurface.getBoundingClientRect();
-        const commitRectangle = { ...launchProof?.rectangle, snapshotAt: commitAt / 1000, occlusionHistoryKnown: true };
-        const refreshedGeometry = subtitleGeometryAdapter?.refresh();
-        const activeGeometry = snapshotActiveGeometry(currentBounds);
-        const allowanceClass = window.LiveFlowSchedulerFoundations.getDensityVisualPolicy(launchProof?.density)?.collisionAllowanceClass;
-        const allowance = phase5Tuning.collisionAllowances[allowanceClass];
-        if (!launchProof?.rectangle || !launchProof.surfaceBounds || !allowance || !activeGeometry ||
-            !Number.isFinite(launchProof.snapshotAtMs) || now < launchProof.snapshotAtMs ||
-            isCaptionTrackEnabled(player) !== launchProof.captionsEnabled || refreshedGeometry?.geometry?.state === 'UNKNOWN' ||
-            refreshedGeometry?.revision !== launchProof.geometryRevision ||
-            ['left', 'top', 'width', 'height'].some(key => currentBounds[key] !== launchProof.surfaceBounds[key]) ||
-            commentWidth !== launchProof.rectangle.width || renderedRect.height !== launchProof.rectangle.height ||
-            speed !== launchProof.rectangle.velocity ||
-            !window.LiveFlowSchedulerFoundations.isOutsideHardExclusions(
-                { ...launchProof.rectangle, ...launchProof.clearanceRectangle }, launchProof.hardExclusions) ||
-            !(phase5Tuning.normalOverlapPolicy
-                ? window.LiveFlowNormalOverlapPolicy.prove(commitRectangle, activeGeometry, allowance, phase5Tuning.normalOverlapPolicy, ['DENSE', 'MAX_READABLE'].includes(launchProof.density))
-                : window.LiveFlowSchedulerFoundations.proveBoundedCollisionSafe(launchProof.rectangle, activeGeometry, allowance)).safe) {
-            node.remove();
-            return { status: 'drop' };
-        }
-        const laneSpan = 1;
-        const anchorIndex = Number.isInteger(launchProof?.anchorIndex) && launchProof.anchorIndex >= 0 && launchProof.anchorIndex < anchorCount ? launchProof.anchorIndex : -1;
-        if (anchorIndex < 0 || !Number.isFinite(launchProof?.lane)) {
-            node.remove();
-            return { status: 'drop' };
-        }
-        const motion = overlayCore.calculateDanmakuMotion({
-            overlayWidth: surfaceRect.width,
-            commentWidth,
-            commentHeight: renderedRect.height,
-            speed,
-            startTimeMs: now
-        });
-        if (!motion || typeof node.animate !== 'function') {
-            node.remove();
-            return { status: 'drop' };
-        }
 
-        const token = Symbol('danmaku');
-        const reservation = {
-            token,
-            startTimeMs: now,
-            startX: motion.startX,
-            commentWidth,
-            commentHeight: renderedRect.height,
-            speed,
-            endTimeMs: now + motion.durationMs
-        };
-        if (!overlayCore.reserveLaneSpan(laneStates, anchorIndex, laneSpan, reservation)) {
-            node.remove();
-            return { status: 'drop' };
-        }
-        node.style.top = `${launchProof.lane * (phase5Tuning.lineHeight + phase5Tuning.laneGap)}px`;
-        node.style.visibility = 'visible';
-        const animation = node.animate([
-            { transform: `translateX(${motion.startX}px)` },
-            { transform: `translateX(${motion.endX}px)` }
-        ], {
-            duration: motion.durationMs,
-            easing: 'linear',
-            fill: 'forwards'
-        });
-        const episodes = phase5Tuning.normalOverlapPolicy
-            ? window.LiveFlowNormalOverlapPolicy.recordEpisodes(commitRectangle, activeGeometry, commitAt / 1000) : null;
-        if (episodes) {
-            let index = 1;
-            for (const record of activeDanmaku.values()) {
-                const subject = activeGeometry[index - 1];
-                record.occlusionHistoryKnown = window.LiveFlowNormalOverlapPolicy.historyKnown(subject,
-                    activeGeometry.filter(r => r !== subject));
-                record.occlusionEpisodes = episodes[index++];
-            }
-        }
-        activeDanmaku.set(token, {
-            occlusionEpisodes: episodes?.[0], occlusionHistoryKnown: Boolean(episodes),
-            animation,
-            node,
-            visualFootprint: Object.freeze({ width: commentWidth, height: renderedRect.height, anchorLane: launchProof.lane, logicalLaneSpan: 1 }),
-            trajectory: Object.freeze({ startTimeMs: now, startX: currentBounds.right,
-                y: currentBounds.top + launchProof.lane * (phase5Tuning.lineHeight + phase5Tuning.laneGap),
-                width: commentWidth, height: renderedRect.height, velocity: speed, anchorIndex,
-                semanticClass: special ? 'SPECIAL' : 'NORMAL' })
-        });
-        if (currentChatMode === 'replay') {
-            replayDiagnosticDisplayed += 1;
-            publishReplaySchedulerDiagnostic();
-        }
-        animation.finished.then(() => {
-            activeDanmaku.delete(token);
-            overlayCore.releaseLaneReservation(laneStates, token);
-            node.remove();
-        }).catch(() => {
-            activeDanmaku.delete(token);
-            overlayCore.releaseLaneReservation(laneStates, token);
-            node.remove();
-        });
-        return { status: 'rendered' };
-    }
 
-    function scheduleDanmakuBatch(messages, pendingOwner = null) {
-        const inputCount = Array.isArray(messages) ? messages.length : 0;
-        if (!isEffectiveDisplayActive()) {
-            observeLivePresentationBatch({ input: inputCount, lifecycleSuppressed: inputCount, suppressedOther: inputCount });
-            if (currentChatMode === 'replay') publishReplayBatchAccounting({
-                inputCount, lifecycleDiscarded: inputCount, lifecycleDiscardedDisplayDisabled: inputCount
-            });
-            return;
-        }
-        const media = getCurrentMainMedia();
-        if (!media || !overlayCore?.isMainContentPlaybackEligible?.(media.player, media.video)) {
-            phase3Runtime?.clear();
-            observeLivePresentationBatch({ input: inputCount, lifecycleSuppressed: inputCount,
-                suppressedPaused: media?.video?.paused === true ? inputCount : 0,
-                suppressedOther: media?.video?.paused === true ? 0 : inputCount });
-            if (currentChatMode === 'replay') {
-                const reasonField = !media ? 'lifecycleDiscardedMediaMissing'
-                    : media.player?.classList?.contains?.('ad-showing') === true ? 'lifecycleDiscardedAdShowing'
-                        : media.player?.classList?.contains?.('ad-interrupting') === true ? 'lifecycleDiscardedAdInterrupting'
-                            : media.video?.ended === true ? 'lifecycleDiscardedMediaEnded'
-                                : !Number.isFinite(media.video?.readyState) || media.video.readyState < 2
-                                    ? 'lifecycleDiscardedMediaNotReady' : media.video?.paused === true
-                                        ? 'lifecycleDiscardedMediaPaused' : 'lifecycleDiscardedMediaMissing';
-                publishReplayBatchAccounting({ inputCount, lifecycleDiscarded: inputCount, [reasonField]: inputCount });
-            }
-            return;
-        }
-        if (currentChatMode === 'live' && livePresentationResumeGateActive) {
-            const proximity = overlayCore?.classifyLiveEdgeProximity?.({
-                currentTime: media.video.currentTime,
-                seekable: snapshotTimeRanges(media.video.seekable),
-                buffered: snapshotTimeRanges(media.video.buffered)
-            }) || 'UNKNOWN';
-            const gate = overlayCore?.reduceLivePresentationResumeGate?.(true, 'BATCH', proximity) ||
-                Object.freeze({ active: true, allowLaunch: false, reason: 'UNKNOWN' });
-            livePresentationResumeGateActive = gate.active;
-            if (!gate.allowLaunch) {
-                phase3Runtime?.clear();
-                observeLivePresentationBatch({ input: inputCount, lifecycleSuppressed: inputCount,
-                    suppressedBehindLive: gate.reason === 'BEHIND_LIVE' ? inputCount : 0,
-                    suppressedUnknown: gate.reason === 'UNKNOWN' ? inputCount : 0 });
-                return;
-            }
-        }
-        if (phase3Runtime && phase3RuntimeVideo !== media.video) cleanupOverlay();
-        const runtime = ensurePhase3Runtime();
-        if (!runtime) {
-            observeLivePresentationBatch({ input: inputCount, enqueueRejected: inputCount });
-            if (currentChatMode === 'replay') publishReplayBatchAccounting({ inputCount, enqueueRejected: inputCount });
-            return;
-        }
-        ensureSubtitleGeometryObservers(media.player);
-        ensurePlaybackContextObserver(media.player);
-        const scheduledGeneration = rendererGeneration;
-        const scheduledVideo = media.video;
-        const launchSettingsSnapshot = runtimeSettings;
-        const visibleMessages = Array.isArray(messages)
-            ? messages.filter((message) => overlayCore.isMessageVisibleForSettings(message, launchSettingsSnapshot))
-            : [];
-        observeCurrentWindowSourceActivity(runtime, visibleMessages, media);
-        let enqueuedCount = 0;
-        replayDiagnosticBatchInProgress = true;
-        try { visibleMessages.forEach((message, index) => {
-            if (runtime.enqueue({
-            message,
-            pendingOwner,
-            generation: scheduledGeneration,
-            pageLifecycleGeneration: currentPageLifecycleGeneration,
-            video: scheduledVideo,
-            settingsSnapshot: launchSettingsSnapshot
-        }, {
-            id: message.id || `${scheduledGeneration}:${performance.now()}:${index}`,
-            enqueuedAt: performance.now(),
-            rendererType: message.messageType === 'superChat'
-                ? 'liveChatPaidMessageRenderer'
-                : message.messageType === 'superSticker' ? 'liveChatPaidStickerRenderer' : 'liveChatTextMessageRenderer',
-            footprint: message.messageType === 'superChat' || message.messageType === 'superSticker'
-                ? { width: 520, height: 68, kind: 'SPECIAL' }
-                : { width: 720, height: phase5Tuning.lineHeight, kind: 'NORMAL' }
-            })) enqueuedCount += 1;
-        }); } finally { replayDiagnosticBatchInProgress = false; }
-        if (currentChatMode === 'replay') {
-            publishReplayBatchAccounting({ inputCount, visibleCount: visibleMessages.length, enqueuedCount,
-                visibilityFiltered: inputCount - visibleMessages.length, enqueueRejected: visibleMessages.length - enqueuedCount });
-        }
-        observeLivePresentationBatch({ input: inputCount, enqueued: enqueuedCount,
-            visibilityFiltered: inputCount - visibleMessages.length,
-            enqueueRejected: visibleMessages.length - enqueuedCount });
-    }
-
-    function snapshotTimeRanges(ranges) {
-        if (!ranges || !Number.isInteger(ranges.length) || ranges.length < 0) return null;
-        const snapshot = [];
-        try {
-            for (let index = 0; index < ranges.length; index += 1) {
-                snapshot.push({ start: ranges.start(index), end: ranges.end(index) });
-            }
-        } catch {
-            return null;
-        }
-        return snapshot;
-    }
-
-    function publishReplayBatchAccounting(fields) {
-        for (const [key, value] of Object.entries(fields)) {
-            if (Number.isInteger(value) && value >= 0) replayDiagnosticBatch[key] = (replayDiagnosticBatch[key] || 0) + value;
-        }
-        publishReplaySchedulerDiagnostic();
-    }
 
     function handleInitialContinuation(event) {
         if (event.source !== window || event.origin !== window.location.origin) return;
@@ -1751,22 +2394,7 @@
         const readNumber = event.data.readNumber || 0;
         setReadIndicatorState('active');
         const messages = Array.isArray(event.data.messages) ? event.data.messages : [];
-        const messageIds = new Set(currentMessages.map((message) => message.id).filter(Boolean));
-        const newMessages = [];
-        let exactIdDedupedCount = 0;
-        messages.forEach((message) => {
-            if (message.id && messageIds.has(message.id)) { exactIdDedupedCount += 1; return; }
-            if (message.id) messageIds.add(message.id);
-            currentMessages.push(message);
-            newMessages.push(message);
-        });
-        if (currentMessages.length > MAX_MESSAGES) {
-            currentMessages.splice(0, currentMessages.length - MAX_MESSAGES);
-        }
-        const pendingOwner = window.LiveFlowPendingSelection.clonePendingOwner(event.data.pendingOwner);
-        rememberReplayPendingOwner(pendingOwner, event.data.pendingOwnerScope);
-        scheduleDanmakuBatch(newMessages, pendingOwner);
-        if (currentChatMode === 'replay' && exactIdDedupedCount > 0) publishReplayBatchAccounting({ exactIdDedupedCount });
+        contentHandoff.processLegacySuccess(messages, event.data.pendingOwner, event.data.pendingOwnerScope);
         logInfo(`READ #${readNumber} completed: HTTP ${event.data.status}`);
         logInfo(`READ #${readNumber} parsed messages: ${event.data.parsedMessageCount ?? messages.length}`);
         if (event.data.nextContinuationAvailable) logInfo(`READ #${readNumber} next continuation available`);
@@ -1794,6 +2422,12 @@
     }
 
     function handleNavigationStart() {
+        if (cutover) {
+            if (privateBridge.navigationChanged()) {
+                currentMessages = []; cleanupManagementBar(); cleanupOverlay();
+            }
+            return;
+        }
         logInfo(`Navigation invalidate: rendererGeneration=${rendererGeneration}, queue=${phase3Runtime?.status().pendingCount || 0}, active=${activeDanmaku.size}, timer=${phase3Runtime?.status().armed === true}`);
         pageGeneration += 1;
         acceptingReadResults = false;
@@ -1807,6 +2441,7 @@
     }
 
     function handlePageHide() {
+        if (cutover) privateBridge.retire();
         acceptingReadResults = false;
         clearNativeChatOpenAttempt();
         disconnectNativeChatObserver();
@@ -1815,6 +2450,11 @@
     }
 
     function handleVisibilityChange() {
+        if (cutover) {
+            privateBridge.synchronize();
+            if (document.hidden) { setReadIndicatorState('idle'); cleanupOverlay(); }
+            return;
+        }
         if (document.hidden) {
             acceptingReadResults = false;
             setReadIndicatorState('idle');
@@ -1873,6 +2513,7 @@
     }
 
     function handleGeometryChange() {
+        if (cutover && !privateBridge.geometryChanged()) return;
         subtitleGeometryAdapter?.markDirty(geometryCore.DIRTY_SIGNALS.VIDEO_GEOMETRY);
         if (geometryChangeQueued) return;
         geometryChangeQueued = true;
@@ -1884,6 +2525,7 @@
     }
 
     function handleReplayMediaContextChange(event) {
+        if (cutover && !privateBridge.mediaChanged()) return;
         const media = getCurrentMainMedia();
         if (!media || event.target !== media.video) return;
         if (currentChatMode === 'live' && ['pause', 'seeking'].includes(event.type)) {
@@ -1901,6 +2543,66 @@
         if (event.type === 'seeking') closeReplayDiagnosticScope();
     }
 
+    const renderer = createRenderer({
+        state: {
+            get overlayRoot() { return overlayRoot; }, set overlayRoot(value) { overlayRoot = value; },
+            get overlaySurface() { return overlaySurface; }, set overlaySurface(value) { overlaySurface = value; },
+            get laneStates() { return laneStates; }, set laneStates(value) { laneStates = value; },
+            get activeDanmaku() { return activeDanmaku; },
+            get rendererGeneration() { return rendererGeneration; }, set rendererGeneration(value) { rendererGeneration = value; },
+            get phase3Runtime() { return phase3Runtime; }, set phase3Runtime(value) { phase3Runtime = value; },
+            get phase3RuntimeVideo() { return phase3RuntimeVideo; }, set phase3RuntimeVideo(value) { phase3RuntimeVideo = value; },
+            get runtimeSettings() { return runtimeSettings; }, set runtimeSettings(value) { runtimeSettings = value; },
+            get currentChatMode() { return currentChatMode; }, set currentChatMode(value) { currentChatMode = value; },
+            get subtitleGeometryAdapter() { return subtitleGeometryAdapter; }, set subtitleGeometryAdapter(value) { subtitleGeometryAdapter = value; },
+            get replayDiagnosticDisplayed() { return replayDiagnosticDisplayed; }, set replayDiagnosticDisplayed(value) { replayDiagnosticDisplayed = value; }
+        },
+        document, window, performance, overlayCore, schedulerFoundations, geometryCore, phase5Tuning,
+        PHASE3_UNTUNED_RUNTIME, isEffectiveDisplayActive, getCurrentMainMedia,
+        ensureSubtitleGeometryObservers, disconnectSubtitleGeometryObservers,
+        logInfo, publishReplaySchedulerDiagnostic,
+        observer: privateBridge?.rendererObserver,
+        runtimeObserver: privateBridge?.observeDetached,
+        recognizeAttempt: privateBridge?.recognizeAttempt,
+        isProductCurrent: privateBridge?.privateEntry.isProductCurrent,
+        resolveProductLease: privateBridge?.privateEntry.resolveProductLease,
+        withPresentationCleanup: privateBridge?.privateEntry.withPresentationCleanup
+    });
+
+    const contentHandoff = createContentHandoff({
+        state: {
+            get currentMessages() { return currentMessages; }, set currentMessages(value) { currentMessages = value; },
+            get currentChatMode() { return currentChatMode; }, set currentChatMode(value) { currentChatMode = value; },
+            get currentPageKey() { return currentPageKey; }, set currentPageKey(value) { currentPageKey = value; },
+            get currentPageRevision() { return currentPageRevision; }, set currentPageRevision(value) { currentPageRevision = value; },
+            get currentPageLifecycleGeneration() { return currentPageLifecycleGeneration; }, set currentPageLifecycleGeneration(value) { currentPageLifecycleGeneration = value; },
+            get phase3Runtime() { return phase3Runtime; }, set phase3Runtime(value) { phase3Runtime = value; },
+            get phase3RuntimeVideo() { return phase3RuntimeVideo; }, set phase3RuntimeVideo(value) { phase3RuntimeVideo = value; },
+            get livePresentationResumeGateActive() { return livePresentationResumeGateActive; }, set livePresentationResumeGateActive(value) { livePresentationResumeGateActive = value; },
+            get rendererGeneration() { return rendererGeneration; }, set rendererGeneration(value) { rendererGeneration = value; },
+            get runtimeSettings() { return runtimeSettings; }, set runtimeSettings(value) { runtimeSettings = value; },
+            get replayDiagnosticBatchInProgress() { return replayDiagnosticBatchInProgress; }, set replayDiagnosticBatchInProgress(value) { replayDiagnosticBatchInProgress = value; },
+            get replayDiagnosticBatch() { return replayDiagnosticBatch; }, set replayDiagnosticBatch(value) { replayDiagnosticBatch = value; }
+        },
+        overlayCore, phase5Tuning, performance, PHASE3_UNTUNED_RUNTIME,
+        isEffectiveDisplayActive, getCurrentMainMedia, cleanupOverlay, ensurePhase3Runtime,
+        ensureSubtitleGeometryObservers, ensurePlaybackContextObserver,
+        observeLivePresentationBatch, publishReplaySchedulerDiagnostic, rememberReplayPendingOwner,
+        getPending: () => window.LiveFlowPendingSelection,
+        pending: cutover ? window.LiveFlowPendingSelection : undefined,
+        privateEntry: privateBridge?.privateEntry
+    });
+
+    if (privateBridge) privateBridge.bind({ renderer, content: contentHandoff, document, window, performance,
+        scheduler: schedulerRuntimeCore, enabled: () => userEnabled,
+        setBinding(mode) { currentChatMode = mode; currentPageRevision = 0; currentPageLifecycleGeneration = 0;
+            currentPageKey = `${window.location.origin}${window.location.pathname}${window.location.search}`; },
+        onBatch(messages, scope, handle, pendingOwner, productLease) {
+            if (handle && contentHandoff.registerBatch(handle)) contentHandoff.processRegisteredBatch(handle, productLease);
+            else contentHandoff.processLegacySuccess(messages, pendingOwner, scope, productLease);
+        }, setReadIndicatorState });
+
+    if (!cutover) {
     window.addEventListener('message', handleReplayDiagnosticScopeOpen);
     window.postMessage({ source: 'liveflow-content-script', type: 'LIVEFLOW_REPLAY_DIAGNOSTIC_SCOPE_HELLO' }, window.location.origin);
     window.addEventListener('message', handleInitialContinuation);
@@ -1908,6 +2610,7 @@
     window.addEventListener('message', handlePendingOnlyClear);
     window.addEventListener('message', handlePageLifecycleInvalidated);
     window.addEventListener('message', handleReadLifecycleDiagnostic);
+    }
     window.addEventListener('yt-navigate-start', handleNavigationStart);
     window.addEventListener('yt-navigate-finish', detectPage);
     window.addEventListener('yt-page-data-updated', handleNavigation);
@@ -1918,6 +2621,10 @@
     window.addEventListener('pause', handleReplayMediaContextChange, true);
     window.addEventListener('seeking', handleReplayMediaContextChange, true);
     window.addEventListener('ratechange', handleReplayMediaContextChange, true);
+    if (privateBridge) for (const signal of ['play','playing','seeked','loadedmetadata','loadeddata','canplay','timeupdate','load']) {
+        // Notifications only: actual native facts, never event payloads, authorize work.
+        window.addEventListener(signal, () => privateBridge.synchronize(), true);
+    }
     document.addEventListener('fullscreenchange', handleGeometryChange);
     window.visualViewport?.addEventListener('resize', handleGeometryChange);
     window.visualViewport?.addEventListener('scroll', handleGeometryChange);
@@ -1925,4 +2632,6 @@
     initializePersistentSettings().then(() => {
         if (isYouTubeWatchPage()) detectPage();
     });
+    }
+    startContent();
 })();

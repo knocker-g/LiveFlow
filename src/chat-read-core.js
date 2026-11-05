@@ -148,19 +148,51 @@
         return colors;
     }
 
-    function extractChatMessagesFromResponse(response) {
-        const actions = response?.continuationContents?.liveChatContinuation?.actions || [];
+    function parseChatAction(action) {
+        const item = action?.addChatItemAction?.item;
+        if (!item || typeof item !== 'object') return [];
+        if (item.liveChatTextMessageRenderer) return [ChatMessage.fromRenderer(item.liveChatTextMessageRenderer, 'text')];
+        // Membership milestone bodies share NORMAL text semantics; headers are metadata.
+        if (item.liveChatMembershipItemRenderer) return [ChatMessage.fromRenderer(item.liveChatMembershipItemRenderer, 'text')];
+        if (item.liveChatPaidMessageRenderer) return [ChatMessage.fromRenderer(item.liveChatPaidMessageRenderer, 'superChat')];
+        if (item.liveChatPaidStickerRenderer) return [ChatMessage.fromRenderer(item.liveChatPaidStickerRenderer, 'superSticker')];
+        return [];
+    }
 
-        return actions.flatMap((action) => {
-            const item = action?.addChatItemAction?.item;
-            if (!item || typeof item !== 'object') return [];
-            if (item.liveChatTextMessageRenderer) return [ChatMessage.fromRenderer(item.liveChatTextMessageRenderer, 'text')];
-            // Membership milestone bodies share NORMAL text semantics; headers are metadata.
-            if (item.liveChatMembershipItemRenderer) return [ChatMessage.fromRenderer(item.liveChatMembershipItemRenderer, 'text')];
-            if (item.liveChatPaidMessageRenderer) return [ChatMessage.fromRenderer(item.liveChatPaidMessageRenderer, 'superChat')];
-            if (item.liveChatPaidStickerRenderer) return [ChatMessage.fromRenderer(item.liveChatPaidStickerRenderer, 'superSticker')];
-            return [];
+    function extractChatMessages(response, trace) {
+        const source = response?.continuationContents?.liveChatContinuation?.actions;
+        const actions = source || [];
+        if (trace?.mode === 'live') {
+            if (!Array.isArray(source)) failTrace(trace, 'MISSING_ACTIONS');
+            else trace.outerActionCount = observeTraceLength(trace, actions);
+        }
+        let visited = 0;
+        const messages = actions.flatMap((action, index) => {
+            if (trace) {
+                incrementTrace(trace, 'visitedLeafActions'); visited++;
+                if (trace.mode === 'live') incrementTrace(trace, 'visitedOuterActions');
+                observeTraceIndex(trace, actions, index);
+            }
+            const slot = trace?.slots ? beginParserSlot(trace, index) : null;
+            const result = parseChatAction(action);
+            if (trace) {
+                incrementTrace(trace, 'completedLeafActions');
+                if (result.length) incrementTrace(trace, 'normalizedOutputs', result.length);
+                else incrementTrace(trace, 'noMessageActions');
+                if (result.length > 1) failTrace(trace, 'OUTPUT_ARITY');
+            }
+            if (slot) {
+                slot.state = result.length ? 'OUTPUT' : 'NO_OUTPUT';
+                slot.outputCount = result.length;
+            }
+            return result;
         });
+        if (trace && visited !== observeTraceLength(trace, actions)) failTrace(trace, 'NON_DENSE_ACTIONS');
+        return messages;
+    }
+
+    function extractChatMessagesFromResponse(response) {
+        return extractChatMessages(response, null);
     }
 
     function extractContinuationFromResponse(response) {
@@ -270,7 +302,8 @@
         const future = conserveReplayBoundary(count('futureClassified'), count('futurePromoted'),
             count('capacityDropped'), count('futureQueued'));
         const bridge = conserveReplayBoundary(count('dueBridged'), count('enqueued'),
-            count('bridgeDeduped') + count('bridgeFiltered') + count('lifecycleDiscarded') + count('generationDiscarded'),
+            count('bridgeDeduped') + count('bridgeFiltered') + count('lifecycleDiscarded') + count('generationDiscarded') +
+                count('bridgeAdmissionRejected'),
             count('bridgeRetained'));
         const pending = conserveReplayBoundary(count('enqueued'), count('schedulerEligible'),
             count('pendingExplicitDrop'), count('pendingRetained'));
@@ -737,16 +770,123 @@
         return Number.isSafeInteger(number) && number >= 0 ? number : null;
     }
 
-    function extractReplayChatMessagesFromResponse(response) {
+    function extractReplayMessages(response, trace) {
         const actions = response?.continuationContents?.liveChatContinuation?.actions;
+        if (trace) {
+            if (!Array.isArray(actions)) failTrace(trace, 'MISSING_ACTIONS');
+            else trace.outerActionCount = observeTraceLength(trace, actions);
+        }
         if (!Array.isArray(actions)) return [];
-        return actions.flatMap((entry) => {
+        const messages = actions.flatMap((entry, index) => {
+            if (trace) {
+                incrementTrace(trace, 'visitedOuterActions');
+                observeTraceIndex(trace, actions, index);
+                if (trace.slots) trace.currentOuter = index;
+            }
             const replay = entry?.replayChatItemAction;
             const offsetMsec = parseReplayOffsetMsec(replay?.videoOffsetTimeMsec);
-            if (offsetMsec === null || !Array.isArray(replay.actions)) return [];
+            if (offsetMsec === null || !Array.isArray(replay.actions)) {
+                if (trace) incrementTrace(trace, 'rejectedEnvelopes');
+                return [];
+            }
+            if (trace) incrementTrace(trace, 'expandedEnvelopes');
             const nested = { continuationContents: { liveChatContinuation: { actions: replay.actions } } };
-            return extractChatMessagesFromResponse(nested).map((message) => ({ ...message, replayOffsetMsec: offsetMsec }));
+            return extractChatMessages(nested, trace).map((message) => ({ ...message, replayOffsetMsec: offsetMsec }));
         });
+        if (trace && (trace.visitedOuterActions !== trace.outerActionCount || observeTraceLength(trace, messages) !== trace.normalizedOutputs)) {
+            failTrace(trace, 'INCOMPLETE_TRAVERSAL');
+        }
+        return messages;
+    }
+
+    function extractReplayChatMessagesFromResponse(response) {
+        return extractReplayMessages(response, null);
+    }
+
+    // CommonJS-only private observation. No raw data or trace setters are exported
+    // to the page API, and ordinary parser callers install no observation.
+    const replayParserTraces = new WeakMap();
+    function failTrace(trace, reason) { if (!trace.reason) trace.reason = reason; }
+    function observeTraceLength(trace, actions) {
+        try {
+            const length = actions.length;
+            if (Number.isSafeInteger(length) && length >= 0) return length;
+        } catch (_) { /* Observation cannot replace a parser return or exception. */ }
+        failTrace(trace, 'ACTION_METADATA_UNKNOWN'); return null;
+    }
+    function observeTraceIndex(trace, actions, index) {
+        try { if (!Object.hasOwn(actions, index)) failTrace(trace, 'NON_DENSE_ACTIONS'); }
+        catch (_) { failTrace(trace, 'ACTION_METADATA_UNKNOWN'); }
+    }
+    function incrementTrace(trace, key, amount = 1) {
+        if (!Number.isSafeInteger(trace[key]) || !Number.isSafeInteger(amount) || amount < 0 ||
+            !Number.isSafeInteger(trace[key] + amount)) failTrace(trace, 'COUNTER_OVERFLOW');
+        else trace[key] += amount;
+    }
+    function beginParserSlot(trace, leafIndex) {
+        if (trace.slots.length >= 1024) { failTrace(trace, 'TRACE_CAPACITY'); return null; }
+        const slot = { outerIndex: trace.mode === 'live' ? leafIndex : trace.currentOuter,
+            leafIndex, outputStart: trace.normalizedOutputs, outputCount: null, state: 'UNKNOWN' };
+        trace.slots.push(slot);
+        return slot;
+    }
+    function createReplayParserTrace(options) {
+        const trace = { state: 'READY', reason: null, outerActionCount: null, visitedOuterActions: 0,
+            expandedEnvelopes: 0, rejectedEnvelopes: 0, visitedLeafActions: 0,
+            completedLeafActions: 0, normalizedOutputs: 0, noMessageActions: 0 };
+        if (options?.slots === true) { trace.mode = 'replay'; trace.slots = []; trace.currentOuter = null; }
+        const handle = Object.freeze({ snapshot: () => Object.freeze({ ...trace,
+            ...(trace.slots ? { slots: Object.freeze(trace.slots.map(slot => Object.freeze({ ...slot }))) } : {}),
+            unknownTail: trace.state !== 'COMPLETE', projection: trace.state === 'COMPLETE'
+                ? Object.freeze({ receivedActions: trace.visitedLeafActions, parsed: trace.normalizedOutputs,
+                    parseFailed: trace.noMessageActions, parserRetained: 0 }) : null }) });
+        replayParserTraces.set(handle, trace);
+        return handle;
+    }
+    function createLiveParserTrace() {
+        const handle = createReplayParserTrace({ slots: true });
+        replayParserTraces.get(handle).mode = 'live';
+        return handle;
+    }
+    function extractLiveChatMessagesWithTrace(response, handle) {
+        const trace = replayParserTraces.get(handle);
+        if (!trace || trace.mode !== 'live') throw new TypeError('INVALID_PARSER_TRACE');
+        if (trace.state !== 'READY') {
+            failTrace(trace, 'TRACE_REUSED'); trace.state = 'UNKNOWN';
+            throw new TypeError('PARSER_TRACE_REUSED');
+        }
+        trace.state = 'RUNNING';
+        try {
+            const messages = extractChatMessages(response, trace);
+            if (trace.visitedLeafActions !== trace.completedLeafActions ||
+                trace.completedLeafActions !== trace.normalizedOutputs + trace.noMessageActions) failTrace(trace, 'INCOMPLETE_TRAVERSAL');
+            trace.state = trace.reason ? 'UNKNOWN' : 'COMPLETE';
+            return messages;
+        } catch (error) {
+            failTrace(trace, 'PARSER_THROWN'); trace.state = 'UNKNOWN'; throw error;
+        }
+    }
+    function extractReplayChatMessagesWithTrace(response, handle) {
+        const trace = replayParserTraces.get(handle);
+        if (!trace) throw new TypeError('INVALID_PARSER_TRACE');
+        if (trace.state !== 'READY') {
+            failTrace(trace, 'TRACE_REUSED'); trace.state = 'UNKNOWN';
+            throw new TypeError('PARSER_TRACE_REUSED');
+        }
+        trace.state = 'RUNNING';
+        try {
+            const messages = extractReplayMessages(response, trace);
+            if (trace.visitedLeafActions !== trace.completedLeafActions ||
+                trace.completedLeafActions !== trace.normalizedOutputs + trace.noMessageActions ||
+                trace.visitedOuterActions !== trace.expandedEnvelopes + trace.rejectedEnvelopes) {
+                failTrace(trace, 'INCOMPLETE_TRAVERSAL');
+            }
+            trace.state = trace.reason ? 'UNKNOWN' : 'COMPLETE';
+            return messages;
+        } catch (error) {
+            failTrace(trace, 'PARSER_THROWN'); trace.state = 'UNKNOWN';
+            throw error;
+        }
     }
 
     function extractReplayContinuationInfo(response) {
@@ -1546,37 +1686,91 @@
             effectiveDelayMs: Math.max(selection.info.timeoutMs, LIVEFLOW_MIN_READ_DELAY_MS) };
     }
 
-    function selectReplayDueMessages(messages, currentTimeSeconds, startTimeSeconds, toleranceMsec = 250) {
+    function selectReplayDueMessages(messages, currentTimeSeconds, startTimeSeconds, toleranceMsec = 250, trace = null) {
+        trace = temporalTraceStates.has(trace) ? trace : null;
         if (!Array.isArray(messages) || !Number.isFinite(currentTimeSeconds) || !Number.isFinite(startTimeSeconds)) return { due: [], pending: [] };
         const now = currentTimeSeconds * 1000;
         const start = startTimeSeconds * 1000;
         const due = [];
         const pending = [];
+        let slot = 0;
         for (const message of messages) {
+            const inputIndex = trace ? trace.unique[slot++] : null;
             const offset = message?.replayOffsetMsec;
-            if (!Number.isFinite(offset) || offset < start - toleranceMsec) continue;
-            if (offset <= now + toleranceMsec) due.push(message); else pending.push(message);
+            const finiteOffset = Number.isFinite(offset);
+            if (!finiteOffset || offset < start - toleranceMsec) {
+                if (trace) trace.mark(inputIndex, 'FILTERED', finiteOffset ? 'BEFORE_START' : 'INVALID');
+                continue;
+            }
+            if (offset <= now + toleranceMsec) {
+                due.push(message); if (trace) { trace.due.push(inputIndex); trace.mark(inputIndex, 'DUE'); }
+            } else {
+                pending.push(message); if (trace) trace.pending.push(inputIndex);
+            }
         }
         return { due, pending };
     }
 
-    function selectBoundedReplayDueMessages(messages, currentTimeSeconds, startTimeSeconds, maximumPending, toleranceMsec = 250) {
+    const temporalTraces = new WeakMap();
+    const temporalTraceStates = new WeakSet();
+    function createReplayTemporalTrace(options) {
+        const state = { state: 'READY', slots: [], unique: [], due: [], pending: [], retained: [], reason: 'NONE' };
+        if (options?.reasons === true) state.reasons = [];
+        state.mark = (index, outcome, reason = 'NONE') => {
+            if (index >= 1024 || !Number.isSafeInteger(index) || index < 0) {
+                state.state = 'UNKNOWN'; state.reason = 'TRACE_OVERFLOW'; return;
+            }
+            state.slots[index] = outcome;
+            if (state.reasons) state.reasons[index] = reason;
+        };
+        const handle = Object.freeze({ snapshot: () => Object.freeze({ state: state.state, reason: state.reason,
+            slots: Object.freeze(state.slots.slice()), due: Object.freeze(state.due.slice()),
+            pending: Object.freeze(state.retained.slice()),
+            ...(state.reasons ? { reasons: Object.freeze(state.reasons.slice()) } : {}) }) });
+        temporalTraces.set(handle, state); temporalTraceStates.add(state); return handle;
+    }
+    function selectReplayTemporalWithTrace(messages, currentTime, startTime, maximum, handle, tolerance = 250) {
+        const trace = temporalTraces.get(handle);
+        if (!trace || trace.state !== 'READY') throw new TypeError('INVALID_TEMPORAL_TRACE');
+        trace.state = 'RUNNING';
+        try {
+            const result = selectBoundedReplayDueMessages(messages, currentTime, startTime, maximum, tolerance, trace);
+            if (result && trace.state === 'RUNNING') trace.state = 'COMPLETE';
+            else if (!result) { trace.state = 'UNKNOWN'; trace.reason = 'INVALID_SELECTION'; }
+            return result;
+        } catch (error) { trace.state = 'UNKNOWN'; trace.reason = 'SELECTION_THROWN'; throw error; }
+    }
+    function selectBoundedReplayDueMessages(messages, currentTimeSeconds, startTimeSeconds, maximumPending, toleranceMsec = 250, trace = null) {
+        trace = temporalTraceStates.has(trace) ? trace : null;
         if (!Array.isArray(messages) || !Number.isFinite(currentTimeSeconds) || !Number.isFinite(startTimeSeconds) ||
             !Number.isInteger(maximumPending) || maximumPending < 0) return null;
         const seenIds = new Set();
         const deduplicatedItems = [];
-        const uniqueMessages = messages.filter((message) => {
+        const uniqueMessages = messages.filter((message, inputIndex) => {
+            if (trace && inputIndex >= 1024) { trace.state = 'UNKNOWN'; trace.reason = 'TRACE_OVERFLOW'; trace = null; }
             const id = typeof message?.id === 'string' && message.id.length > 0 ? message.id : null;
-            if (id === null) return true;
+            if (id === null) { if (trace) trace.unique.push(inputIndex); return true; }
             if (seenIds.has(id)) {
                 deduplicatedItems.push(message);
+                if (trace) trace.mark(inputIndex, 'DEDUPLICATED');
                 return false;
             }
             seenIds.add(id);
+            if (trace) trace.unique.push(inputIndex);
             return true;
         });
-        const selection = selectReplayDueMessages(uniqueMessages, currentTimeSeconds, startTimeSeconds, toleranceMsec);
-        const orderedPending = selection.pending.slice().sort((left, right) => left.replayOffsetMsec - right.replayOffsetMsec);
+        const selection = selectReplayDueMessages(uniqueMessages, currentTimeSeconds, startTimeSeconds, toleranceMsec, trace);
+        const orderedSlots = trace ? selection.pending.map((message, index) => ({ message, inputIndex: trace.pending[index] }))
+            : selection.pending.slice();
+        orderedSlots.sort((left, right) => {
+            const a = trace ? left.message : left, b = trace ? right.message : right;
+            return a.replayOffsetMsec - b.replayOffsetMsec;
+        });
+        const orderedPending = trace ? orderedSlots.map(item => item.message) : orderedSlots;
+        if (trace) orderedSlots.forEach((item, index) => {
+            trace.mark(item.inputIndex, index < maximumPending ? 'FUTURE' : 'CAPACITY_DROPPED');
+            if (index < maximumPending) trace.retained.push(item.inputIndex);
+        });
         const pending = orderedPending.slice(0, maximumPending);
         return {
             due: selection.due,
@@ -1719,7 +1913,7 @@
     };
 
     if (typeof module !== 'undefined' && module.exports) {
-        module.exports = api;
+        module.exports = { ...api, createReplayParserTrace, extractReplayChatMessagesWithTrace, createLiveParserTrace, extractLiveChatMessagesWithTrace, createReplayTemporalTrace, selectReplayTemporalWithTrace };
     }
     global.LiveFlowChatReadCore = api;
 })(typeof window !== 'undefined' ? window : globalThis);

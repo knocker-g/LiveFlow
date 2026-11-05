@@ -8,6 +8,35 @@
     const ReplayPhase = enumOf(['STOPPED', 'BOOTSTRAPPING', 'READING', 'BUFFER_PAUSED', 'REANCHORING', 'SUSPENDED']);
     const SuspendedReason = enumOf(['HIDDEN', 'AD', 'MEDIA_PAUSED']);
     const CapabilityState = enumOf(['SUPPORTED', 'UNSUPPORTED', 'UNKNOWN']);
+    const policyContexts = new WeakMap(), ownerPolicyContexts = new WeakMap();
+    function createOwnerPolicyContext({ owner, binding, validate } = {}) {
+        if (!owner || typeof owner !== 'object' || ownerPolicyContexts.has(owner) ||
+            !isAuthorityBinding(binding) || typeof validate !== 'function') return null;
+        const context = Object.freeze({});
+        policyContexts.set(context, { owner, binding: Object.freeze({ ...binding }), validate, active: true, checking: false });
+        ownerPolicyContexts.set(owner, context);
+        return context;
+    }
+    function invalidateOwnerPolicyContext(context) {
+        const record = policyContexts.get(context);
+        if (record) record.active = false;
+    }
+    function isOwnerPolicyContextCurrent(context) {
+        return policyContexts.get(context)?.active === true;
+    }
+    function policyAllows(context, path, binding, stage) {
+        if (context === null) return true; // Legacy handles cannot enter a policy-bound registry.
+        const record = policyContexts.get(context);
+        if (!record || !record.active || !authorityBindingsEqual(record.binding, binding)) return false;
+        if (record.checking) { record.active = false; return false; }
+        record.checking = true;
+        try {
+            const allowed = record.validate(path, stage) === true;
+            if (!allowed) record.active = false;
+            return allowed && record.active;
+        } catch (_) { record.active = false; return false; }
+        finally { record.checking = false; }
+    }
     const CapabilityName = enumOf([
         'replayMessages', 'bootstrapRead', 'sequentialRead', 'reanchorRead',
         'playerTiming', 'targetIdentity', 'mainContentOwnership'
@@ -100,17 +129,18 @@
         });
     }
 
-    function createReplayAuthority({ kind, opaqueToken, binding, provenance } = {}) {
+    function createReplayAuthority({ kind, opaqueToken, binding, provenance, policyContext = null } = {}) {
         if (!AUTHORITY_KINDS.has(kind) || typeof opaqueToken !== 'string' || opaqueToken.length === 0 ||
             !isAuthorityBinding(binding) || typeof provenance !== 'string' || provenance.length === 0) {
             return Object.freeze({ ok: false, authority: null, reason: 'AUTHORITY_INVALID' });
         }
+        if (!policyAllows(policyContext, kind, binding, 'CREATE')) return Object.freeze({ ok: false, authority: null, reason: 'POLICY_DENIED' });
         const authority = Object.freeze({
             diagnostic(currentBinding) { return authorityDiagnostic(authority, currentBinding); },
             toJSON() { return authorityDiagnostic(authority); }
         });
         authorityRecords.set(authority, {
-            kind, opaqueToken, binding: Object.freeze({ ...binding }), provenance, state: AuthorityState.OBSERVED_UNUSED
+            kind, opaqueToken, binding: Object.freeze({ ...binding }), provenance, state: AuthorityState.OBSERVED_UNUSED, policyContext
         });
         return Object.freeze({ ok: true, authority, reason: 'NONE' });
     }
@@ -122,6 +152,7 @@
         if (record.state !== AuthorityState.OBSERVED_UNUSED) {
             return Object.freeze({ ok: false, reason: record.state === AuthorityState.CONSUMED ? 'AUTHORITY_CONSUMED' : 'AUTHORITY_INVALID' });
         }
+        if (action === 'CONSUME' && !policyAllows(record.policyContext, record.kind, currentBinding, 'CONSUME')) return Object.freeze({ ok: false, reason: 'POLICY_DENIED' });
         if (action === 'CONSUME') record.state = AuthorityState.CONSUMED;
         else if (action === 'INVALIDATE') record.state = AuthorityState.INVALID;
         else return Object.freeze({ ok: false, reason: 'AUTHORITY_INVALID_TRANSITION' });
@@ -138,7 +169,8 @@
         return Object.freeze({ ok: true, reason: 'NONE', diagnostic: authorityDiagnostic(authority) });
     }
 
-    function createConsumedAuthorityRegistry() {
+    function createConsumedAuthorityRegistry(policyContext = null) {
+        if (policyContext !== null && !policyContexts.has(policyContext)) return null;
         const registry = Object.freeze({
             has(opaqueToken) {
                 const record = consumedRegistryRecords.get(registry);
@@ -149,7 +181,7 @@
                 return Object.freeze({ consumedCount: record?.tokens.size || 0 });
             }
         });
-        consumedRegistryRecords.set(registry, { tokens: new Set() });
+        consumedRegistryRecords.set(registry, { tokens: new Set(), policyContext });
         return registry;
     }
 
@@ -157,6 +189,8 @@
         const record = authorityRecords.get(authority);
         const registry = consumedRegistryRecords.get(consumedRegistry);
         if (!record || !registry) return Object.freeze({ ok: false, grant: null, reason: 'AUTHORITY_INVALID' });
+        if (record.policyContext !== registry.policyContext || !policyAllows(record.policyContext, expectedKind, currentBinding, 'AUTHORIZE'))
+            return Object.freeze({ ok: false, grant: null, reason: 'POLICY_DENIED' });
         if (record.kind !== expectedKind) return Object.freeze({ ok: false, grant: null, reason: 'AUTHORITY_KIND_MISMATCH' });
         if (!authorityBindingsEqual(record.binding, currentBinding)) return Object.freeze({ ok: false, grant: null, reason: 'AUTHORITY_STALE' });
         if (record.state !== AuthorityState.OBSERVED_UNUSED) {
@@ -169,7 +203,8 @@
             diagnostic() { return Object.freeze({ authorizedKind: record.kind, state: requestGrantRecords.get(grant)?.claimed ? 'CLAIMED' : 'AUTHORIZED' }); },
             toJSON() { return this.diagnostic(); }
         });
-        requestGrantRecords.set(grant, { kind: record.kind, opaqueToken: record.opaqueToken, claimed: false });
+        requestGrantRecords.set(grant, { kind: record.kind, opaqueToken: record.opaqueToken, claimed: false,
+            policyContext: record.policyContext, binding: record.binding });
         return Object.freeze({ ok: true, grant, reason: 'NONE' });
     }
 
@@ -177,6 +212,8 @@
         const record = authorityRecords.get(authority);
         const registry = consumedRegistryRecords.get(consumedRegistry);
         if (!record || !registry) return Object.freeze({ ok: false, reason: 'AUTHORITY_INVALID' });
+        if (record.policyContext !== registry.policyContext || !policyAllows(record.policyContext, expectedKind, currentBinding, 'INSPECT'))
+            return Object.freeze({ ok: false, reason: 'POLICY_DENIED' });
         if (record.kind !== expectedKind) return Object.freeze({ ok: false, reason: 'AUTHORITY_KIND_MISMATCH' });
         if (!authorityBindingsEqual(record.binding, currentBinding)) return Object.freeze({ ok: false, reason: 'AUTHORITY_STALE' });
         if (record.state !== AuthorityState.OBSERVED_UNUSED) {
@@ -191,6 +228,7 @@
         if (!record || record.claimed || record.kind !== expectedKind) {
             return Object.freeze({ ok: false, opaqueToken: null, reason: !record ? 'GRANT_INVALID' : record.claimed ? 'GRANT_CONSUMED' : 'AUTHORITY_KIND_MISMATCH' });
         }
+        if (!policyAllows(record.policyContext, expectedKind, record.binding, 'CLAIM')) return Object.freeze({ ok: false, opaqueToken: null, reason: 'POLICY_DENIED' });
         record.claimed = true;
         return Object.freeze({ ok: true, opaqueToken: record.opaqueToken, reason: 'NONE' });
     }
@@ -450,6 +488,7 @@
         ReplayEvent, AuthorityAction, PendingAction, RequestIntent, TransitionFailure, ShadowMismatch,
         PATH_DEPENDENCIES, createAuthorityBinding, isAuthorityBinding, authorityBindingsEqual,
         createReplayAuthority, transitionAuthority, invalidateAuthority, authorityDiagnostic,
+        createOwnerPolicyContext, invalidateOwnerPolicyContext, isOwnerPolicyContextCurrent,
         createConsumedAuthorityRegistry, authorizeAuthorityRequest, inspectAuthorityRequestEligibility, claimAuthorityRequestGrant,
         createCapabilitySnapshot, canUseCapabilityPath, classifyForegroundHiddenDurationMs,
         evaluateForegroundRetainedDiagnosticEligibility,
