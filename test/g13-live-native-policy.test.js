@@ -207,10 +207,10 @@ test('reentrant Live ZERO observation latches terminal and does not acquire admi
     }
 });
 
-test('Production default three-argument inspector and actual Bridge cannot admit Live ZERO', async () => {
+test('default inspector remains strict while P6 Production explicitly admits Live ZERO', async () => {
     const h = setup(), s = h.sample();
     assert.equal(s.outcome, 'LIVE_ZERO_V_STRUCTURAL_UNVERIFIED');
-    // Existing Production/Owner calls provide only Replay policy: fourth arg stays STRICT_V.
+    // Generic callers retain STRICT_V; only qualified P6 composition selects Live ZERO.
     assert.equal(native.inspectNativeAdmission(h.a, s, 'ACCEPTED_Z'), null);
     const { fixture: production } = require('./fixtures/production-integration');
     const bridge = production(require('../manifest.json'), { mode: 'live' });
@@ -218,9 +218,9 @@ test('Production default three-argument inspector and actual Bridge cannot admit
     await bridge.start();
     assert.equal(bridge.connections, 1);
     assert.equal(bridge.bridge.inspect().failed, false);
-    assert.equal(bridge.bridge.inspect().owner, 'NONE');
-    assert.equal(bridge.injections.length, 0);
-    assert.equal(bridge.requests.length, 0);
+    assert.equal(bridge.bridge.inspect().owner, 'READING');
+    assert.equal(bridge.injections.length, 1);
+    assert.equal(bridge.requests.length, 1);
 });
 
 test('module remains dormant, no network/message/timer and no new public export', () => {

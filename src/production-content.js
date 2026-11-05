@@ -16,6 +16,7 @@ const PORT_NAME = 'liveflow-bootstrap-private-v1';
 const installedDocuments = new WeakSet();
 const installationKey = Symbol.for('LiveFlow.ISOLATED.documentInstallation');
 const replayAssociationPolicy = 'ACCEPTED_Z';
+const liveAssociationPolicy = 'ACCEPTED_LIVE_ZERO_V';
 
 function targetFromURL(raw) {
     try {
@@ -132,7 +133,7 @@ function createProductionBridge({ api, realm, diagnostic = null }) {
                 readDocument: () => hooks.document, readRoute: () => route,
                 classifyChatFramePath: frameCore.classifyChatFramePath });
             const sample = nativeAdapter?.readFacts();
-            if (!factsCore.inspectNativeAdmission(nativeAdapter, sample, replayAssociationPolicy)) { diagnostic?.record('C_ADMISSION_DENIED'); return; }
+            if (!factsCore.inspectNativeAdmission(nativeAdapter, sample, replayAssociationPolicy, liveAssociationPolicy)) { diagnostic?.record('C_ADMISSION_DENIED'); return; }
             diagnostic?.record('C_ADMISSION_ACCEPTED');
             const mode = sample.facts.mode.value;
             hooks.setBinding(mode);
@@ -150,7 +151,7 @@ function createProductionBridge({ api, realm, diagnostic = null }) {
                 readRuntimeCoverage: () => registry?.status().state === 'OBSERVING',
                 createRuntime: settings => { pendingObserver = settings.observe; productFence = settings.productMutationFence; return sourceRuntime; } });
             if (!scopePort) { failed = true; return; }
-            owner = createLiveAcquisitionOwner({ diagnostic, document: hooks.document, route, nativeFacts: { adapter: nativeAdapter }, replayAssociationPolicy,
+            owner = createLiveAcquisitionOwner({ diagnostic, document: hooks.document, route, nativeFacts: { adapter: nativeAdapter }, replayAssociationPolicy, liveAssociationPolicy,
                 clock: { now: () => hooks.performance.now() }, timers: { setTimeout: (callback, delay) => realm.setTimeout(() => {
                     drain(); try { return callback(); } finally { drain(); diagnostic?.flush(); }
                 }, delay), clearTimeout: handle => realm.clearTimeout(handle) },
@@ -180,7 +181,7 @@ function createProductionBridge({ api, realm, diagnostic = null }) {
     }
     function sampleMedia(sample) {
         const facts = sample?.facts;
-        if (!facts || !factsCore.inspectNativeAdmission(nativeAdapter, sample, replayAssociationPolicy)) return null;
+        if (!facts || !factsCore.inspectNativeAdmission(nativeAdapter, sample, replayAssociationPolicy, liveAssociationPolicy)) return null;
         const fields = ['video','childDocument','mode','visible','ready','adActive','seeking','paused','rate'];
         if (fields.some(key => facts[key]?.state !== 'KNOWN')) return null;
         return fields.map(key => facts[key].value);
@@ -253,7 +254,7 @@ function createProductionBridge({ api, realm, diagnostic = null }) {
     function geometryChanged() {
         synchronize();
         const sample = nativeAdapter?.readFacts();
-        if (!['KNOWN','WAIT'].includes(sample?.outcome)) return false;
+        if (!factsCore.inspectNativeAdmission(nativeAdapter, sample, replayAssociationPolicy, liveAssociationPolicy)) return false;
         const value = geometryValues(sample);
         if (!value) return false;
         const changed = lastGeometry && value.some((field,i) => field !== lastGeometry[i]); lastGeometry = value;
