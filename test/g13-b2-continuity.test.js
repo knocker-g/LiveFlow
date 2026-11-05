@@ -173,3 +173,81 @@ for (const legacyFallback of [false, true]) test(`T5 real positive path, legacyF
     h.content.processLegacySuccess([{ id: 'missing', messageType: 'text' }], undefined, undefined, undefined);
     assert.equal(h.state.currentMessages.length, history);
 });
+
+for (const legacyFallback of [false, true]) {
+    for (const boundary of ['handoff', 'pending', 'previsible']) test(`T5 child replacement denies ${boundary}, legacyFallback=${legacyFallback}`, async () => {
+        let batch, swapped = 0, created = 0;
+        const swap = h => {
+            h.f.value(h.f.frame).child = new h.f.realm.Document({ url: h.f.value(h.f.child).url });
+            swapped++;
+        };
+        const h = fixture(manifest, { legacyFallback, onBatch(v) {
+            batch = v;
+            if (boundary === 'handoff') swap(h);
+        } });
+        await h.start(); await h.answer();
+        assert.ok(batch.productLease);
+        if (boundary !== 'handoff') {
+            assert.equal(h.runtime.queue.snapshot()[0].payload.productLease, batch.productLease);
+            if (boundary === 'pending') swap(h);
+            else {
+                const create = h.r.dependencies.document.createElement;
+                h.r.dependencies.document.createElement = tag => {
+                    const node = create(tag);
+                    const bounds = node.getBoundingClientRect;
+                    node.getBoundingClientRect = (...args) => {
+                        if (!swapped && [...h.r.state.activeDanmaku.values()].some(record => record.node === node && record.productAttempt)) {
+                            created++; swap(h);
+                        }
+                        return bounds.apply(node, args);
+                    };
+                    return node;
+                };
+            }
+            h.launch();
+            assert.equal(h.runtime.queue.successfulLaunchSequence(), 0);
+        } else assert.equal(h.runtime, null);
+        assert.equal(swapped, 1);
+        if (boundary === 'previsible') assert.equal(created, 1);
+        assert.equal(h.bridge.privateEntry.isProductCurrent(batch.productLease), false);
+        assert.equal(h.r.animations.length, 0);
+        assert.equal(h.r.state.activeDanmaku.size, 0);
+        assert.equal(h.requests.length, 1); assert.equal(h.injections.length, 1);
+    });
+}
+
+test('T7 actual Bridge selected native effect then throw preserves original UNKNOWN and primary', async () => {
+    let batch;
+    const h = fixture(manifest, { animationMode: 'never', onBatch(v) { batch = v; } });
+    await h.start(); await h.answer();
+    const runtime = h.runtime, queue = runtime.queue, item = queue.snapshot()[0], primary = {};
+    const create = h.r.dependencies.document.createElement;
+    let effects = 0;
+    h.r.dependencies.document.createElement = tag => {
+        const node = create(tag), animate = node.animate;
+        node.animate = (...args) => {
+            assert.equal(runtime.status().state, 'EVALUATING');
+            assert.equal(queue.snapshot()[0], item);
+            animate.apply(node, args); effects++;
+            assert.equal(h.bridge.cleanupPresentation(h.renderer).status, 'DEFERRED');
+            assert.equal(queue.snapshot()[0], item);
+            throw primary;
+        };
+        return node;
+    };
+    assert.throws(() => h.launch(), error => error === primary);
+    assert.equal(effects, 1); assert.equal(h.r.animations.length, 1);
+    assert.equal(h.runtime, runtime); assert.equal(runtime.queue, queue);
+    assert.equal(queue.successfulLaunchSequence(), 0);
+    assert.equal(runtime.mutationQuiescent(), true);
+    assert.equal(queue.snapshot().length, 0);
+    const records = [...h.r.state.activeDanmaku.values()]; assert.equal(records.length, 1);
+    const attempt = records[0].productAttempt;
+    assert.equal(attempt.scope, batch.scope); assert.equal(attempt.productLease, batch.productLease);
+    assert.equal(attempt.runtime, runtime); assert.equal(attempt.nativeReturned, false);
+    assert.equal(attempt.native, 'UNKNOWN'); assert.equal(attempt.queueConfirmed, false);
+    h.bridge.cleanupPresentation(h.renderer);
+    assert.equal(h.r.state.activeDanmaku.size, 1);
+    assert.equal(attempt.native, 'UNKNOWN'); assert.equal(queue.successfulLaunchSequence(), 0);
+    assert.equal(effects, 1); assert.equal(h.requests.length, 1); assert.equal(h.injections.length, 1);
+});
