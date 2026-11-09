@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Synthetic SPA Port Probe — LOCAL DEV ONLY",
+  "version": "0.1.0",
+  "background": { "service_worker": "worker.js" },
+  "content_scripts": [{
+    "matches": ["http://127.0.0.1/*"],
+    "js": ["core.js", "content.js"],
+    "world": "ISOLATED",
+    "run_at": "document_start",
+    "all_frames": false
+  }]
+}

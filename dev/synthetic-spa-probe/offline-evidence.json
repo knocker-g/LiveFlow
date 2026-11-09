@@ -1,0 +1,90 @@
+{
+  "phase": "G14-SYNTHETIC-SPA-M1",
+  "status": "OFFLINE_PASS_RUNTIME_NOT_RUN",
+  "dateJST": "2026-11-10",
+  "productBase": "be5567c05e88b84a61800bc32cd2d16acf226765",
+  "checkpointParent": "ed570d202e52e2d2c589079ddc2a0b5a91d19124",
+  "branch": "dev/synthetic-spa-probe-20261109",
+  "fixtureTests": {
+    "pass": 36,
+    "total": 36
+  },
+  "staticTests": {
+    "pass": 8,
+    "total": 8
+  },
+  "initialTests": {
+    "pass": 42,
+    "total": 42
+  },
+  "correction": "One bounded unknown-Port retirement fix with 2 negative fixtures; final 44/44 pass. Subsequent git status failed ownership under sandbox; not a fixture failure.",
+  "runtime": "NOT_RUN",
+  "build": "NONE_UNPACKED_SOURCE_ONLY",
+  "sourceInventory": [
+    {
+      "file": "README.md",
+      "bytes": 4119,
+      "sha256": "dd169fc3bf68e130deec875c294563d507718026fad364a4fc66e7d6276839fd"
+    },
+    {
+      "file": "extension/content.js",
+      "bytes": 2782,
+      "sha256": "988f87270b453c3eea0da5c1b79c2fd948fe4503f762c692a7f76db3d82febd7"
+    },
+    {
+      "file": "extension/core.js",
+      "bytes": 2717,
+      "sha256": "951f8df0c3b9102fc763631c923c14c3e57feae54be2d44d696690391be47027"
+    },
+    {
+      "file": "extension/manifest.json",
+      "bytes": 345,
+      "sha256": "c09b243998445d2e029491c219f8b494287f4596711e4af17773a50865f44f7c"
+    },
+    {
+      "file": "extension/worker.js",
+      "bytes": 2169,
+      "sha256": "229b837e87003d11a4d3a6fec43bd9d366f2f8d31dcbcbfee2339296e99d2977"
+    },
+    {
+      "file": "server.mjs",
+      "bytes": 1403,
+      "sha256": "7bf83c7161727f0602b217e50a1b8d6a5d7095829e6660b4fa9f19acebed3621"
+    },
+    {
+      "file": "site/index.html",
+      "bytes": 512,
+      "sha256": "b243eb76f5383269b44267475a09f077565af21778e9c15242247fae2192254a"
+    },
+    {
+      "file": "site/page.js",
+      "bytes": 3060,
+      "sha256": "c1fd74610f7f39c3d4bd3e83273db392aa63209236c0413bac1ee958fb37792b"
+    },
+    {
+      "file": "test/fixture.test.mjs",
+      "bytes": 10161,
+      "sha256": "b3f10e1a3583cd54f5c2192f9c4ed7e8c01f06947ce47e6af1717386286445a2"
+    },
+    {
+      "file": "test/static.test.mjs",
+      "bytes": 3266,
+      "sha256": "28520d9b5640494bc1f6db28e79f313aea374e55f79b69a17ef3c754c6fee2ca"
+    }
+  ],
+  "sourceInventorySHA256": "2945bd7e6b5472feb0c1fcfe0e490c2e1629bc7b1df9f8081642855428392068",
+  "preservation": {
+    "files": 11668,
+    "changed": [],
+    "headUnchanged": true,
+    "indexUnchanged": true
+  },
+  "limits": [
+    "No real browser/server launch or observed sender metadata",
+    "VM fixtures do not establish Chrome/Edge behavior",
+    "No Product changes or canonical retry authorization",
+    "Optional ABA/reload runtime omitted",
+    "Worker continuity not durable; missing records UNKNOWN"
+  ],
+  "review": "Self-review: narrow localhost-only manifest, private metadata projection, no Product import or privileged API, no listeners/requests outside finite experiment; safe scoped checkpoint only"
+}
