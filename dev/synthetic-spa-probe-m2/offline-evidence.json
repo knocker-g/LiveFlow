@@ -1,0 +1,108 @@
+{
+  "phase": "G14-SYNTHETIC-SPA-M2",
+  "dateJST": "2026-11-10",
+  "status": "OFFLINE_PASS_RUNTIME_NOT_RUN",
+  "parentCommit": "fe1d84dcfae10c46c79677ab70612f6c8c62c2cd",
+  "branch": "dev/synthetic-spa-probe-m2-20261110",
+  "build": "NONE_UNPACKED_SOURCE",
+  "browser": "NOT_RUN",
+  "server": "NOT_STARTED",
+  "tests": {
+    "initial": {
+      "pass": 33,
+      "total": 34,
+      "exit": 1,
+      "reason": "M1 fixture relative path; not runtime or safety failure"
+    },
+    "correction": "Only M1 test input relative path corrected",
+    "fixture": {
+      "pass": 26,
+      "total": 26
+    },
+    "static": {
+      "pass": 8,
+      "total": 8
+    },
+    "finalExit": 0
+  },
+  "permissions": [
+    "webNavigation"
+  ],
+  "hostPermissions": [],
+  "tabs": "NOT_REQUESTED_NO_HOST_PERMISSION",
+  "limits": {
+    "ports": 4,
+    "historyEvents": 3,
+    "getFrameQueries": 4,
+    "outputBytes": 4096,
+    "retry": 0,
+    "polling": 0,
+    "keepalive": 0,
+    "persistence": false
+  },
+  "sourceInventory": [
+    {
+      "file": "README.md",
+      "bytes": 6397,
+      "sha256": "0043d0397261521d9e238cef744d0091641063f1d9adcc0bee84669a65090978"
+    },
+    {
+      "file": "extension/content.js",
+      "bytes": 2715,
+      "sha256": "a2d235f7a156b42907b0e31c59d1189c026a510bdbc86cce70efd3cc4138bc77"
+    },
+    {
+      "file": "extension/core.js",
+      "bytes": 3652,
+      "sha256": "0f4297d54eb096aa68f25e1f24806a6db3edc160fbcb5ae4ec0330225abb78b8"
+    },
+    {
+      "file": "extension/manifest.json",
+      "bytes": 390,
+      "sha256": "1cfe6b3a7c5ffd54f912768032d3068d6591ee7d19b776e96ca5cbb54038abce"
+    },
+    {
+      "file": "extension/worker.js",
+      "bytes": 4902,
+      "sha256": "fe89a65f7c1f31929398b46cf6e521d0c70290518b7b6882472ecae3c92974e1"
+    },
+    {
+      "file": "server.mjs",
+      "bytes": 1403,
+      "sha256": "b2321360866ccb243291862c90ecede8b0ae008bb14020cff9f85a43cdd1ce17"
+    },
+    {
+      "file": "site/index.html",
+      "bytes": 505,
+      "sha256": "cd6ee4f3573be0caad1f68ac15be27eaf66ec0232f7a664cbd2c26a41c2c2ccf"
+    },
+    {
+      "file": "site/page.js",
+      "bytes": 1703,
+      "sha256": "ebc660c5fb4bd547c11341fb5aee44fc31fce41b214aa44f08c02b3154397f0c"
+    },
+    {
+      "file": "test/fixture.test.mjs",
+      "bytes": 10882,
+      "sha256": "0d5e0dd49b6627793381a59039b6e3513d658c93057f5988fd1977c03168bd11"
+    },
+    {
+      "file": "test/static.test.mjs",
+      "bytes": 3212,
+      "sha256": "ac9f4e21034e53aec42a7bdfba1be2aa60c0a4378022aee63cdc093cc07d0f72"
+    }
+  ],
+  "inventorySHA256": "959ac88ad9fd5563adac8963f973ac88c729adbe43a7070cf9fc4c00b40a3ea3",
+  "preservation": {
+    "files": 11681,
+    "changed": [],
+    "originalHeadUnchanged": true,
+    "indexUnchanged": true
+  },
+  "runtimeClaims": "NONE; fixtures do not prove Chrome/Edge ordering, event completeness, active Admission or Product repair",
+  "sources": [
+    "https://developer.chrome.com/docs/extensions/reference/api/webNavigation",
+    "https://developer.chrome.com/docs/extensions/reference/api/tabs"
+  ],
+  "review": "No Product graph imports; strict localhost filtered ephemeral observation; query snapshot not Authority; independent M2 directory only"
+}
